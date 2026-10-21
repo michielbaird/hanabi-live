@@ -30,7 +30,7 @@ type WebsocketConnectData struct {
 	PlayingAtTables       []uint64
 	DisconSpectatingTable uint64
 	DisconShadowingSeat   int
-	ConnectionMode        string // initial or reconnect; reconnect needs only a resume acknowledgement
+	ConnectionMode        string // initial, reconnect, or resumed; reconnect needs only a resume acknowledgement
 }
 
 // websocketConnect is fired when a new Melody WebSocket session is established
@@ -50,6 +50,12 @@ func websocketConnect(ms *melody.Session) {
 	s.UserID = userID
 	s.Username = username
 	// (we attach other data later)
+
+	resumable, resumeToken := websocketResumeParams(ms.Request)
+	s.Resumable = resumable
+	if s.Resumable {
+		s.ResumeToken = websocketNewResumeToken()
+	}
 
 	ctx := NewSessionContext(s)
 
@@ -71,9 +77,19 @@ func websocketConnect(ms *melody.Session) {
 
 	// Disconnect any existing connections with this user ID
 	if s2, ok := sessions.Get(s.UserID); ok {
+		// A client that presents the resume token takes over its own session
+		// (which could be in limbo or could be a connection that has not been detected as dead)
+		if s2.canResume(resumeToken) {
+			data.ConnectionMode = connectionModeResumed
+			websocketResume(ctx, s2, ms, data)
+			logger.Info("Exited the \"websocketConnect()\" function for user: " + username)
+			return
+		}
+
+		websocketLeaveLimbo(s2)
 		logger.Info("Closing existing connection for user: " + s.Username)
 		s2.Error("You have logged on from somewhere else, so you have been disconnected here.")
-		if err := s2.ms.Close(); err != nil {
+		if err := s2.getMS().Close(); err != nil {
 			// This can occasionally fail and we do not want to report the error to Sentry
 			logger.Info("Failed to manually close a WebSocket connection.")
 		} else {
@@ -112,6 +128,10 @@ func websocketConnectMessages(ctx context.Context, s *Session, data *WebsocketCo
 	}
 	websocketConnectUserList(s)
 	websocketConnectTableList(ctx, s)
+	// A resumed session already has the chat and history
+	if data.ConnectionMode == connectionModeResumed {
+		return
+	}
 	websocketConnectChat(s)
 	websocketConnectHistory(s)
 	if len(data.Friends) > 0 {
@@ -244,6 +264,10 @@ func websocketConnectWelcomeMessage(s *Session, data *WebsocketConnectData) {
 		ConnectionMode string   `json:"connectionMode"`
 		Friends        []string `json:"friends"`
 
+		// Only sent to clients that asked for a resumable session
+		ResumeToken        string `json:"resumeToken,omitempty"`
+		ResumeGraceSeconds int    `json:"resumeGraceSeconds,omitempty"`
+
 		PlayingAtTables       []uint64 `json:"playingAtTables"`
 		DisconSpectatingTable uint64   `json:"disconSpectatingTable"`
 		DisconShadowingSeat   int      `json:"disconShadowingSeat"`
@@ -274,6 +298,9 @@ func websocketConnectWelcomeMessage(s *Session, data *WebsocketConnectData) {
 		Settings:       data.Settings,
 		Friends:        data.FriendsList,
 		ConnectionMode: data.ConnectionMode,
+
+		ResumeToken:        s.ResumeToken,
+		ResumeGraceSeconds: websocketResumeGraceSeconds(s),
 
 		// Inform the user that they were previously playing or spectating a game
 		// (so that they can choose to rejoin it)

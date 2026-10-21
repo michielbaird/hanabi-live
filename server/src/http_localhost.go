@@ -130,7 +130,12 @@ func logoutUser(userID int) {
 		return
 	}
 
-	if err := s.ms.Close(); err != nil {
+	// An administrator logging someone out should not leave their session waiting in limbo
+	sessions.ConnectMutex.Lock()
+	s.Resumable = false
+	sessions.ConnectMutex.Unlock()
+
+	if err := s.getMS().Close(); err != nil {
 		logger.Error("Failed to manually close the WebSocket session for user " +
 			strconv.Itoa(userID) + ": " + err.Error())
 	} else {

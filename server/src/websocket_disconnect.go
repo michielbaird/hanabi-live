@@ -23,6 +23,17 @@ func websocketDisconnect(ms *melody.Session) {
 	sessions.ConnectMutex.Lock()
 	defer sessions.ConnectMutex.Unlock()
 
+	// Clients that support resuming get a grace period to reconnect
+	// (unless they closed the connection on purpose or the server is going down)
+	if s.Resumable && !s.FakeUser && !s.Limbo && shuttingDown.IsNotSet() &&
+		!websocketClosedCleanly(ms) {
+
+		websocketEnterLimbo(ctx, s)
+		logger.Info("Exited the \"websocketDisconnect()\" function for user: " + s.Username +
+			" (in limbo)")
+		return
+	}
+
 	websocketDisconnectRemoveFromMap(s)
 	websocketDisconnectRemoveFromGames(ctx, s)
 

@@ -13,7 +13,16 @@ import (
 
 type Session struct {
 	// The underlying Melody session (which represents the WebSocket connection)
-	ms *melody.Session
+	// It is swapped when a client resumes the session on a new connection, so use getMS()/setMS()
+	ms      *melody.Session
+	msMutex *deadlock.RWMutex
+
+	// Resume support (see "websocket_limbo.go")
+	// These fields are only accessed while holding "sessions.ConnectMutex"
+	Resumable   bool   // The client opted in to resumable sessions
+	ResumeToken string // Proves that a new connection is the same client as this session
+	Limbo       bool   // The connection dropped; waiting for the client to come back
+	limboTimer  *time.Timer
 
 	// Static data fields
 	// (these do not change, so they can safely be read without race conditions or locking)
@@ -49,7 +58,8 @@ var (
 
 func NewSession() *Session {
 	return &Session{
-		ms: nil,
+		ms:      nil,
+		msMutex: &deadlock.RWMutex{},
 
 		SessionID: uint64(0),
 		UserID:    0,
@@ -83,9 +93,25 @@ func NewFakeSession(id int, name string) *Session {
 	return s
 }
 
+func (s *Session) getMS() *melody.Session {
+	s.msMutex.RLock()
+	defer s.msMutex.RUnlock()
+	return s.ms
+}
+
+func (s *Session) setMS(ms *melody.Session) {
+	s.msMutex.Lock()
+	defer s.msMutex.Unlock()
+	s.ms = ms
+}
+
 // Emit sends a message to a client using the Golem-style protocol described above
 func (s *Session) Emit(command string, d interface{}) {
-	if s == nil || s.ms == nil || s.ms.Request == nil {
+	if s == nil {
+		return
+	}
+	ms := s.getMS()
+	if ms == nil || ms.Request == nil {
 		return
 	}
 
@@ -101,7 +127,7 @@ func (s *Session) Emit(command string, d interface{}) {
 	// Send the message as bytes
 	msg := command + " " + ds
 	bytes := []byte(msg)
-	if err := s.ms.Write(bytes); err != nil {
+	if err := ms.Write(bytes); err != nil {
 		// This can routinely fail if the session is closed, so just return
 		return
 	}
