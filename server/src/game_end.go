@@ -424,7 +424,7 @@ func (t *Table) ConvertToSharedReplay(ctx context.Context, d *CommandData) {
 		// Skip offline players and players in the lobby;
 		// if they re-login, then they will just stay in the lobby
 		if !p.Present {
-			if p.UserID == t.OwnerID && (p.Session == nil || p.Session.ms.IsClosed()) {
+			if p.UserID == t.OwnerID && (p.Session == nil || p.Session.getMS().IsClosed()) {
 				// We do not want to pass the replay leader away if they are still in the lobby
 				// (as opposed to being offline)
 				ownerOffline = true

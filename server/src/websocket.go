@@ -38,6 +38,7 @@ func websocketInit() {
 	// Attach some handlers
 	melodyRouter.HandleConnect(websocketConnect)
 	melodyRouter.HandleDisconnect(websocketDisconnect)
+	melodyRouter.HandleClose(websocketClose)
 	melodyRouter.HandleMessage(websocketMessage)
 	// We could also attach a function to HandleError, but this fires on routine
 	// things like disconnects, so it is undesirable
@@ -77,7 +78,7 @@ func websocketGetKeyValues(ms *melody.Session) (uint64, int, string, bool) {
 // getSessionFromMelodySession returns nil if the respective Melody session has already been removed
 // from the sessions map
 func getSessionFromMelodySession(ms *melody.Session) *Session {
-	sessionID, userID, _, success := websocketGetKeyValues(ms)
+	_, userID, _, success := websocketGetKeyValues(ms)
 	if !success {
 		return nil
 	}
@@ -88,9 +89,10 @@ func getSessionFromMelodySession(ms *melody.Session) *Session {
 		return nil
 	}
 
-	// Check to see if the session ID matches
-	// (e.g. it could be the same user but a different computer)
-	if sessionID != s.SessionID {
+	// Check to see if this is still the session's current connection
+	// (e.g. it could be the same user but a different computer,
+	// or the session could have been resumed on a newer connection)
+	if s.getMS() != ms {
 		return nil
 	}
 

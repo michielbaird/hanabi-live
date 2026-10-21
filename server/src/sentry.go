@@ -101,8 +101,9 @@ func sentryWebsocketMessageAttachMetadata(s *Session) {
 
 	// Parse the IP address
 	var ip string
-	if v, _, err := net.SplitHostPort(s.ms.Request.RemoteAddr); err != nil {
-		logger.Error("Failed to parse the IP address from \"" + s.ms.Request.RemoteAddr + "\": " +
+	remoteAddr := s.getMS().Request.RemoteAddr
+	if v, _, err := net.SplitHostPort(remoteAddr); err != nil {
+		logger.Error("Failed to parse the IP address from \"" + remoteAddr + "\": " +
 			err.Error())
 		return
 	} else {
