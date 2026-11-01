@@ -3,6 +3,7 @@
 // ("public/js/analysis-worker.js"), so nothing is sent to the server except the usual request for
 // the game's "/export/<id>" data.
 
+import Konva from "konva";
 import { globals } from "./UIGlobals";
 import * as replay from "./replay";
 
@@ -43,6 +44,14 @@ let panel: HTMLDivElement | null = null;
 let worker: Worker | null = null;
 let poll: number | null = null;
 
+/** The finished analysis of the game being viewed, shown on the replay bar and in the strip. */
+let result: AnalysisResult | null = null;
+let markers: Konva.Group | null = null;
+let strip: HTMLDivElement | null = null;
+
+const MISTAKE_COLOR = "#ff4040";
+const SUGGESTION_COLOR = "#ffb000";
+
 /** Called when the game UI is created. */
 export function init(): void {
   poll = globalThis.setInterval(updateButton, 1000);
@@ -59,6 +68,114 @@ export function destroy(): void {
   button = null;
   panel?.remove();
   panel = null;
+  result = null;
+  markers?.destroy();
+  markers = null;
+  strip?.remove();
+  strip = null;
+}
+
+/**
+ * The replay segment to show a comment at. Segment 0 is the start of the game, so the position just
+ * before the bot's "turn N" is N - 1: the board as the player saw it, about to make the move.
+ */
+function getSegment(comment: AnalysisComment): number {
+  return comment.turn - 1;
+}
+
+/**
+ * Redraws what the analysis adds to the replay: a marker on the replay bar for every move the bot
+ * would have played differently, and the bot's comment on the turn being shown. Called when the
+ * analysis finishes and whenever the replay moves.
+ */
+export function refresh(): void {
+  if (result === null) {
+    return;
+  }
+
+  drawMarkers(result);
+  drawStrip(result);
+}
+
+function drawMarkers(analysis: AnalysisResult) {
+  const { replayArea, replayBar, replayShuttle } = globals.elements;
+  if (replayArea === null || replayBar === null || replayShuttle === null) {
+    return;
+  }
+
+  // The UI is rebuilt when the window is resized, which discards the old replay area.
+  markers?.destroy();
+  markers = new Konva.Group({ listening: false });
+  replayArea.add(markers);
+
+  // The same geometry as the shuttle's (see "positionReplayShuttle()" in "replay.ts").
+  const finalSegment = Math.max(globals.state.ongoingGame.turn.segment ?? 1, 1);
+  const sliderWidth = replayBar.width() - replayShuttle.width();
+  const markerWidth = replayBar.height() * 0.9;
+  const markerHeight = replayBar.height() * 1.8;
+
+  // Mistakes last, so that they are on top if a suggestion is on the same turn.
+  const ordered = analysis.comments.toSorted(
+    (a, b) => Number(a.mistake) - Number(b.mistake),
+  );
+  for (const comment of ordered) {
+    const x =
+      replayBar.x()
+      + (sliderWidth / finalSegment) * getSegment(comment)
+      + replayShuttle.width() / 2;
+    markers.add(
+      new Konva.Rect({
+        x: x - markerWidth / 2,
+        y: replayBar.y() - markerHeight - 1,
+        width: markerWidth,
+        height: markerHeight,
+        fill: comment.mistake ? MISTAKE_COLOR : SUGGESTION_COLOR,
+        cornerRadius: markerWidth / 3,
+        listening: false,
+      }),
+    );
+  }
+  globals.layers.UI.batchDraw();
+}
+
+/** Shows the bot's comment for the turn being shown in the replay, if there is one. */
+function drawStrip(analysis: AnalysisResult) {
+  const here = analysis.comments.filter(
+    (c) => getSegment(c) === globals.state.replay.segment,
+  );
+  if (here.length === 0 || !globals.state.replay.active) {
+    strip?.remove();
+    strip = null;
+    return;
+  }
+
+  if (strip === null) {
+    strip = document.createElement("div");
+    strip.id = "bot-analysis-strip";
+    Object.assign(strip.style, {
+      position: "fixed",
+      bottom: "0.5em",
+      left: "50%",
+      transform: "translateX(-50%)",
+      maxWidth: "min(40em, 90vw)",
+      zIndex: "100",
+      padding: "0.5em 0.9em",
+      background: "rgba(0, 0, 0, 0.88)",
+      borderRadius: "6px",
+      fontSize: "0.9em",
+      pointerEvents: "none",
+    });
+    document.querySelector("#game")?.append(strip);
+  }
+
+  strip.replaceChildren(
+    ...here.map((comment) => {
+      const line = document.createElement("div");
+      line.textContent = `Bot, ${analysis.players[comment.player] ?? "?"}'s move: ${comment.text}`;
+      line.style.color = comment.mistake ? "#ff8080" : "white";
+      return line;
+    }),
+  );
 }
 
 /**
@@ -175,7 +292,7 @@ async function run(convention: string, status: HTMLElement, list: HTMLElement) {
     }
     const exportJson = await response.text();
 
-    const result = await new Promise<AnalysisResult>((resolve, reject) => {
+    const analysis = await new Promise<AnalysisResult>((resolve, reject) => {
       stopWorker();
       worker = new Worker(WORKER_URL, { type: "module" });
       worker.addEventListener("error", () => {
@@ -205,7 +322,7 @@ async function run(convention: string, status: HTMLElement, list: HTMLElement) {
       });
     });
     stopWorker();
-    showResult(result, status, list);
+    showResult(analysis, status, list);
   } catch (error) {
     stopWorker();
     status.textContent = `The analysis failed: ${error instanceof Error ? error.message : String(error)}`;
@@ -213,19 +330,22 @@ async function run(convention: string, status: HTMLElement, list: HTMLElement) {
 }
 
 function showResult(
-  result: AnalysisResult,
+  analysis: AnalysisResult,
   status: HTMLElement,
   list: HTMLElement,
 ) {
-  const mistakes = result.comments.filter((c) => c.mistake).length;
+  const mistakes = analysis.comments.filter((c) => c.mistake).length;
   status.textContent =
-    result.comments.length === 0
+    analysis.comments.length === 0
       ? "The bot would not have played any move differently."
-      : `${result.comments.length} moves differ from what the bot would do, ${mistakes} of them clear mistakes. Click one to jump to it.`;
+      : `${analysis.comments.length} moves differ from what the bot would do, ${mistakes} of them clear mistakes. Click one to jump to it.`;
 
-  for (const comment of result.comments) {
+  result = analysis;
+  refresh();
+
+  for (const comment of analysis.comments) {
     const row = document.createElement("div");
-    row.textContent = `Turn ${comment.turn}, ${result.players[comment.player] ?? "?"}: ${comment.text}`;
+    row.textContent = `Turn ${comment.turn}, ${analysis.players[comment.player] ?? "?"}: ${comment.text}`;
     Object.assign(row.style, {
       cursor: "pointer",
       padding: "0.25em 0",
@@ -233,9 +353,7 @@ function showResult(
       color: comment.mistake ? "#ff8080" : "white",
     });
     row.addEventListener("click", () => {
-      // Segment 0 is the start of the game, so the position just before the bot's "turn N" is N -
-      // 1.
-      replay.goToSegment(comment.turn - 1, true);
+      replay.goToSegment(getSegment(comment), true);
     });
     list.append(row);
   }
