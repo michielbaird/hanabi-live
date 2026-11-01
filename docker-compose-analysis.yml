@@ -1,0 +1,45 @@
+# A local copy of the site for trying the in-browser bot analysis ("Bot analysis" in the replay of a finished game).
+# It builds the client (with public/wasm), the Go server and a Postgres with the schema from this checkout:
+#
+#   docker compose -f docker-compose-analysis.yml up --build
+#
+# Then open http://localhost:8080/?login=test1 and, in a second private window or browser,
+# http://localhost:8080/?login=test2 (no passwords; this only works on "localhost"). Create a table in one, join it in the
+# other and play a few moves. Ending the game (play it out, or vote to terminate with the X button) saves it to the
+# database, and the replay you land in afterwards has the "Bot analysis" button.
+# Rebuild the wasm first if the bot changed: scripts/bash/build_analysis_wasm.sh
+#
+# Data is kept in the "pgdata" volume; remove it with `docker compose -f docker-compose-analysis.yml down -v`.
+services:
+  db:
+    build:
+      context: .
+      dockerfile: Dockerfile.postgres
+    environment:
+      POSTGRES_PASSWORD: "1234567890"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hanabiuser -d hanabi"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8080:80"
+    environment:
+      DB_HOST: db
+      DOMAIN: localhost
+      SESSION_SECRET: "development only"
+    volumes:
+      - ./.env.example:/root/hanabi-live/.env:ro
+
+volumes:
+  pgdata:
