@@ -4,8 +4,9 @@
 // the game's "/export/<id>" data.
 
 import Konva from "konva";
-import { globals } from "./UIGlobals";
 import * as replay from "./replay";
+import { getReplayButtonRow } from "./replayButtonRow";
+import { globals } from "./UIGlobals";
 
 const WORKER_URL = "/public/js/analysis-worker.js";
 /** The bot plays H-Group at levels 1 to 12. */
@@ -44,10 +45,10 @@ let panel: HTMLDivElement | null = null;
 let worker: Worker | null = null;
 let poll: number | null = null;
 
-/** The finished analysis of the game being viewed, shown on the replay bar and in the strip. */
+/** The finished analysis of the game being viewed, shown on the replay controls. */
 let result: AnalysisResult | null = null;
 let markers: Konva.Group | null = null;
-let strip: HTMLDivElement | null = null;
+let commentText: Konva.Text | null = null;
 
 const MISTAKE_COLOR = "#ff4040";
 const SUGGESTION_COLOR = "#ffb000";
@@ -71,8 +72,8 @@ export function destroy(): void {
   result = null;
   markers?.destroy();
   markers = null;
-  strip?.remove();
-  strip = null;
+  commentText?.destroy();
+  commentText = null;
 }
 
 /**
@@ -85,16 +86,101 @@ function getSegment(comment: AnalysisComment): number {
 
 /**
  * Redraws what the analysis adds to the replay: a marker on the replay bar for every move the bot
- * would have played differently, and the bot's comment on the turn being shown. Called when the
- * analysis finishes and whenever the replay moves.
+ * would have played differently, buttons to jump between them, and the bot's comment on the turn
+ * being shown. Called when the analysis finishes, whenever the replay moves, and when the UI is
+ * rebuilt.
  */
 export function refresh(): void {
   if (result === null) {
     return;
   }
 
+  layoutButtons(result);
   drawMarkers(result);
-  drawStrip(result);
+  drawComment(result);
+  globals.layers.UI.batchDraw();
+}
+
+/** Goes to the next (or previous) turn that the bot has a comment on. */
+export function goToFlagged(direction: -1 | 1): void {
+  if (result === null) {
+    return;
+  }
+
+  const current = globals.state.replay.segment;
+  const segments = result.comments
+    .map(getSegment)
+    .filter((segment) =>
+      direction > 0 ? segment > current : segment < current,
+    );
+  if (segments.length === 0) {
+    return;
+  }
+
+  replay.goToSegment(
+    direction > 0 ? Math.min(...segments) : Math.max(...segments),
+    true,
+  );
+}
+
+/**
+ * With an analysis, the replay controls get two more buttons, between "previous" and "first" and
+ * between "next" and "last", and the row is tightened to fit them.
+ */
+function layoutButtons(analysis: AnalysisResult) {
+  const {
+    replayBackFullButton,
+    replayBackButton,
+    replayForwardButton,
+    replayForwardFullButton,
+    replayBackAnalysisButton,
+    replayForwardAnalysisButton,
+  } = globals.elements;
+  if (
+    replayBackFullButton === null
+    || replayBackButton === null
+    || replayForwardButton === null
+    || replayForwardFullButton === null
+    || replayBackAnalysisButton === null
+    || replayForwardAnalysisButton === null
+  ) {
+    return;
+  }
+
+  const withButtons = analysis.comments.length > 0;
+  const row = getReplayButtonRow(
+    globals.lobby.settings.keldonMode,
+    withButtons,
+  );
+  const buttons = withButtons
+    ? [
+        replayBackFullButton,
+        replayBackAnalysisButton,
+        replayBackButton,
+        replayForwardButton,
+        replayForwardAnalysisButton,
+        replayForwardFullButton,
+      ]
+    : [
+        replayBackFullButton,
+        replayBackButton,
+        replayForwardButton,
+        replayForwardFullButton,
+      ];
+  let { x } = row;
+  for (const replayButton of buttons) {
+    replayButton.x(x * globals.stage.width());
+    x += row.buttonWidth + row.spacing;
+  }
+
+  replayBackAnalysisButton.visible(withButtons);
+  replayForwardAnalysisButton.visible(withButtons);
+  if (withButtons) {
+    const segments = analysis.comments.map(getSegment);
+    const current = globals.state.replay.segment;
+    replayBackAnalysisButton.setEnabled(segments.some((s) => s < current));
+    replayForwardAnalysisButton.setEnabled(segments.some((s) => s > current));
+  }
 }
 
 function drawMarkers(analysis: AnalysisResult) {
@@ -107,6 +193,8 @@ function drawMarkers(analysis: AnalysisResult) {
   markers?.destroy();
   markers = new Konva.Group({ listening: false });
   replayArea.add(markers);
+  // Behind the shuttles, which are added to the replay area after the bar and its click area.
+  markers.zIndex(2);
 
   // The same geometry as the shuttle's (see "positionReplayShuttle()" in "replay.ts").
   const finalSegment = Math.max(globals.state.ongoingGame.turn.segment ?? 1, 1);
@@ -135,47 +223,39 @@ function drawMarkers(analysis: AnalysisResult) {
       }),
     );
   }
-  globals.layers.UI.batchDraw();
 }
 
-/** Shows the bot's comment for the turn being shown in the replay, if there is one. */
-function drawStrip(analysis: AnalysisResult) {
+/**
+ * Shows the bot's comment for the turn being shown in the replay, if there is one, under the
+ * buttons that are below the replay controls ("Enter Hypothetical" and so on).
+ */
+function drawComment(analysis: AnalysisResult) {
+  commentText?.destroy();
+  commentText = null;
+
+  const { replayArea } = globals.elements;
   const here = analysis.comments.filter(
     (c) => getSegment(c) === globals.state.replay.segment,
   );
-  if (here.length === 0 || !globals.state.replay.active) {
-    strip?.remove();
-    strip = null;
+  if (replayArea === null || here.length === 0) {
     return;
   }
 
-  if (strip === null) {
-    strip = document.createElement("div");
-    strip.id = "bot-analysis-strip";
-    Object.assign(strip.style, {
-      position: "fixed",
-      bottom: "0.5em",
-      left: "50%",
-      transform: "translateX(-50%)",
-      maxWidth: "min(40em, 90vw)",
-      zIndex: "100",
-      padding: "0.5em 0.9em",
-      background: "rgba(0, 0, 0, 0.88)",
-      borderRadius: "6px",
-      fontSize: "0.9em",
-      pointerEvents: "none",
-    });
-    document.querySelector("#game")?.append(strip);
-  }
-
-  strip.replaceChildren(
-    ...here.map((comment) => {
-      const line = document.createElement("div");
-      line.textContent = `Bot, ${analysis.players[comment.player] ?? "?"}'s move: ${comment.text}`;
-      line.style.color = comment.mistake ? "#ff8080" : "white";
-      return line;
-    }),
-  );
+  const winH = globals.stage.height();
+  commentText = new Konva.Text({
+    x: 0,
+    y: 0.24 * winH,
+    width: replayArea.width(),
+    text: here
+      .map((c) => `${analysis.players[c.player] ?? "?"}: ${c.text}`)
+      .join("\n"),
+    fontSize: 0.02 * winH,
+    fontFamily: "Verdana",
+    fill: here.some((c) => c.mistake) ? "#ff8080" : "white",
+    align: "center",
+    listening: false,
+  });
+  replayArea.add(commentText);
 }
 
 /**

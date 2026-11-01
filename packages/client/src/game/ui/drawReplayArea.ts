@@ -1,12 +1,14 @@
 import Konva from "konva";
 import { getCanvasColors } from "../../theme";
 import { globals } from "./UIGlobals";
+import * as analysis from "./analysis";
 import { Button } from "./controls/Button";
 import { EnterHypoButton } from "./controls/EnterHypoButton";
 import { SharedTurnsButton } from "./controls/SharedTurnsButton";
 import { Shuttle } from "./controls/Shuttle";
 import * as hypothetical from "./hypothetical";
 import * as replay from "./replay";
+import { getReplayButtonRow } from "./replayButtonRow";
 
 export function drawReplayArea(winW: number, winH: number): void {
   const replayAreaValues = {
@@ -111,16 +113,13 @@ export function drawReplayArea(winW: number, winH: number): void {
   globals.elements.replayShuttle.on("wheel", replay.barScroll);
   globals.elements.replayArea.add(globals.elements.replayShuttle);
 
+  const row = getReplayButtonRow(globals.lobby.settings.keldonMode, false);
   const replayButtonValues = {
-    x: 0.05,
-    y: 0.07,
-    w: 0.06,
+    x: row.x,
+    w: row.buttonWidth,
     h: 0.08,
-    spacing: 0.02,
+    spacing: row.spacing,
   };
-  if (globals.lobby.settings.keldonMode) {
-    replayButtonValues.x = 0.1;
-  }
 
   {
     let { x } = replayButtonValues;
@@ -219,6 +218,29 @@ export function drawReplayArea(winW: number, winH: number): void {
     globals.elements.replayArea.add(
       globals.elements.replayForwardFullButton as unknown as Konva.Group,
     );
+
+    // The bot analysis' buttons for the previous and the next move that the bot would have played
+    // differently. They are only shown once there is an analysis (see "analysis.ts"), which also
+    // moves the other buttons to make room.
+    for (const [name, text, direction] of [
+      ["replayBackAnalysisButton", "<!", -1],
+      ["replayForwardAnalysisButton", "!>", 1],
+    ] as const) {
+      const button = new Button({
+        x: 0,
+        y: 0.07 * winH,
+        width: replayButtonValues.w * winW,
+        height: replayButtonValues.h * winH,
+        text,
+        fontSize: 0.03 * winH,
+        visible: false,
+      });
+      button.on("click tap", () => {
+        analysis.goToFlagged(direction);
+      });
+      globals.elements[name] = button;
+      globals.elements.replayArea.add(button as unknown as Konva.Group);
+    }
   }
 
   const extra = 0.04;
@@ -336,4 +358,5 @@ export function drawReplayArea(winW: number, winH: number): void {
   // Add the replay area to the UI.
   globals.layers.UI.add(globals.elements.replayArea);
   replay.adjustShuttles(true); // Skip the animation
+  analysis.refresh(); // Show the bot analysis again if the UI was rebuilt
 }
