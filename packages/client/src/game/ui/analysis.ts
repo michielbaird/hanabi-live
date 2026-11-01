@@ -7,13 +7,19 @@ import { globals } from "./UIGlobals";
 import * as replay from "./replay";
 
 const WORKER_URL = "/public/js/analysis-worker.js";
-const CONVENTIONS = [
-  ["HGroup3", "H-Group (level 3)"],
-  ["HGroup5", "H-Group (level 5)"],
-  ["HGroup8", "H-Group (level 8)"],
+/** The bot plays H-Group at levels 1 to 12. */
+const H_GROUP_LEVELS: readonly number[] = Array.from(
+  { length: 12 },
+  (_, i) => i + 1,
+);
+const conventionOptions: ReadonlyArray<readonly [string, string]> = [
+  ...H_GROUP_LEVELS.map((level): readonly [string, string] => [
+    `HGroup${level}`,
+    `H-Group (level ${level})`,
+  ]),
   ["Reactor", "Reactor"],
   ["RefSieve", "Referential Sieve"],
-] as const;
+];
 
 interface AnalysisComment {
   turn: number;
@@ -121,7 +127,7 @@ function togglePanel() {
   });
 
   const picker = document.createElement("select");
-  for (const [value, label] of CONVENTIONS) {
+  for (const [value, label] of conventionOptions) {
     picker.append(new Option(label, value));
   }
   const start = document.createElement("button");
@@ -154,11 +160,7 @@ function stopWorker() {
   worker = null;
 }
 
-async function run(
-  convention: string,
-  status: HTMLElement,
-  list: HTMLElement,
-) {
+async function run(convention: string, status: HTMLElement, list: HTMLElement) {
   const databaseID = getDatabaseID();
   if (databaseID === null) {
     status.textContent = "This game can not be analyzed.";
