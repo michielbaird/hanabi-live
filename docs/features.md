@@ -156,6 +156,20 @@ that have not been played yet and have only one copy remaining.)
 - Similar to an in-game replay, in a post-game replay, you can review the game
   turn by turn.
 
+### Bot Analysis
+
+- In the replay of a finished game, the "Bot analysis" button (top right) has
+  the bot go through the game and list every move it would have played
+  differently, with the clear mistakes in red. Clicking a line jumps to that
+  move.
+- The bot (`hanab-bot-rs`) runs in your browser as WebAssembly, in a Web Worker,
+  so nothing but the usual `/export/<id>` request goes to the server. It takes a
+  while on long games (a progress count is shown).
+- The files are in `public/wasm`; rebuild them with
+  `scripts/bash/build_analysis_wasm.sh`.
+- Not every variant is understood by the bot; the panel says so when the
+  analysis fails.
+
 ### Shared Replays
 
 - A shared replay is similar to a normal replay, but others can join to have a

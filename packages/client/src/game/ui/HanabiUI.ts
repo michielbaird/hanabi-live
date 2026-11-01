@@ -5,6 +5,7 @@ import type { Globals as LobbyGlobals } from "../../Globals";
 import { Screen } from "../../lobby/types/Screen";
 import * as tooltips from "../../tooltips";
 import type { GameExports } from "../main";
+import * as analysis from "./analysis";
 import * as cursor from "./cursor";
 import { drawUI } from "./drawUI";
 import * as keyboard from "./keyboard";
@@ -44,6 +45,7 @@ export class HanabiUI {
 
     initStageSize();
     cursor.set("default");
+    analysis.init();
 
     // Add a window resize listener.
     this.resizeHandler = () => {
@@ -136,6 +138,7 @@ export class HanabiUI {
       cancelAnimationFrame(this.resizeRequestAnimationFrame);
       this.resizeRequestAnimationFrame = null;
     }
+    analysis.destroy();
     keyboard.destroy();
     timer.stop();
     globals.stage.destroy();
