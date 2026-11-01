@@ -70,9 +70,16 @@ export class LayoutChild extends Konva.Group {
       this.off("dragend");
     }
 
-    const shape = globals.stage.getIntersection(
-      globals.stage.getPointerPosition(),
-    );
+    // Konva has no pointer position until the mouse has moved over the stage once (e.g. in a window
+    // that was just opened), and "getIntersection" throws without one. (The Konva types do not say
+    // that it can be undefined.)
+    const pointerPosition = globals.stage.getPointerPosition() as
+      Konva.Vector2d | undefined;
+    if (pointerPosition === undefined) {
+      return;
+    }
+
+    const shape = globals.stage.getIntersection(pointerPosition);
     if (shape !== null && this.card.isAncestorOf(shape)) {
       this.card.setCursor();
     }
