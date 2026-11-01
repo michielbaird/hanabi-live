@@ -53,6 +53,61 @@ let commentText: Konva.Text | null = null;
 const MISTAKE_COLOR = "#ff4040";
 const SUGGESTION_COLOR = "#ffb000";
 
+const STORAGE_KEY = "botAnalysis";
+
+/**
+ * Whether the user turned the bot analysis on in the settings. It is a client-only setting (kept in
+ * localStorage, like the dark mode), and off by default.
+ */
+export function isEnabled(): boolean {
+  try {
+    return localStorage.getItem(STORAGE_KEY) === "true";
+  } catch {
+    // localStorage may be unavailable (e.g. private browsing, disabled).
+    return false;
+  }
+}
+
+/** Called on page load to wire up the checkbox in the settings. */
+export function initSettings(): void {
+  const checkbox = document.querySelector<HTMLInputElement>("#botAnalysis");
+  if (checkbox === null) {
+    return;
+  }
+
+  checkbox.checked = isEnabled();
+  checkbox.addEventListener("change", () => {
+    try {
+      localStorage.setItem(STORAGE_KEY, String(checkbox.checked));
+    } catch {
+      // The localStorage API may be unavailable.
+    }
+
+    if (!checkbox.checked) {
+      clear();
+    }
+  });
+}
+
+/** Removes everything that the analysis added to the screen. */
+function clear() {
+  stopWorker();
+  button?.remove();
+  button = null;
+  panel?.remove();
+  panel = null;
+  result = null;
+  const hadOverlay = markers !== null || commentText !== null;
+  markers?.destroy();
+  markers = null;
+  commentText?.destroy();
+  commentText = null;
+  layoutButtons(null);
+  if (hadOverlay) {
+    globals.layers.UI.batchDraw();
+  }
+}
+
 /** Called when the game UI is created. */
 export function init(): void {
   poll = globalThis.setInterval(updateButton, 1000);
@@ -127,7 +182,7 @@ export function goToFlagged(direction: -1 | 1): void {
  * With an analysis, the replay controls get two more buttons, between "previous" and "first" and
  * between "next" and "last", and the row is tightened to fit them.
  */
-function layoutButtons(analysis: AnalysisResult) {
+function layoutButtons(analysis: AnalysisResult | null) {
   const {
     replayBackFullButton,
     replayBackButton,
@@ -147,7 +202,7 @@ function layoutButtons(analysis: AnalysisResult) {
     return;
   }
 
-  const withButtons = analysis.comments.length > 0;
+  const withButtons = analysis !== null && analysis.comments.length > 0;
   const row = getReplayButtonRow(
     globals.lobby.settings.keldonMode,
     withButtons,
@@ -271,7 +326,7 @@ function getDatabaseID(): number | null {
 }
 
 function updateButton() {
-  const visible = getDatabaseID() !== null;
+  const visible = isEnabled() && getDatabaseID() !== null;
   if (!visible) {
     button?.remove();
     button = null;

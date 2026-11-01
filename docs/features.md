@@ -158,10 +158,17 @@ that have not been played yet and have only one copy remaining.)
 
 ### Bot Analysis
 
+- It is off by default. Turn it on in the settings, under "Expert Features"
+  ("Enable the bot analysis of finished games"). The setting is kept in your
+  browser only.
 - In the replay of a finished game, the "Bot analysis" button (top right) has
   the bot go through the game and list every move it would have played
   differently, with the clear mistakes in red. Clicking a line jumps to that
   move.
+- When the analysis is done, the replay bar gets a marker for every such move
+  (red for clear mistakes, amber for suggestions), two buttons next to
+  "previous" and "next" jump to the previous or next one, and the bot's comment
+  is shown under the replay controls while you are on that turn.
 - The bot (`hanab-bot-rs`) runs in your browser as WebAssembly, in a Web Worker,
   so nothing but the usual `/export/<id>` request goes to the server. It takes a
   while on long games (a progress count is shown).
