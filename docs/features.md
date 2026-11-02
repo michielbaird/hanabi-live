@@ -170,7 +170,8 @@ that have not been played yet and have only one copy remaining.)
   played differently (red for clear mistakes, amber for suggestions). Two
   buttons next to "previous" and "next" jump to the previous or next one, and
   the bot's comment is shown under the replay controls while you are on that
-  turn. At the end of the game a summary of the whole analysis is shown there.
+  turn. At the end of the game a summary of the whole analysis is shown there;
+  it has a blue marker on the replay bar.
 - The bot (`hanab-bot-rs`) runs in your browser as WebAssembly, in a Web Worker,
   so nothing but the usual `/export/<id>` request goes to the server. It takes a
   while on long games.

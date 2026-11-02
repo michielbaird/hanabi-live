@@ -56,6 +56,7 @@ let commentText: Konva.Text | null = null;
 
 const MISTAKE_COLOR = "#ff4040";
 const SUGGESTION_COLOR = "#ffb000";
+const SUMMARY_COLOR = "#58a6ff";
 
 const STORAGE_KEY = "botAnalysis";
 
@@ -280,6 +281,23 @@ function drawMarkers(analysis: AnalysisResult) {
       }),
     );
   }
+
+  // The summary of the whole analysis is shown at the end of the game.
+  markers.add(
+    new Konva.Rect({
+      x:
+        replayBar.x()
+        + sliderWidth
+        + replayShuttle.width() / 2
+        - markerWidth / 2,
+      y: replayBar.y() - markerHeight - 1,
+      width: markerWidth,
+      height: markerHeight,
+      fill: SUMMARY_COLOR,
+      cornerRadius: markerWidth / 3,
+      listening: false,
+    }),
+  );
 }
 
 /**

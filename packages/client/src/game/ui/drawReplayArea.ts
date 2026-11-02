@@ -342,25 +342,25 @@ export function drawReplayArea(winW: number, winH: number): void {
 
   function enterHypoSetLeft(this: EnterHypoButton) {
     this.x(bottomLeftReplayButtonX * winW);
-    placeAnalysisButton(this);
+    placeAnalysisButton(this, "right"); // No room on the left of the first button
   }
 
   function enterHypoSetCenter(this: EnterHypoButton) {
     this.x(bottomCenterReplayButtonX * winW);
-    placeAnalysisButton(this);
+    placeAnalysisButton(this, "left");
   }
 
   function enterHypoSetRight(this: EnterHypoButton) {
     this.x(bottomRightReplayButtonX * winW);
-    placeAnalysisButton(this);
+    placeAnalysisButton(this, "right");
   }
 
   globals.elements.enterHypoButton.setLeft = enterHypoSetLeft;
   globals.elements.enterHypoButton.setCenter = enterHypoSetCenter;
   globals.elements.enterHypoButton.setRight = enterHypoSetRight;
 
-  // The "Bot analysis" button: a small robot to the right of the "Enter Hypothetical" button. It is
-  // only shown for finished games when the setting is on (see "analysis.ts").
+  // The "Bot analysis" button: a small robot next to the "Enter Hypothetical" button. It is only
+  // shown for finished games when the setting is on (see "analysis.ts").
   const analysisButton = new Button({
     y: bottomButtonValues.y * winH,
     width: 0.035 * winW,
@@ -379,10 +379,20 @@ export function drawReplayArea(winW: number, winH: number): void {
   globals.elements.replayArea.add(analysisButton as unknown as Konva.Group);
 
   // The robot follows the "Enter Hypothetical" button, which moves depending on the kind of replay.
-  function placeAnalysisButton(hypoButton: EnterHypoButton) {
-    analysisButton.x(hypoButton.x() + hypoButton.width() + 0.005 * winW);
+  // It goes on the left of it, except in a shared replay, where the "Use Shared Turns" button is
+  // there and leaves no room.
+  function placeAnalysisButton(
+    hypoButton: EnterHypoButton,
+    side: "left" | "right",
+  ) {
+    const gap = 0.005 * winW;
+    analysisButton.x(
+      side === "left"
+        ? hypoButton.x() - gap - analysisButton.width()
+        : hypoButton.x() + hypoButton.width() + gap,
+    );
   }
-  placeAnalysisButton(globals.elements.enterHypoButton);
+  placeAnalysisButton(globals.elements.enterHypoButton, "left");
 
   // Add the replay area to the UI.
   globals.layers.UI.add(globals.elements.replayArea);
