@@ -23,31 +23,6 @@ const conventionOptions: ReadonlyArray<readonly [string, string]> = [
   ["RefSieve", "Referential Sieve"],
 ];
 
-/**
- * Variants the bot knows it cannot play, matched by name. This is a copy of "UNSUPPORTED_VARIANTS"
- * in the bot's "client.rs" (the WebAssembly module's "is_variant_supported()" is the same check),
- * so that the button can be hidden without loading the bot.
- */
-const unsupportedVariants = [
-  "Blind",
-  "Mute",
-  "Ambiguous",
-  "Dual-Color",
-  "Synesthesia",
-  "Mix",
-  "Funnels",
-  "Chimneys",
-  "Matryoshka",
-  "Alternating",
-  "Odds",
-  "Cow",
-  "Duck",
-  "Reversed",
-  "Throw",
-  "Up or Down",
-  "Sudoku",
-];
-
 interface AnalysisComment {
   turn: number;
   player: number;
@@ -61,6 +36,7 @@ interface AnalysisResult {
 }
 
 type WorkerMessage =
+  | { type: "supports"; supported: boolean }
   | { type: "progress"; done: number; total: number }
   | { type: "result"; result: AnalysisResult }
   | { type: "error"; message: string };
@@ -70,6 +46,11 @@ let panel: HTMLDivElement | null = null;
 /** The progress bar in the middle of the screen while the bot goes through the game. */
 let progress: HTMLDivElement | null = null;
 let worker: Worker | null = null;
+/** Who is waiting for the worker's answers; the worker does one thing at a time. */
+let onSupports: ((supported: boolean) => void) | null = null;
+let onAnalysisMessage: ((message: WorkerMessage) => void) | null = null;
+/** Whether the bot can follow a game, by the game's variant and options. */
+const supportCache = new Map<string, boolean>();
 let poll: number | null = null;
 
 /** The finished analysis of the game being viewed, shown on the replay controls. */
@@ -413,16 +394,35 @@ function getDatabaseID(): number | null {
   return databaseID !== null && databaseID > 0 ? databaseID : null;
 }
 
-/** Whether the bot can follow the game: not one of its unsupported variants or table options. */
+/**
+ * Whether the bot can follow the game, which only the bot knows (it can't play some variants and
+ * table options). The first time this is asked about a kind of game it starts the bot in its worker
+ * and answers false until the bot has replied, which then updates the button.
+ */
 function isSupported(): boolean {
   const { options } = globals;
-  return (
-    unsupportedVariants.every((name) => !options.variantName.includes(name))
-    && !options.emptyClues
-    && !options.detrimentalCharacters
-    && !options.oneExtraCard
-    && !options.oneLessCard
-  );
+  const query = {
+    variant: options.variantName,
+    emptyClues: options.emptyClues,
+    detrimentalCharacters: options.detrimentalCharacters,
+    oneExtraCard: options.oneExtraCard,
+    oneLessCard: options.oneLessCard,
+  };
+  const key = JSON.stringify(query);
+  const known = supportCache.get(key);
+  if (known !== undefined) {
+    return known;
+  }
+
+  if (onSupports === null) {
+    onSupports = (supported) => {
+      onSupports = null;
+      supportCache.set(key, supported);
+      updateButton();
+    };
+    getWorker().postMessage({ type: "supports", ...query });
+  }
+  return false;
 }
 
 /**
@@ -518,9 +518,42 @@ export function togglePanel(): void {
   }px`;
 }
 
+/** The bot's worker, which is started when it is first needed and kept for the next question. */
+function getWorker(): Worker {
+  if (worker !== null) {
+    return worker;
+  }
+
+  const newWorker = new Worker(WORKER_URL, { type: "module" });
+  newWorker.addEventListener(
+    "message",
+    (event: MessageEvent<WorkerMessage>) => {
+      const message = event.data;
+      if (message.type === "supports") {
+        onSupports?.(message.supported);
+      } else {
+        onAnalysisMessage?.(message);
+      }
+    },
+  );
+  newWorker.addEventListener("error", () => {
+    // The bot could not be loaded, or it stopped.
+    onSupports?.(false);
+    onAnalysisMessage?.({
+      type: "error",
+      message: "The analysis stopped unexpectedly.",
+    });
+  });
+  worker = newWorker;
+  return newWorker;
+}
+
+/** Ends the worker (it is the only way to stop an analysis); the next question starts a new one. */
 function stopWorker() {
   worker?.terminate();
   worker = null;
+  onSupports = null;
+  onAnalysisMessage = null;
 }
 
 // ------------------------------------------
@@ -602,28 +635,33 @@ async function run(convention: string, conventionLabel: string) {
     const exportJson = await response.text();
 
     const analysis = await new Promise<AnalysisResult>((resolve, reject) => {
-      stopWorker();
-      worker = new Worker(WORKER_URL, { type: "module" });
-      worker.addEventListener("error", () => {
-        reject(new Error("The analysis stopped unexpectedly."));
-      });
-      worker.addEventListener(
-        "message",
-        (event: MessageEvent<WorkerMessage>) => {
-          const message = event.data;
-          if (message.type === "progress") {
-            text.textContent = `Bot analysis: move ${message.done} of ${message.total}`;
-            bar.max = message.total;
-            bar.value = message.done;
-          } else if (message.type === "result") {
-            resolve(message.result);
-          } else {
-            reject(new Error(message.message));
-          }
-        },
-      );
+      onAnalysisMessage = (message) => {
+        switch (message.type) {
+        case "progress": {
+          text.textContent = `Bot analysis: move ${message.done} of ${message.total}`;
+          bar.max = message.total;
+          bar.value = message.done;
+        
+        break;
+        }
+
+        case "result": {
+          resolve(message.result);
+        
+        break;
+        }
+
+        case "error": {
+          reject(new Error(message.message));
+        
+        break;
+        }
+        // No default
+        }
+      };
       text.textContent = "Bot analysis: starting...";
-      worker.postMessage({
+      getWorker().postMessage({
+        type: "analyze",
         exportJson,
         variant: globals.variant.name,
         convention,
@@ -632,7 +670,7 @@ async function run(convention: string, conventionLabel: string) {
         endgameTimeoutMs: 2000,
       });
     });
-    stopWorker();
+    onAnalysisMessage = null;
     result = analysis;
     resultConvention = conventionLabel;
     dismissProgress();

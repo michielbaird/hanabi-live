@@ -180,7 +180,9 @@ that have not been played yet and have only one copy remaining.)
   `docker-compose-analysis.yml`.
 - The robot is not shown for the variants the bot cannot play (Blind, Mute, Up
   or Down, Reversed, Sudoku and so on), or for games with empty clues,
-  detrimental characters, or one extra or one less card.
+  detrimental characters, or one extra or one less card. The bot itself is asked
+  (it is loaded in the background then, only when the setting is on), so the
+  robot appears a moment after the replay opens.
 
 ### Shared Replays
 

@@ -77,6 +77,28 @@ export function init_variants(variants_json, colours_json) {
 }
 
 /**
+ * Whether the bot can follow games with this variant and these table options: false for the variants it knows it cannot
+ * play (Blind, Mute, Up or Down, ...) and for the options it can't handle. The lists are in the bot's `client.rs`, so
+ * that the page does not need a copy of them.
+ * @param {string} variant
+ * @param {boolean} empty_clues
+ * @param {boolean} detrimental_characters
+ * @param {boolean} one_extra_card
+ * @param {boolean} one_less_card
+ * @returns {boolean}
+ */
+export function is_game_supported(variant, empty_clues, detrimental_characters, one_extra_card, one_less_card) {
+    const val2 = +empty_clues;
+    const val3 = +detrimental_characters;
+    const val4 = +one_extra_card;
+    const val5 = +one_less_card;
+    const ptr0 = passStringToWasm0(variant, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.is_game_supported(ptr0, len0, val2, val3, val4, val5);
+    return ret !== 0;
+}
+
+/**
  * The bot version, e.g. `v1.3.0 (hanab-bot-rs)`.
  * @returns {string}
  */
