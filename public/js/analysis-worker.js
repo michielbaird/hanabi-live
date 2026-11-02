@@ -1,3 +1,4 @@
+// @ts-check
 // Runs the bot (hanab-bot-rs compiled to WebAssembly, see "scripts/bash/build_analysis_wasm.sh") off the main thread, since
 // an analysis takes many seconds. The worker loads the bot once and answers two kinds of messages:
 //
@@ -11,8 +12,9 @@ import init, {
   analyze,
   init_variants,
   is_game_supported,
-} from "/public/wasm/hanab_bot_wasm.js";
+} from "../wasm/hanab_bot_wasm.js";
 
+/** @param {string} url */
 async function fetchText(url) {
   const response = await fetch(url);
   if (!response.ok) {
@@ -34,6 +36,13 @@ function load() {
   return loaded;
 }
 
+/**
+ * @typedef {{ type: string, variant: string, emptyClues: boolean, detrimentalCharacters: boolean,
+ *   oneExtraCard: boolean, oneLessCard: boolean, exportJson: string, convention: string,
+ *   endgameTimeoutMs: number }} Message
+ */
+
+/** @param {MessageEvent<Message>} event */
 globalThis.onmessage = async (event) => {
   const message = event.data;
   try {
@@ -55,7 +64,7 @@ globalThis.onmessage = async (event) => {
         message.variant,
         message.convention,
         message.endgameTimeoutMs,
-        (done, total) => {
+        /** @type {(done: number, total: number) => void} */ (done, total) => {
           globalThis.postMessage({ type: "progress", done, total });
         },
       );
