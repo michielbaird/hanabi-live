@@ -161,20 +161,23 @@ that have not been played yet and have only one copy remaining.)
 - It is off by default. Turn it on in the settings, under "Expert Features"
   ("Enable the bot analysis of finished games"). The setting is kept in your
   browser only.
-- In the replay of a finished game, the "Bot analysis" button under the replay
-  controls has the bot go through the game and list every move it would have
-  played differently, with the clear mistakes in red. Clicking a line jumps to
-  that move.
-- When the analysis is done, the replay bar gets a marker for every such move
-  (red for clear mistakes, amber for suggestions), two buttons next to
-  "previous" and "next" jump to the previous or next one, and the bot's comment
-  is shown under the replay controls while you are on that turn.
+- In the replay of a finished game, the small robot button to the right of
+  "Enter Hypothetical" opens a box next to it where you pick the convention
+  (H-Group level 1 to 12, Reactor or Referential Sieve). The bot then goes
+  through the game, with a progress bar in the middle of the screen that goes
+  away when it is done.
+- Afterwards the replay bar has a marker for every move the bot would have
+  played differently (red for clear mistakes, amber for suggestions). Two
+  buttons next to "previous" and "next" jump to the previous or next one, and
+  the bot's comment is shown under the replay controls while you are on that
+  turn. At the end of the game a summary of the whole analysis is shown there.
 - The bot (`hanab-bot-rs`) runs in your browser as WebAssembly, in a Web Worker,
   so nothing but the usual `/export/<id>` request goes to the server. It takes a
-  while on long games (a progress count is shown).
+  while on long games.
 - The files are in `public/wasm`; rebuild them with
-  `scripts/bash/build_analysis_wasm.sh`.
-- Not every variant is understood by the bot; the panel says so when the
+  `scripts/bash/build_analysis_wasm.sh`. To try it locally, see
+  `docker-compose-analysis.yml`.
+- Not every variant is understood by the bot; the progress box says so when the
   analysis fails.
 
 ### Shared Replays

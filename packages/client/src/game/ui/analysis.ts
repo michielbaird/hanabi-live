@@ -40,12 +40,17 @@ type WorkerMessage =
   | { type: "result"; result: AnalysisResult }
   | { type: "error"; message: string };
 
+/** The small box next to the button where the convention is chosen. */
 let panel: HTMLDivElement | null = null;
+/** The progress bar in the middle of the screen while the bot goes through the game. */
+let progress: HTMLDivElement | null = null;
 let worker: Worker | null = null;
 let poll: number | null = null;
 
 /** The finished analysis of the game being viewed, shown on the replay controls. */
 let result: AnalysisResult | null = null;
+/** What the convention of the analysis was called in the picker. */
+let resultConvention = "";
 let markers: Konva.Group | null = null;
 let commentText: Konva.Text | null = null;
 
@@ -93,6 +98,7 @@ function clear() {
   stopWorker();
   panel?.remove();
   panel = null;
+  dismissProgress();
   result = null;
   const hadOverlay = markers !== null || commentText !== null;
   markers?.destroy();
@@ -119,6 +125,7 @@ export function destroy(): void {
   stopWorker();
   panel?.remove();
   panel = null;
+  dismissProgress();
   result = null;
   markers?.destroy();
   markers = null;
@@ -277,35 +284,67 @@ function drawMarkers(analysis: AnalysisResult) {
 
 /**
  * Shows the bot's comment for the turn being shown in the replay, if there is one, under the
- * buttons that are below the replay controls ("Enter Hypothetical" and so on).
+ * buttons that are below the replay controls ("Enter Hypothetical" and so on). At the end of the
+ * game it shows a summary of the whole analysis instead.
  */
 function drawComment(analysis: AnalysisResult) {
   commentText?.destroy();
   commentText = null;
 
   const { replayArea } = globals.elements;
+  if (replayArea === null) {
+    return;
+  }
+
   const here = analysis.comments.filter(
     (c) => getSegment(c) === globals.state.replay.segment,
   );
-  if (replayArea === null || here.length === 0) {
+  let text: string;
+  let mistake: boolean;
+  if (here.length > 0) {
+    text = here
+      .map((c) => `${analysis.players[c.player] ?? "?"}: ${c.text}`)
+      .join("\n");
+    mistake = here.some((c) => c.mistake);
+  } else if (
+    globals.state.replay.segment === globals.state.ongoingGame.turn.segment
+  ) {
+    text = getSummary(analysis);
+    mistake = false;
+  } else {
     return;
   }
 
   const winH = globals.stage.height();
   commentText = new Konva.Text({
     x: 0,
-    y: 0.29 * winH,
+    y: 0.24 * winH,
     width: replayArea.width(),
-    text: here
-      .map((c) => `${analysis.players[c.player] ?? "?"}: ${c.text}`)
-      .join("\n"),
+    text,
     fontSize: 0.02 * winH,
     fontFamily: "Verdana",
-    fill: here.some((c) => c.mistake) ? "#ff8080" : "white",
+    fill: mistake ? "#ff8080" : "white",
     align: "center",
     listening: false,
   });
   replayArea.add(commentText);
+}
+
+/** What is said about the whole game, which is shown at its end. */
+function getSummary(analysis: AnalysisResult): string {
+  const total = analysis.comments.length;
+  const mistakes = analysis.comments.filter((c) => c.mistake).length;
+  const label = `Bot analysis (${resultConvention})`;
+  if (total === 0) {
+    return `${label}: the bot would not have played any move differently.`;
+  }
+
+  const moves = total === 1 ? "1 move differs" : `${total} moves differ`;
+  const clearMistakes =
+    mistakes === 1
+      ? "1 clearMistakes mistake"
+      : `${mistakes} clearMistakes mistakes`;
+  return `${label}: ${moves} from what the bot would do, ${clearMistakes}.`;
 }
 
 /**
@@ -344,30 +383,18 @@ export function updateButton(): void {
   globals.layers.UI.batchDraw();
 }
 
+/** Opens (or closes) the small box next to the button where the convention is chosen. */
 export function togglePanel(): void {
   if (panel !== null) {
     panel.remove();
     panel = null;
-    stopWorker();
     return;
   }
 
-  panel = document.createElement("div");
-  panel.id = "bot-analysis-panel";
-  Object.assign(panel.style, {
-    position: "fixed",
-    top: "3em",
-    right: "0.5em",
-    width: "min(28em, 90vw)",
-    maxHeight: "70vh",
-    overflowY: "auto",
-    zIndex: "100",
-    padding: "0.8em",
-    background: "rgba(0, 0, 0, 0.88)",
-    color: "white",
-    borderRadius: "6px",
-    fontSize: "0.9em",
-  });
+  const { analysisButton } = globals.elements;
+  if (analysisButton === null) {
+    return;
+  }
 
   const picker = document.createElement("select");
   for (const [value, label] of conventionOptions) {
@@ -375,27 +402,42 @@ export function togglePanel(): void {
   }
   const start = document.createElement("button");
   start.textContent = "Analyze";
-  const status = document.createElement("div");
-  status.style.margin = "0.6em 0";
-  const list = document.createElement("div");
-
-  const header = document.createElement("div");
-  header.append("Convention: ", picker, " ", start);
-  panel.append(header, status, list);
   start.addEventListener("click", () => {
-    start.disabled = true;
-    picker.disabled = true;
-    list.replaceChildren();
-    run(picker.value, status, list)
-      .catch((error: unknown) => {
-        status.textContent = `The analysis failed: ${String(error)}`;
-      })
-      .finally(() => {
-        start.disabled = false;
-        picker.disabled = false;
-      });
+    const label = picker.selectedOptions[0]?.textContent ?? picker.value;
+    panel?.remove();
+    panel = null;
+    run(picker.value, label).catch((error: unknown) => {
+      showProgressError(String(error));
+    });
   });
+
+  panel = document.createElement("div");
+  panel.id = "bot-analysis-panel";
+  Object.assign(panel.style, {
+    position: "fixed",
+    zIndex: "100",
+    padding: "0.6em 0.8em",
+    background: "rgba(0, 0, 0, 0.88)",
+    color: "white",
+    borderRadius: "6px",
+    fontSize: "0.9em",
+    whiteSpace: "nowrap",
+  });
+  panel.append("Bot analysis: ", picker, " ", start);
   document.querySelector("#game")?.append(panel);
+
+  // Next to the button, which is drawn on the canvas, or on its other side if there is no room.
+  const canvas = globals.stage.container().getBoundingClientRect();
+  const position = analysisButton.getAbsolutePosition();
+  const gap = 6;
+  const right = canvas.left + position.x + analysisButton.width() + gap;
+  const { width } = panel.getBoundingClientRect();
+  panel.style.top = `${canvas.top + position.y}px`;
+  panel.style.left = `${
+    right + width <= globalThis.innerWidth
+      ? right
+      : Math.max(canvas.left + position.x - width - gap, 0)
+  }px`;
 }
 
 function stopWorker() {
@@ -403,15 +445,78 @@ function stopWorker() {
   worker = null;
 }
 
-async function run(convention: string, status: HTMLElement, list: HTMLElement) {
+// ------------------------------------------
+// The progress bar in the middle of the screen
+// ------------------------------------------
+
+function showProgress(): { text: HTMLElement; bar: HTMLProgressElement } {
+  dismissProgress();
+
+  const text = document.createElement("div");
+  text.style.marginBottom = "0.5em";
+  const bar = document.createElement("progress");
+  bar.style.width = "20em";
+  const cancel = document.createElement("button");
+  cancel.textContent = "Cancel";
+  cancel.style.marginTop = "0.6em";
+  cancel.addEventListener("click", () => {
+    stopWorker();
+    dismissProgress();
+  });
+
+  progress = document.createElement("div");
+  progress.id = "bot-analysis-progress";
+  Object.assign(progress.style, {
+    position: "fixed",
+    top: "50%",
+    left: "50%",
+    transform: "translate(-50%, -50%)",
+    zIndex: "100",
+    padding: "1em 1.5em",
+    background: "rgba(0, 0, 0, 0.88)",
+    color: "white",
+    borderRadius: "6px",
+    textAlign: "center",
+  });
+  const buttons = document.createElement("div");
+  buttons.append(cancel);
+  progress.append(text, bar, buttons);
+  document.querySelector("#game")?.append(progress);
+  return { text, bar };
+}
+
+function dismissProgress() {
+  progress?.remove();
+  progress = null;
+}
+
+/** An error stays on the screen for a few seconds, or until it is clicked. */
+function showProgressError(message: string) {
+  stopWorker();
+  const { text, bar } = showProgress();
+  bar.remove();
+  progress?.querySelector("button")?.remove();
+  text.style.color = "#ff8080";
+  text.textContent = `The analysis failed: ${message}`;
+  const element = progress;
+  element?.addEventListener("click", dismissProgress);
+  globalThis.setTimeout(() => {
+    if (progress === element) {
+      dismissProgress();
+    }
+  }, 8000);
+}
+
+async function run(convention: string, conventionLabel: string) {
   const databaseID = getDatabaseID();
   if (databaseID === null) {
-    status.textContent = "This game can not be analyzed.";
+    showProgressError("This game can not be analyzed.");
     return;
   }
 
+  const { text, bar } = showProgress();
   try {
-    status.textContent = "Loading the game...";
+    text.textContent = "Loading the game...";
     const response = await fetch(`/export/${databaseID}`);
     if (!response.ok) {
       throw new Error(`The server could not export game ${databaseID}.`);
@@ -429,7 +534,9 @@ async function run(convention: string, status: HTMLElement, list: HTMLElement) {
         (event: MessageEvent<WorkerMessage>) => {
           const message = event.data;
           if (message.type === "progress") {
-            status.textContent = `Analyzing... move ${message.done} of ${message.total}`;
+            text.textContent = `Bot analysis: move ${message.done} of ${message.total}`;
+            bar.max = message.total;
+            bar.value = message.done;
           } else if (message.type === "result") {
             resolve(message.result);
           } else {
@@ -437,7 +544,7 @@ async function run(convention: string, status: HTMLElement, list: HTMLElement) {
           }
         },
       );
-      status.textContent = "Analyzing...";
+      text.textContent = "Bot analysis: starting...";
       worker.postMessage({
         exportJson,
         variant: globals.variant.name,
@@ -448,39 +555,14 @@ async function run(convention: string, status: HTMLElement, list: HTMLElement) {
       });
     });
     stopWorker();
-    showResult(analysis, status, list);
+    result = analysis;
+    resultConvention = conventionLabel;
+    dismissProgress();
+    refresh();
   } catch (error) {
-    stopWorker();
-    status.textContent = `The analysis failed: ${error instanceof Error ? error.message : String(error)}`;
-  }
-}
-
-function showResult(
-  analysis: AnalysisResult,
-  status: HTMLElement,
-  list: HTMLElement,
-) {
-  const mistakes = analysis.comments.filter((c) => c.mistake).length;
-  status.textContent =
-    analysis.comments.length === 0
-      ? "The bot would not have played any move differently."
-      : `${analysis.comments.length} moves differ from what the bot would do, ${mistakes} of them clear mistakes. Click one to jump to it.`;
-
-  result = analysis;
-  refresh();
-
-  for (const comment of analysis.comments) {
-    const row = document.createElement("div");
-    row.textContent = `Turn ${comment.turn}, ${analysis.players[comment.player] ?? "?"}: ${comment.text}`;
-    Object.assign(row.style, {
-      cursor: "pointer",
-      padding: "0.25em 0",
-      borderTop: "1px solid #444",
-      color: comment.mistake ? "#ff8080" : "white",
-    });
-    row.addEventListener("click", () => {
-      replay.goToSegment(getSegment(comment), true);
-    });
-    list.append(row);
+    // A cancelled analysis has already dismissed its progress bar and ended its worker.
+    if (progress !== null) {
+      showProgressError(error instanceof Error ? error.message : String(error));
+    }
   }
 }

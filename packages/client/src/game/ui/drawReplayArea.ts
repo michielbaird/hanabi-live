@@ -7,6 +7,7 @@ import { EnterHypoButton } from "./controls/EnterHypoButton";
 import { SharedTurnsButton } from "./controls/SharedTurnsButton";
 import { Shuttle } from "./controls/Shuttle";
 import * as hypothetical from "./hypothetical";
+import { initKonvaTooltips } from "./konvaTooltips";
 import * as replay from "./replay";
 import { getReplayButtonRow } from "./replayButtonRow";
 
@@ -341,34 +342,47 @@ export function drawReplayArea(winW: number, winH: number): void {
 
   function enterHypoSetLeft(this: EnterHypoButton) {
     this.x(bottomLeftReplayButtonX * winW);
+    placeAnalysisButton(this);
   }
 
   function enterHypoSetCenter(this: EnterHypoButton) {
     this.x(bottomCenterReplayButtonX * winW);
+    placeAnalysisButton(this);
   }
 
   function enterHypoSetRight(this: EnterHypoButton) {
     this.x(bottomRightReplayButtonX * winW);
+    placeAnalysisButton(this);
   }
 
   globals.elements.enterHypoButton.setLeft = enterHypoSetLeft;
   globals.elements.enterHypoButton.setCenter = enterHypoSetCenter;
   globals.elements.enterHypoButton.setRight = enterHypoSetRight;
 
-  // The "Bot analysis" button, under the row of the buttons above. It is only shown for finished
-  // games when the setting is on (see "analysis.ts").
-  globals.elements.analysisButton = new Button({
-    x: bottomCenterReplayButtonX * winW,
-    y: 0.235 * winH,
-    width: bottomButtonValues.w * winW,
-    height: 0.05 * winH,
-    text: "Bot analysis",
+  // The "Bot analysis" button: a small robot to the right of the "Enter Hypothetical" button. It is
+  // only shown for finished games when the setting is on (see "analysis.ts").
+  const analysisButton = new Button({
+    y: bottomButtonValues.y * winH,
+    width: 0.035 * winW,
+    height: bottomButtonValues.h * winH,
+    // eslint-disable-next-line complete/require-ascii
+    text: "🤖",
+    fontSize: 0.03 * winH,
     visible: false,
   });
-  globals.elements.analysisButton.on("click tap", analysis.togglePanel);
-  globals.elements.replayArea.add(
-    globals.elements.analysisButton as unknown as Konva.Group,
-  );
+  analysisButton.on("click tap", analysis.togglePanel);
+  analysisButton.tooltipName = "bot-analysis";
+  analysisButton.tooltipContent =
+    "Bot analysis: the bot goes through this game in your browser and marks every move it would have played differently.";
+  initKonvaTooltips(analysisButton, true, false);
+  globals.elements.analysisButton = analysisButton;
+  globals.elements.replayArea.add(analysisButton as unknown as Konva.Group);
+
+  // The robot follows the "Enter Hypothetical" button, which moves depending on the kind of replay.
+  function placeAnalysisButton(hypoButton: EnterHypoButton) {
+    analysisButton.x(hypoButton.x() + hypoButton.width() + 0.005 * winW);
+  }
+  placeAnalysisButton(globals.elements.enterHypoButton);
 
   // Add the replay area to the UI.
   globals.layers.UI.add(globals.elements.replayArea);
