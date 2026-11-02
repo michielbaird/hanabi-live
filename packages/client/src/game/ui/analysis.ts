@@ -159,18 +159,29 @@ export function refresh(): void {
   globals.layers.UI.batchDraw();
 }
 
-/** Goes to the next (or previous) turn that the bot has a comment on. */
+/**
+ * The replay segments that the buttons to jump between the bot's comments stop at: the turns it has
+ * a comment on, and the end of the game, where the summary is.
+ */
+function getStops(analysis: AnalysisResult): readonly number[] {
+  const stops = analysis.comments.map(getSegment);
+  const finalSegment = globals.state.ongoingGame.turn.segment;
+  if (finalSegment !== null) {
+    stops.push(finalSegment);
+  }
+  return stops;
+}
+
+/** Goes to the next (or previous) turn that the bot has a comment on, or to the summary. */
 export function goToFlagged(direction: -1 | 1): void {
   if (result === null) {
     return;
   }
 
   const current = globals.state.replay.segment;
-  const segments = result.comments
-    .map(getSegment)
-    .filter((segment) =>
-      direction > 0 ? segment > current : segment < current,
-    );
+  const segments = getStops(result).filter((segment) =>
+    direction > 0 ? segment > current : segment < current,
+  );
   if (segments.length === 0) {
     return;
   }
@@ -234,7 +245,7 @@ function layoutButtons(analysis: AnalysisResult | null) {
   replayBackAnalysisButton.visible(withButtons);
   replayForwardAnalysisButton.visible(withButtons);
   if (withButtons) {
-    const segments = analysis.comments.map(getSegment);
+    const segments = getStops(analysis);
     const current = globals.state.replay.segment;
     replayBackAnalysisButton.setEnabled(segments.some((s) => s < current));
     replayForwardAnalysisButton.setEnabled(segments.some((s) => s > current));
