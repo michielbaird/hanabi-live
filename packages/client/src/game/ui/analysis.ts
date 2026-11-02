@@ -23,6 +23,31 @@ const conventionOptions: ReadonlyArray<readonly [string, string]> = [
   ["RefSieve", "Referential Sieve"],
 ];
 
+/**
+ * Variants the bot knows it cannot play, matched by name. This is a copy of "UNSUPPORTED_VARIANTS"
+ * in the bot's "client.rs" (the WebAssembly module's "is_variant_supported()" is the same check),
+ * so that the button can be hidden without loading the bot.
+ */
+const unsupportedVariants = [
+  "Blind",
+  "Mute",
+  "Ambiguous",
+  "Dual-Color",
+  "Synesthesia",
+  "Mix",
+  "Funnels",
+  "Chimneys",
+  "Matryoshka",
+  "Alternating",
+  "Odds",
+  "Cow",
+  "Duck",
+  "Reversed",
+  "Throw",
+  "Up or Down",
+  "Sudoku",
+];
+
 interface AnalysisComment {
   turn: number;
   player: number;
@@ -388,9 +413,21 @@ function getDatabaseID(): number | null {
   return databaseID !== null && databaseID > 0 ? databaseID : null;
 }
 
+/** Whether the bot can follow the game: not one of its unsupported variants or table options. */
+function isSupported(): boolean {
+  const { options } = globals;
+  return (
+    unsupportedVariants.every((name) => !options.variantName.includes(name))
+    && !options.emptyClues
+    && !options.detrimentalCharacters
+    && !options.oneExtraCard
+    && !options.oneLessCard
+  );
+}
+
 /**
  * Shows or hides the "Bot analysis" button in the replay controls (see "drawReplayArea.ts"):
- * it is for finished games, when the setting is on.
+ * it is for finished games of a variant that the bot can play, when the setting is on.
  */
 export function updateButton(): void {
   const { analysisButton } = globals.elements;
@@ -398,7 +435,7 @@ export function updateButton(): void {
     return;
   }
 
-  const visible = isEnabled() && getDatabaseID() !== null;
+  const visible = isEnabled() && getDatabaseID() !== null && isSupported();
   if (analysisButton.visible() === visible) {
     return;
   }

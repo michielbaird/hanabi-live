@@ -178,8 +178,9 @@ that have not been played yet and have only one copy remaining.)
 - The files are in `public/wasm`; rebuild them with
   `scripts/bash/build_analysis_wasm.sh`. To try it locally, see
   `docker-compose-analysis.yml`.
-- Not every variant is understood by the bot; the progress box says so when the
-  analysis fails.
+- The robot is not shown for the variants the bot cannot play (Blind, Mute, Up
+  or Down, Reversed, Sudoku and so on), or for games with empty clues,
+  detrimental characters, or one extra or one less card.
 
 ### Shared Replays
 
