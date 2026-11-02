@@ -40,7 +40,6 @@ type WorkerMessage =
   | { type: "result"; result: AnalysisResult }
   | { type: "error"; message: string };
 
-let button: HTMLButtonElement | null = null;
 let panel: HTMLDivElement | null = null;
 let worker: Worker | null = null;
 let poll: number | null = null;
@@ -92,8 +91,6 @@ export function initSettings(): void {
 /** Removes everything that the analysis added to the screen. */
 function clear() {
   stopWorker();
-  button?.remove();
-  button = null;
   panel?.remove();
   panel = null;
   result = null;
@@ -120,8 +117,6 @@ export function destroy(): void {
     poll = null;
   }
   stopWorker();
-  button?.remove();
-  button = null;
   panel?.remove();
   panel = null;
   result = null;
@@ -299,7 +294,7 @@ function drawComment(analysis: AnalysisResult) {
   const winH = globals.stage.height();
   commentText = new Konva.Text({
     x: 0,
-    y: 0.24 * winH,
+    y: 0.29 * winH,
     width: replayArea.width(),
     text: here
       .map((c) => `${analysis.players[c.player] ?? "?"}: ${c.text}`)
@@ -325,35 +320,31 @@ function getDatabaseID(): number | null {
   return databaseID !== null && databaseID > 0 ? databaseID : null;
 }
 
-function updateButton() {
-  const visible = isEnabled() && getDatabaseID() !== null;
-  if (!visible) {
-    button?.remove();
-    button = null;
-    return;
-  }
-  if (button !== null) {
+/**
+ * Shows or hides the "Bot analysis" button in the replay controls (see "drawReplayArea.ts"):
+ * it is for finished games, when the setting is on.
+ */
+export function updateButton(): void {
+  const { analysisButton } = globals.elements;
+  if (analysisButton === null) {
     return;
   }
 
-  button = document.createElement("button");
-  button.id = "bot-analysis-button";
-  button.textContent = "Bot analysis";
-  button.title =
-    "Have the bot look through this game and list the moves it would have played differently";
-  Object.assign(button.style, {
-    position: "fixed",
-    top: "0.5em",
-    right: "0.5em",
-    zIndex: "100",
-    padding: "0.3em 0.8em",
-    cursor: "pointer",
-  });
-  button.addEventListener("click", togglePanel);
-  document.querySelector("#game")?.append(button);
+  const visible = isEnabled() && getDatabaseID() !== null;
+  if (analysisButton.visible() === visible) {
+    return;
+  }
+
+  analysisButton.visible(visible);
+  if (!visible) {
+    panel?.remove();
+    panel = null;
+    stopWorker();
+  }
+  globals.layers.UI.batchDraw();
 }
 
-function togglePanel() {
+export function togglePanel(): void {
   if (panel !== null) {
     panel.remove();
     panel = null;

@@ -116,6 +116,7 @@ export class Elements {
   replayBackButton: Button | null = null;
   replayForwardButton: Button | null = null;
   replayForwardFullButton: Button | null = null;
+  analysisButton: Button | null = null;
   replayBackAnalysisButton: Button | null = null;
   replayForwardAnalysisButton: Button | null = null;
   replayExitButton: Button | null = null;

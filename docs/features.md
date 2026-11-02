@@ -161,10 +161,10 @@ that have not been played yet and have only one copy remaining.)
 - It is off by default. Turn it on in the settings, under "Expert Features"
   ("Enable the bot analysis of finished games"). The setting is kept in your
   browser only.
-- In the replay of a finished game, the "Bot analysis" button (top right) has
-  the bot go through the game and list every move it would have played
-  differently, with the clear mistakes in red. Clicking a line jumps to that
-  move.
+- In the replay of a finished game, the "Bot analysis" button under the replay
+  controls has the bot go through the game and list every move it would have
+  played differently, with the clear mistakes in red. Clicking a line jumps to
+  that move.
 - When the analysis is done, the replay bar gets a marker for every such move
   (red for clear mistakes, amber for suggestions), two buttons next to
   "previous" and "next" jump to the previous or next one, and the bot's comment

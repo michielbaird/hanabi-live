@@ -355,8 +355,24 @@ export function drawReplayArea(winW: number, winH: number): void {
   globals.elements.enterHypoButton.setCenter = enterHypoSetCenter;
   globals.elements.enterHypoButton.setRight = enterHypoSetRight;
 
+  // The "Bot analysis" button, under the row of the buttons above. It is only shown for finished
+  // games when the setting is on (see "analysis.ts").
+  globals.elements.analysisButton = new Button({
+    x: bottomCenterReplayButtonX * winW,
+    y: 0.235 * winH,
+    width: bottomButtonValues.w * winW,
+    height: 0.05 * winH,
+    text: "Bot analysis",
+    visible: false,
+  });
+  globals.elements.analysisButton.on("click tap", analysis.togglePanel);
+  globals.elements.replayArea.add(
+    globals.elements.analysisButton as unknown as Konva.Group,
+  );
+
   // Add the replay area to the UI.
   globals.layers.UI.add(globals.elements.replayArea);
   replay.adjustShuttles(true); // Skip the animation
-  analysis.refresh(); // Show the bot analysis again if the UI was rebuilt
+  analysis.updateButton(); // Show the bot analysis again if the UI was rebuilt
+  analysis.refresh();
 }
