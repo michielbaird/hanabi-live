@@ -9,6 +9,7 @@ import * as chat from "./chat";
 import { initErrorListener } from "./errors";
 import * as gameChat from "./game/chat";
 import * as game from "./game/main";
+import * as analysis from "./game/ui/analysis";
 import { backToLobby } from "./game/ui/backToLobby";
 import * as lobbyCreateGame from "./lobby/createGame";
 import * as lobbyHistory from "./lobby/history";
@@ -120,6 +121,7 @@ $(document).ready(() => {
   lobbyNav.init();
   playerSettings.init();
   theme.init();
+  analysis.initSettings();
   lobbyTutorialInit();
   lobbyWatchReplay.init();
   sounds.init();

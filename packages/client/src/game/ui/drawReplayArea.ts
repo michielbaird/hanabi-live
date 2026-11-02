@@ -1,12 +1,15 @@
 import Konva from "konva";
 import { getCanvasColors } from "../../theme";
 import { globals } from "./UIGlobals";
+import * as analysis from "./analysis";
 import { Button } from "./controls/Button";
 import { EnterHypoButton } from "./controls/EnterHypoButton";
 import { SharedTurnsButton } from "./controls/SharedTurnsButton";
 import { Shuttle } from "./controls/Shuttle";
 import * as hypothetical from "./hypothetical";
+import { initKonvaTooltips } from "./konvaTooltips";
 import * as replay from "./replay";
+import { getReplayButtonRow } from "./replayButtonRow";
 
 export function drawReplayArea(winW: number, winH: number): void {
   const replayAreaValues = {
@@ -111,16 +114,13 @@ export function drawReplayArea(winW: number, winH: number): void {
   globals.elements.replayShuttle.on("wheel", replay.barScroll);
   globals.elements.replayArea.add(globals.elements.replayShuttle);
 
+  const row = getReplayButtonRow(globals.lobby.settings.keldonMode, false);
   const replayButtonValues = {
-    x: 0.05,
-    y: 0.07,
-    w: 0.06,
+    x: row.x,
+    w: row.buttonWidth,
     h: 0.08,
-    spacing: 0.02,
+    spacing: row.spacing,
   };
-  if (globals.lobby.settings.keldonMode) {
-    replayButtonValues.x = 0.1;
-  }
 
   {
     let { x } = replayButtonValues;
@@ -219,22 +219,54 @@ export function drawReplayArea(winW: number, winH: number): void {
     globals.elements.replayArea.add(
       globals.elements.replayForwardFullButton as unknown as Konva.Group,
     );
+
+    // The bot analysis' buttons for the previous and the next move that the bot would have played
+    // differently. They are only shown once there is an analysis (see "analysis.ts"), which also
+    // moves the other buttons to make room.
+    for (const [name, text, direction] of [
+      ["replayBackAnalysisButton", "<!", -1],
+      ["replayForwardAnalysisButton", "!>", 1],
+    ] as const) {
+      const button = new Button({
+        x: 0,
+        y: 0.07 * winH,
+        width: replayButtonValues.w * winW,
+        height: replayButtonValues.h * winH,
+        text,
+        fontSize: 0.03 * winH,
+        visible: false,
+      });
+      button.on("click tap", () => {
+        analysis.goToFlagged(direction);
+      });
+      globals.elements[name] = button;
+      globals.elements.replayArea.add(button as unknown as Konva.Group);
+    }
   }
 
   const extra = 0.04;
   const totalWidth = replayButtonValues.w * 4 + replayButtonValues.spacing * 3;
+  // The bot analysis' button is a small square between the two buttons on the bottom row, so those
+  // are a little narrower than two of the buttons above them side by side. Together they take the
+  // same width as before.
+  const analysisButtonWidth = 0.035;
+  const analysisButtonGap = 0.005;
+  const bottomRowWidth =
+    2 * (replayButtonValues.w * 2 + replayButtonValues.spacing + extra)
+    + replayButtonValues.spacing;
   const bottomButtonValues = {
     y: 0.17,
-    w: replayButtonValues.w * 2 + replayButtonValues.spacing + extra,
+    w: (bottomRowWidth - analysisButtonWidth - 2 * analysisButtonGap) / 2,
     h: 0.06,
   };
   const bottomLeftReplayButtonX = replayButtonValues.x - extra;
   const bottomCenterReplayButtonX =
     replayButtonValues.x + (totalWidth - bottomButtonValues.w) / 2;
   const bottomRightReplayButtonX =
-    replayButtonValues.x
-    + replayButtonValues.w * 2
-    + replayButtonValues.spacing * 2;
+    bottomLeftReplayButtonX
+    + bottomButtonValues.w
+    + analysisButtonWidth
+    + 2 * analysisButtonGap;
   // The "Exit Replay" button.
   globals.elements.replayExitButton = new Button({
     x: bottomRightReplayButtonX * winW,
@@ -319,21 +351,61 @@ export function drawReplayArea(winW: number, winH: number): void {
 
   function enterHypoSetLeft(this: EnterHypoButton) {
     this.x(bottomLeftReplayButtonX * winW);
+    placeAnalysisButton(this, "right"); // No room on the left of the first button
   }
 
   function enterHypoSetCenter(this: EnterHypoButton) {
     this.x(bottomCenterReplayButtonX * winW);
+    placeAnalysisButton(this, "left");
   }
 
   function enterHypoSetRight(this: EnterHypoButton) {
     this.x(bottomRightReplayButtonX * winW);
+    placeAnalysisButton(this, "left");
   }
 
   globals.elements.enterHypoButton.setLeft = enterHypoSetLeft;
   globals.elements.enterHypoButton.setCenter = enterHypoSetCenter;
   globals.elements.enterHypoButton.setRight = enterHypoSetRight;
 
+  // The "Bot analysis" button: a small robot next to the "Enter Hypothetical" button. It is only
+  // shown for finished games when the setting is on (see "analysis.ts").
+  const analysisButton = new Button({
+    y: bottomButtonValues.y * winH,
+    width: analysisButtonWidth * winW,
+    height: bottomButtonValues.h * winH,
+    // eslint-disable-next-line complete/require-ascii
+    text: "🤖",
+    fontSize: 0.03 * winH,
+    visible: false,
+  });
+  analysisButton.on("click tap", analysis.togglePanel);
+  analysisButton.tooltipName = "bot-analysis";
+  analysisButton.tooltipContent =
+    "Bot analysis: the bot goes through this game in your browser and marks every move it would have played differently.";
+  initKonvaTooltips(analysisButton, true, false);
+  globals.elements.analysisButton = analysisButton;
+  globals.elements.replayArea.add(analysisButton as unknown as Konva.Group);
+
+  // The robot follows the "Enter Hypothetical" button, which moves depending on the kind of replay.
+  // It goes on the left of it (between it and the "Use Shared Turns" button in a shared replay), so
+  // that the row does not extend further to the right.
+  function placeAnalysisButton(
+    hypoButton: EnterHypoButton,
+    side: "left" | "right",
+  ) {
+    const gap = analysisButtonGap * winW;
+    analysisButton.x(
+      side === "left"
+        ? hypoButton.x() - gap - analysisButton.width()
+        : hypoButton.x() + hypoButton.width() + gap,
+    );
+  }
+  placeAnalysisButton(globals.elements.enterHypoButton, "left");
+
   // Add the replay area to the UI.
   globals.layers.UI.add(globals.elements.replayArea);
   replay.adjustShuttles(true); // Skip the animation
+  analysis.updateButton(); // Show the bot analysis again if the UI was rebuilt
+  analysis.refresh();
 }

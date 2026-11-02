@@ -3,10 +3,11 @@ import Konva from "konva";
 import * as tooltips from "../../../../tooltips";
 import { escapeHtml } from "../../../../utils";
 import { ReplayActionType } from "../../../types/ReplayActionType";
-import { globals } from "../../UIGlobals";
+import * as analysis from "../../analysis";
 import * as ourHand from "../../ourHand";
 import * as replay from "../../replay";
 import * as timer from "../../timer";
+import { globals } from "../../UIGlobals";
 import { toggleZen } from "../../zen";
 import * as cluesView from "./cluesView";
 
@@ -26,6 +27,7 @@ export function onActiveChanged(active: boolean): void {
 
   cluesView.refreshArrows(active);
   ourHand.checkSetDraggableAll();
+  analysis.refresh();
 
   globals.layers.UI.batchDraw();
 }
@@ -47,6 +49,8 @@ export function onSegmentChanged(
   if (data.replaySegment === null) {
     return;
   }
+
+  analysis.refresh();
 
   // If we are on the first segment, disable the rewind replay buttons.
   const onFirstSegment = data.replaySegment !== 0;

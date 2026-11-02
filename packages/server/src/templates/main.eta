@@ -1628,6 +1628,14 @@
           </label>
         </p>
         <p>
+            <input id="botAnalysis" type="checkbox" />
+            <label for="botAnalysis">
+              <span class="label-text">
+                Enable the bot analysis of finished games (runs in your browser)
+              </span>
+            </label>
+          </p>
+          <p>
           <input id="hyphenatedConventions" type="checkbox" />
           <label for="hyphenatedConventions">
             <span class="label-text">

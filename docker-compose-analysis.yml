@@ -1,0 +1,50 @@
+# A local copy of the site for trying the in-browser bot analysis ("Bot analysis" in the replay of a finished game).
+# It builds the client (with public/wasm), the Go server and a Postgres with the schema from this checkout:
+#
+#   docker compose -f docker-compose-analysis.yml up --build
+#
+# Then open http://<your host>:8088/?login=test1 and, in a second private window or browser,
+# http://<your host>:8088/?login=test2 (no passwords; this only works in development mode, see DOMAIN below). Create a table in one, join it in the
+# other and play a few moves. Ending the game (play it out, or vote to terminate with the X button) saves it to the
+# database, and the replay you land in afterwards has the "Bot analysis" button.
+# Rebuild the wasm first if the bot changed: scripts/bash/build_analysis_wasm.sh
+#
+# Data is kept in the "pgdata" volume; remove it with `docker compose -f docker-compose-analysis.yml down -v`.
+services:
+  db:
+    build:
+      context: .
+      dockerfile: Dockerfile.postgres
+    environment:
+      POSTGRES_PASSWORD: "1234567890"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # Over TCP (-h): while the image sets the database up, a temporary server listens on the socket only, and a
+      # check through the socket would pass before the real server accepts connections.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U hanabiuser -d hanabi"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8088:80"
+    environment:
+      DB_HOST: db
+      # The site only works when you browse to exactly this host name. Set it to the address you use, e.g.
+      # `ANALYSIS_DOMAIN=192.168.1.20 docker compose -f docker-compose-analysis.yml up --build`. A private IP
+      # (192.168.* or 10.*) or "localhost" turns on the server's development mode (needed for the ?login= shortcut).
+      DOMAIN: ${ANALYSIS_DOMAIN:-localhost}
+      SESSION_SECRET: "development only"
+    volumes:
+      - ./.env.example:/root/hanabi-live/.env:ro
+
+volumes:
+  pgdata:

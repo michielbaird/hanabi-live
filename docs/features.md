@@ -156,6 +156,34 @@ that have not been played yet and have only one copy remaining.)
 - Similar to an in-game replay, in a post-game replay, you can review the game
   turn by turn.
 
+### Bot Analysis
+
+- It is off by default. Turn it on in the settings, under "Expert Features"
+  ("Enable the bot analysis of finished games"). The setting is kept in your
+  browser only.
+- In the replay of a finished game, the small robot button to the right of
+  "Enter Hypothetical" opens a box next to it where you pick the convention
+  (H-Group level 1 to 12, Reactor or Referential Sieve). The bot then goes
+  through the game, with a progress bar in the middle of the screen that goes
+  away when it is done.
+- Afterwards the replay bar has a marker for every move the bot would have
+  played differently (red for clear mistakes, amber for suggestions). Two
+  buttons next to "previous" and "next" jump to the previous or next one, and
+  the bot's comment is shown under the replay controls while you are on that
+  turn. At the end of the game a summary of the whole analysis is shown there;
+  it has a blue marker on the replay bar.
+- The bot (`hanab-bot-rs`) runs in your browser as WebAssembly, in a Web Worker,
+  so nothing but the usual `/export/<id>` request goes to the server. It takes a
+  while on long games.
+- The files are in `public/wasm`; rebuild them with
+  `scripts/bash/build_analysis_wasm.sh`. To try it locally, see
+  `docker-compose-analysis.yml`.
+- The robot is not shown for the variants the bot cannot play (Blind, Mute, Up
+  or Down, Reversed, Sudoku and so on), or for games with empty clues,
+  detrimental characters, or one extra or one less card. The bot itself is asked
+  (it is loaded in the background then, only when the setting is on), so the
+  robot appears a moment after the replay opens.
+
 ### Shared Replays
 
 - A shared replay is similar to a normal replay, but others can join to have a
