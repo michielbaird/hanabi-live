@@ -7,7 +7,8 @@
 # http://<your host>:8088/?login=test2 (no passwords; this only works in development mode, see DOMAIN below). Create a table in one, join it in the
 # other and play a few moves. Ending the game (play it out, or vote to terminate with the X button) saves it to the
 # database, and the replay you land in afterwards has the "Bot analysis" button.
-# Rebuild the wasm first if the bot changed: scripts/bash/build_analysis_wasm.sh
+# The bot comes from the "hanab-bot-wasm" npm package (see package.json). To try a bot that is not released, build the
+# package in hanab-bot-rs (wasm/package.sh) and `npm install` the .tgz it makes.
 #
 # Data is kept in the "pgdata" volume; remove it with `docker compose -f docker-compose-analysis.yml down -v`.
 services:

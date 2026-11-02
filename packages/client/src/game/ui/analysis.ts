@@ -1,14 +1,17 @@
 // Post-game analysis by the bot: lists every move of a finished game that the bot would have played
 // differently. The bot (hanab-bot-rs) is compiled to WebAssembly and runs in a Web Worker
-// ("public/js/analysis-worker.js"), so nothing is sent to the server except the usual request for
-// the game's "/export/<id>" data.
+// ("analysisWorker.ts"), so nothing is sent to the server except the usual request for the game's
+// "/export/<id>" data.
 
+import { VERSION } from "@hanabi-live/data";
 import Konva from "konva";
 import * as replay from "./replay";
 import { getReplayButtonRow } from "./replayButtonRow";
 import { globals } from "./UIGlobals";
 
-const WORKER_URL = "/public/js/analysis-worker.js";
+// The version is in the URL so that a new version of the client does not run an old worker from the
+// cache.
+const WORKER_URL = `/public/js/bundles/analysisWorker.min.js?${VERSION}`;
 /** The bot plays H-Group at levels 1 to 12. */
 const H_GROUP_LEVELS: readonly number[] = Array.from(
   { length: 12 },
@@ -637,26 +640,26 @@ async function run(convention: string, conventionLabel: string) {
     const analysis = await new Promise<AnalysisResult>((resolve, reject) => {
       onAnalysisMessage = (message) => {
         switch (message.type) {
-        case "progress": {
-          text.textContent = `Bot analysis: move ${message.done} of ${message.total}`;
-          bar.max = message.total;
-          bar.value = message.done;
-        
-        break;
-        }
+          case "progress": {
+            text.textContent = `Bot analysis: move ${message.done} of ${message.total}`;
+            bar.max = message.total;
+            bar.value = message.done;
 
-        case "result": {
-          resolve(message.result);
-        
-        break;
-        }
+            break;
+          }
 
-        case "error": {
-          reject(new Error(message.message));
-        
-        break;
-        }
-        // No default
+          case "result": {
+            resolve(message.result);
+
+            break;
+          }
+
+          case "error": {
+            reject(new Error(message.message));
+
+            break;
+          }
+          // No default
         }
       };
       text.textContent = "Bot analysis: starting...";

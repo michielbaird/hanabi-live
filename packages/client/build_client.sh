@@ -58,6 +58,9 @@ npx esbuild "$DIR/src/main.ts" --bundle --outfile="$JS_BUNDLE_PATH" --minify --s
 # Also produce the unversioned bundle name that the server serves in dev mode. (Normally it is
 # only created by the esbuild watch script, but the Docker image runs in dev mode.)
 cp "$JS_BUNDLE_PATH" "$JS_BUNDLES_DIR/main.min.js"
+# The bot's game analysis runs in a Web Worker, which is a bundle of its own. The "file" loader puts the
+# WebAssembly file in the same directory.
+npx esbuild "$DIR/src/analysisWorker.mts" --bundle --format=esm --outfile="$JS_BUNDLES_DIR/analysisWorker.min.js" --minify --sourcemap="linked" --loader:.wasm=file --public-path=/public/js/bundles --asset-names="[name]-[hash]"
 bash "$REPO_ROOT/scripts/bash/build_pips_reference.sh"
 echo
 

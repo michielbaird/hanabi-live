@@ -25,6 +25,8 @@
     "paths": {
       "@hanabi-live/data": ["./packages/data/src/index.ts"],
       "@hanabi-live/game": ["./packages/game/src/index.ts"],
+      // The data files of the game package, for the bot's worker (which needs them as they are).
+      "@hanabi-live/game/src/json/*": ["./packages/game/src/json/*"],
     },
   },
 }

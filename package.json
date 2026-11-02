@@ -59,6 +59,7 @@
     "grunt-contrib-concat": "2.1.0",
     "grunt-contrib-cssmin": "5.0.0",
     "grunt-criticalcss": "2.1.0",
+    "hanab-bot-wasm": "https://github.com/michielbaird/hanab-bot-rs/releases/download/wasm-v0.1.0/hanab-bot-wasm-0.1.0.tgz",
     "http-status-codes": "2.3.0",
     "immer": "11.1.21",
     "interactjs": "1.10.28",

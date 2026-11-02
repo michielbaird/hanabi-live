@@ -6,6 +6,9 @@
     "../../tsconfig.monorepo.json",
   ],
 
+  // The bot's worker is an ES module (see "analysisWorker.mts"), unlike the rest of the client.
+  "include": ["./src/**/*.ts", "./src/**/*.mts"],
+
   "compilerOptions": {
     "lib": ["DOM", "ES2023"],
   },
