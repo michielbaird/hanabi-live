@@ -426,6 +426,18 @@ export function togglePanel(): void {
   }
 
   const picker = document.createElement("select");
+  // The site styles every "select" for its light pages (a light background, the text color of the
+  // parent, a width of 100%), which would make the chosen option white on light grey here.
+  Object.assign(picker.style, {
+    display: "inline-block",
+    width: "auto",
+    height: "auto",
+    padding: "0.2em 2.2em 0.2em 0.6em",
+    color: "#222",
+    backgroundColor: "#f8f8f8",
+    fontSize: "inherit",
+    lineHeight: "1.4",
+  });
   for (const [value, label] of conventionOptions) {
     picker.append(new Option(label, value));
   }
