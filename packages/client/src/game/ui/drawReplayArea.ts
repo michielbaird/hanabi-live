@@ -246,18 +246,27 @@ export function drawReplayArea(winW: number, winH: number): void {
 
   const extra = 0.04;
   const totalWidth = replayButtonValues.w * 4 + replayButtonValues.spacing * 3;
+  // The bot analysis' button is a small square between the two buttons on the bottom row, so those
+  // are a little narrower than two of the buttons above them side by side. Together they take the
+  // same width as before.
+  const analysisButtonWidth = 0.035;
+  const analysisButtonGap = 0.005;
+  const bottomRowWidth =
+    2 * (replayButtonValues.w * 2 + replayButtonValues.spacing + extra)
+    + replayButtonValues.spacing;
   const bottomButtonValues = {
     y: 0.17,
-    w: replayButtonValues.w * 2 + replayButtonValues.spacing + extra,
+    w: (bottomRowWidth - analysisButtonWidth - 2 * analysisButtonGap) / 2,
     h: 0.06,
   };
   const bottomLeftReplayButtonX = replayButtonValues.x - extra;
   const bottomCenterReplayButtonX =
     replayButtonValues.x + (totalWidth - bottomButtonValues.w) / 2;
   const bottomRightReplayButtonX =
-    replayButtonValues.x
-    + replayButtonValues.w * 2
-    + replayButtonValues.spacing * 2;
+    bottomLeftReplayButtonX
+    + bottomButtonValues.w
+    + analysisButtonWidth
+    + 2 * analysisButtonGap;
   // The "Exit Replay" button.
   globals.elements.replayExitButton = new Button({
     x: bottomRightReplayButtonX * winW,
@@ -352,7 +361,7 @@ export function drawReplayArea(winW: number, winH: number): void {
 
   function enterHypoSetRight(this: EnterHypoButton) {
     this.x(bottomRightReplayButtonX * winW);
-    placeAnalysisButton(this, "right");
+    placeAnalysisButton(this, "left");
   }
 
   globals.elements.enterHypoButton.setLeft = enterHypoSetLeft;
@@ -363,7 +372,7 @@ export function drawReplayArea(winW: number, winH: number): void {
   // shown for finished games when the setting is on (see "analysis.ts").
   const analysisButton = new Button({
     y: bottomButtonValues.y * winH,
-    width: 0.035 * winW,
+    width: analysisButtonWidth * winW,
     height: bottomButtonValues.h * winH,
     // eslint-disable-next-line complete/require-ascii
     text: "🤖",
@@ -379,13 +388,13 @@ export function drawReplayArea(winW: number, winH: number): void {
   globals.elements.replayArea.add(analysisButton as unknown as Konva.Group);
 
   // The robot follows the "Enter Hypothetical" button, which moves depending on the kind of replay.
-  // It goes on the left of it, except in a shared replay, where the "Use Shared Turns" button is
-  // there and leaves no room.
+  // It goes on the left of it (between it and the "Use Shared Turns" button in a shared replay), so
+  // that the row does not extend further to the right.
   function placeAnalysisButton(
     hypoButton: EnterHypoButton,
     side: "left" | "right",
   ) {
-    const gap = 0.005 * winW;
+    const gap = analysisButtonGap * winW;
     analysisButton.x(
       side === "left"
         ? hypoButton.x() - gap - analysisButton.width()
