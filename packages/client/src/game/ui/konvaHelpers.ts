@@ -1,16 +1,17 @@
 import Konva from "konva";
-import type * as KonvaBaseLayer from "konva/types/BaseLayer";
-import { globals } from "./UIGlobals";
+import { store } from "../../store.ts";
+import { globals } from "./UiGlobals.ts";
+import { HALF_TURN_DEGREES } from "./constants.ts";
 
 export function drawLayer(node: Konva.Node): void {
-  const layer = node.getLayer() as KonvaBaseLayer.BaseLayer | null;
+  const layer = node.getLayer();
   if (layer !== null) {
     layer.batchDraw();
   }
 }
 
 interface CanTween {
-  tween: Konva.Tween | null;
+  tween: Konva.Tween | undefined;
 }
 
 interface TweenConfig {
@@ -37,9 +38,9 @@ export function animate(
   // hidden).
   node.show();
 
-  if (node.tween !== null) {
+  if (node.tween !== undefined) {
     node.tween.destroy();
-    node.tween = null;
+    node.tween = undefined;
   }
 
   if (fast || params.duration === 0) {
@@ -76,24 +77,17 @@ export function animate(
       node.listening(true);
     }
   } else {
-    // The Konva TypeScript definitions specify a Tween config as "any".
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const config: any = {
+    const config: Konva.TweenConfig = {
       node,
       onFinish: () => {
-        // If the game is restarted in the middle of an animation, it is possible to get here with
-        // something important being undefined.
-        if (
-          // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-          node === undefined
-          || globals.store === null
-        ) {
+        // If the game is closed in the middle of an animation, there is no state to draw.
+        if (store.getState().game.current === undefined) {
           return;
         }
 
-        if (node.tween !== null) {
+        if (node.tween !== undefined) {
           node.tween.destroy();
-          node.tween = null;
+          node.tween = undefined;
         }
 
         // Now that the animation is finished, we can re-enable listening (see below explanation).
@@ -107,9 +101,7 @@ export function animate(
       },
     };
 
-    // The Konva object is weakly typed, and expects the keys to be there or not if there is a
-    // desire to change the value. Therefore, disable the linter rule for this block.
-    /* eslint-disable @typescript-eslint/no-unsafe-member-access */
+    // Konva tweens every key that is present, so only set the keys that should change.
     if (params.duration !== undefined) {
       config.duration = params.duration;
     }
@@ -138,7 +130,6 @@ export function animate(
     if (params.easing !== undefined) {
       config.easing = params.easing;
     }
-    /* eslint-enable @typescript-eslint/no-unsafe-member-access */
 
     // Temporarily disable listening on this element while it is animating (for performance reasons
     // and to prevent players from accidentally clicking on it).
@@ -148,4 +139,13 @@ export function animate(
 
     node.tween = new Konva.Tween(config).play();
   }
+}
+
+/** Konva rotations are in degrees, but `Math` works in radians. */
+export function degreesToRadians(degrees: number): number {
+  return (degrees / HALF_TURN_DEGREES) * Math.PI;
+}
+
+export function radiansToDegrees(radians: number): number {
+  return (radians / Math.PI) * HALF_TURN_DEGREES;
 }

@@ -1,14 +1,15 @@
 /* eslint-disable @typescript-eslint/no-restricted-imports */
 
+import { gameIdSchema } from "@hanabi-live/data";
 import type {
-  ActionHypotheticalAction,
+  ActionHypotheticalActions,
   ActionHypotheticalBack,
   ActionHypotheticalEnd,
   ActionHypotheticalStart,
   ActionIncludingHypothetical,
   ActionInit,
   ActionReplayEnter,
-} from "../src/game/types/actions";
+} from "../src/game/types/actions.ts";
 
 export function replayEnter(): ActionReplayEnter {
   return {
@@ -20,45 +21,48 @@ export function replayEnter(): ActionReplayEnter {
 export function init(): ActionInit {
   return {
     type: "init",
-    datetimeStarted: new Date(0).toString(),
-    datetimeFinished: new Date(0).toString(),
-    spectating: false,
-    shadowing: false,
-    replay: true,
-    sharedReplay: true,
-    databaseID: 1,
-    sharedReplaySegment: 0,
-    sharedReplayLeader: "",
-    paused: false,
-    pausePlayerIndex: 0,
+    startedAt: new Date(0).toString(),
+    finishedAt: new Date(0).toString(),
+    mode: {
+      type: "sharedReplay",
+      gameId: gameIdSchema.parse(1),
+      spoilerFree: false,
+      canPlayAgain: false,
+      replayStartedAt: new Date(0).toString(),
+    },
   };
 }
 
-export function hypoStart(): ActionHypotheticalStart {
+export function hypoStart(shared = false): ActionHypotheticalStart {
   return {
-    type: "hypoStart",
+    type: "hypotheticalStart",
+    shared,
     showDrawnCards: false,
     actions: [],
   };
 }
 
-export function hypoEnd(): ActionHypotheticalEnd {
+export function hypoEnd(shared = false): ActionHypotheticalEnd {
   return {
-    type: "hypoEnd",
+    type: "hypotheticalEnd",
+    shared,
   };
 }
 
 export function hypoAction(
   action: ActionIncludingHypothetical,
-): ActionHypotheticalAction {
+  shared = false,
+): ActionHypotheticalActions {
   return {
-    type: "hypoAction",
-    action,
+    type: "hypotheticalActions",
+    shared,
+    actions: [action],
   };
 }
 
 export function hypoBack(): ActionHypotheticalBack {
   return {
-    type: "hypoBack",
+    type: "hypotheticalBack",
+    shared: false,
   };
 }

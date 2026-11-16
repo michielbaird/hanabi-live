@@ -1,10 +1,30 @@
 import type { Clue, Suit, Variant } from "@hanabi-live/game";
 import { isDualColor } from "@hanabi-live/game";
 import Konva from "konva";
-import type * as KonvaContext from "konva/types/Context";
-import { globals } from "./UIGlobals";
-import { drawPip } from "./drawPip";
-import { drawLayer } from "./konvaHelpers";
+import type * as KonvaContext from "konva/lib/Context";
+import { store } from "../../store.ts";
+import { globals } from "./UiGlobals.ts";
+import {
+  BUTTON_CORNER_RADIUS,
+  BUTTON_HOVER_COLOR,
+  BUTTON_OPACITY,
+  BUTTON_PRESSED_COLOR,
+  BUTTON_TEXT_MIDDLE,
+  BUTTON_TEXT_SIZE,
+  FONT_FAMILY,
+  STROKE_WIDTH_UNIT,
+} from "./constants.ts";
+import { drawPip } from "./drawPip.ts";
+import { drawLayer } from "./konvaHelpers.ts";
+
+/** The opacity of the color swatch that fills the button. */
+const COLOR_SWATCH_OPACITY = 0.9;
+
+/** How much of the button's width and height its color fills, centered with an equal margin. */
+const COLOR_SWATCH_SCALE = 0.8;
+
+/** The scale of the suit pip drawn on the button in colorblind mode. */
+const SUIT_PIP_SCALE = 0.25;
 
 export class ColorButton extends Konva.Group {
   pressed = false;
@@ -26,53 +46,58 @@ export class ColorButton extends Konva.Group {
       y: 0,
       width: w,
       height: h,
-      cornerRadius: 0.12 * h,
+      cornerRadius: BUTTON_CORNER_RADIUS * h,
       fill: "black",
-      opacity: 0.6,
+      opacity: BUTTON_OPACITY,
       listening: true,
     });
     this.add(this.background);
 
+    // The color fills the middle of the button, with an equal margin on every side.
+    const colorScale = COLOR_SWATCH_SCALE;
+    const colorMargin = (1 - colorScale) / 2;
     const backgroundColor = new Konva.Rect({
-      x: 0.1 * w,
-      y: 0.1 * h,
-      width: 0.8 * w,
-      height: 0.8 * h,
-      cornerRadius: 0.12 * 0.8 * h,
+      x: colorMargin * w,
+      y: colorMargin * h,
+      width: colorScale * w,
+      height: colorScale * h,
+      cornerRadius: BUTTON_CORNER_RADIUS * colorScale * h,
       fill: config["color"] as string | undefined,
-      opacity: 0.9,
+      opacity: COLOR_SWATCH_OPACITY,
       listening: false,
     });
     this.add(backgroundColor);
 
-    if (globals.lobby.settings.colorblindMode) {
+    if (store.getState().session.settings.colorblindMode) {
       if (isDualColor(globals.variant)) {
         // For Dual-Color variants, draw the color abbreviation (as text).
         const text = new Konva.Text({
           x: 0,
-          y: 0.275 * h,
+          y: (BUTTON_TEXT_MIDDLE - BUTTON_TEXT_SIZE / 2) * h,
           width: w,
-          height: 0.6 * h,
-          fontSize: 0.5 * h,
-          fontFamily: "Verdana",
+          height: BUTTON_TEXT_SIZE * h,
+          fontSize: BUTTON_TEXT_SIZE * h,
+          fontFamily: FONT_FAMILY,
           fill: "white",
           stroke: "black",
-          strokeWidth: 0.014_87 * h,
+          strokeWidth: STROKE_WIDTH_UNIT * globals.stage.height(),
           align: "center",
           text: config["text"] as string | undefined,
           listening: false,
         });
         this.add(text);
       } else {
-        // Draw the suit pip that corresponds to this color.
+        // Draw the suit pip that corresponds to this color, centered on the button. The offset is
+        // in the shape's unscaled units.
+        const suitPipScale = SUIT_PIP_SCALE;
         const suitPip = new Konva.Shape({
           scale: {
-            x: 0.25,
-            y: 0.25,
+            x: suitPipScale,
+            y: suitPipScale,
           },
           offset: {
-            x: w * -2,
-            y: h * -2,
+            x: -w / 2 / suitPipScale,
+            y: -h / 2 / suitPipScale,
           },
           sceneFunc: (ctx: KonvaContext.Context) => {
             drawPip(ctx as unknown as CanvasRenderingContext2D, suit, variant);
@@ -84,7 +109,7 @@ export class ColorButton extends Konva.Group {
     }
 
     this.background.on("mousedown", () => {
-      this.background.fill("#888888");
+      this.background.fill(BUTTON_HOVER_COLOR);
       drawLayer(this);
 
       this.background.on("mouseout", () => {
@@ -106,7 +131,7 @@ export class ColorButton extends Konva.Group {
 
   setPressed(pressed: boolean): void {
     this.pressed = pressed;
-    this.background.fill(pressed ? "#cccccc" : "black");
+    this.background.fill(pressed ? BUTTON_PRESSED_COLOR : "black");
     drawLayer(this);
   }
 }

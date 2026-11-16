@@ -1,262 +1,153 @@
-// The central point for all game tooltips.
+// The central point for all tooltips.
 
-// Tooltipster is a jQuery library, so we import it purely for the side-effects (e.g. so that it can
-// add the ".tooltipster" property to the "$" object).
+import { MAX_DECK_SIZE, MAX_PLAYERS, MAX_SUITS } from "@hanabi-live/game";
+import { eRange, SECOND_IN_MILLISECONDS } from "complete-common";
+import { Tooltip } from "./Tooltip.ts";
+import { globals } from "./game/ui/UiGlobals.ts";
+import { getHtmlElement } from "./utils.ts";
 
-// ScrollableTip is a Tooltipster library that allows for a scrolling tooltip. We import it for the
-// side-effects for the same reason.
+/** How long the tooltip that confirms a copied URL stays open. */
+const COPIED_TOOLTIP_MILLISECONDS = SECOND_IN_MILLISECONDS;
 
-import {
-  MAX_CARDS_IN_A_DECK,
-  MAX_PLAYERS,
-  MAX_SUITS_IN_A_VARIANT,
-} from "@hanabi-live/game";
-import { eRange } from "complete-common";
-import "tooltipster"; // eslint-disable-line import-x/no-unassigned-import
-import "../lib/tooltipster-scrollableTip.min"; // eslint-disable-line import-x/no-unassigned-import
-import { globals } from "./game/ui/UIGlobals";
-import { getHTMLElement } from "./utils";
+const CLIPBOARD_CONTENT =
+  '<span class="small-tooltip-text">URL copied to clipboard!</span>';
 
-// Constants
-export const TOOLTIP_DELAY_IN_MILLISECONDS = 500;
-// eslint-disable-next-line complete/require-capital-const-assertions, complete/require-capital-read-only
-const TOOLTIP_THEME = ["tooltipster-shadow", "tooltipster-shadow-big"];
-const TOOLTIP_THEME_CENTERED = [...TOOLTIP_THEME, "align-center"] as const;
+/** The in-game tooltips that are not for a player or a card. */
+const GAME_TOOLTIP_NAMES = [
+  "bot-analysis",
+  "chat",
+  "deck",
+  "efficiency-number",
+  "efficiency-text",
+  "hypo-back",
+  "hypo-edit-cards",
+  "hypo-pass-turn",
+  "hypo-show-drawn",
+  "kill",
+  "leader",
+  "lobby",
+  "new-ui",
+  "pace",
+  "post-clue-empathy",
+  "replay",
+  "restart",
+  "restart-ready",
+  "spectators",
+  "strikes",
+  "time-taken",
+  "turn-number",
+] as const;
 
-// Tooltip options
-const defaultOptions: JQueryTooltipster.ITooltipsterOptions = {
-  animation: "grow",
-  contentAsHTML: true,
-  delay: 0,
-  theme: TOOLTIP_THEME,
-};
-const navOptions: JQueryTooltipster.ITooltipsterOptions = {
-  theme: "tooltipster-shadow",
-  trigger: "click",
-  interactive: true,
-  delay: 0,
-  // Some tooltips are too large for small resolutions and will wrap off the screen; we can use a
-  // Tooltipster plugin to automatically create a scroll bar for it:
-  // https://github.com/louisameline/tooltipster-scrollableTip
-  plugins: [
-    "sideTip", // Make it have the ability to be positioned on a specific side.
-    "scrollableTip", // Make it scrollable.
-  ],
-};
-const gameOptions: JQueryTooltipster.ITooltipsterOptions = {
-  ...defaultOptions,
-  interactive: true, // So that users can update their notes
-  trigger: "custom",
-  updateAnimation: null,
-};
-const clipboardOptions: JQueryTooltipster.ITooltipsterOptions = {
-  animation: "grow",
-  content: '<span style="font-size: 0.75em;">URL copied to clipboard!</span>',
-  contentAsHTML: true,
-  delay: 0,
-  trigger: "custom",
-  theme: ["tooltipster-shadow", "tooltipster-shadow-big"],
-};
+/** The name of an in-game tooltip. A card's tooltip holds its note. */
+export type GameTooltipName =
+  | (typeof GAME_TOOLTIP_NAMES)[number]
+  | `card-${number}`
+  | `character-assignment-${number}`
+  | `player-${number}`;
 
-type TooltipOptionType = "clipboard" | "default" | "nav";
+/** The in-game tooltips, which last for the whole session. */
+const gameTooltips = new Map<GameTooltipName, GameTooltip>();
 
-// Initialize in-game tooltips (for notes, etc.)
+interface GameTooltip {
+  readonly anchor: HTMLElement;
+  readonly tooltip: Tooltip;
+}
+
+/** Creates the in-game tooltips. Only the tooltips of cards take the pointer, to edit notes. */
 export function initGame(): void {
-  createGameTooltips();
-  createPlayerTooltips();
-  createCardTooltips();
-}
+  for (const name of GAME_TOOLTIP_NAMES) {
+    createGameTooltip(name, { centered: name === "time-taken" });
+  }
 
-export function create(
-  selector: string,
-  type: JQueryTooltipster.ITooltipsterOptions | TooltipOptionType = "default",
-  args?: unknown,
-): void {
-  const tooltip = getElementFromSelector(selector);
-  const customType = typeof type === "string" ? getOptionsFromType(type) : type;
-  const tooltipOptions = {
-    ...customType,
-    args,
-  };
-  // Create the tooltip only once:
-  // https://stackoverflow.com/a/40916543/180243
-  if ($.tooltipster.instances($(tooltip)).length === 0) {
-    tooltip.tooltipster(tooltipOptions);
+  for (const i of eRange(MAX_PLAYERS)) {
+    createGameTooltip(`player-${i}`, { centered: true });
+    createGameTooltip(`character-assignment-${i}`, { centered: true });
+  }
+
+  // Stack bases have notes in some variants, so they have note tooltips too.
+  for (const order of eRange(MAX_DECK_SIZE + MAX_SUITS)) {
+    createGameTooltip(`card-${order}`, { interactive: true });
   }
 }
 
-export function open(selector: string): void {
-  const tooltip = getElementFromSelector(selector);
-  if (isTooltipster(tooltip)) {
-    tooltip.tooltipster("open");
-  }
+/** Briefly shows, beside an element, that a URL was copied to the clipboard. */
+export function showCopied(element: HTMLElement): void {
+  const tooltip = new Tooltip(element, { content: CLIPBOARD_CONTENT });
+  tooltip.open();
+  setTimeout(() => {
+    tooltip.close();
+  }, COPIED_TOOLTIP_MILLISECONDS);
 }
 
-export function close(selector: string): void {
-  if (globals.editingNote === selector) {
-    globals.editingNote = null;
-  }
-
-  const tooltip = getElementFromSelector(selector);
-  if (isTooltipster(tooltip)) {
-    tooltip.tooltipster("close");
-  }
+export function open(name: GameTooltipName): void {
+  gameTooltips.get(name)?.tooltip.open();
 }
 
-// From: https://stackoverflow.com/questions/27709489/jquery-tooltipster-plugin-hide-all-tips
+export function close(name: GameTooltipName): void {
+  if (globals.editingNote === name) {
+    globals.editingNote = undefined;
+  }
+
+  gameTooltips.get(name)?.tooltip.close();
+}
+
 export function closeAllTooltips(): void {
-  globals.editingNote = null;
+  globals.editingNote = undefined;
 
-  const instances = $.tooltipster.instances();
-  $.each(
-    instances,
-    (_: number, instance: JQueryTooltipster.ITooltipsterInstance) => {
-      if (instance.status().open) {
-        instance.close();
-      }
-    },
-  );
+  for (const { tooltip } of gameTooltips.values()) {
+    tooltip.close();
+  }
 }
 
 /** Clear player clock tooltips retained from a previously viewed game. */
 export function clearPlayerTimeTooltips(): void {
   for (const i of eRange(MAX_PLAYERS)) {
-    setInstanceContent(`#tooltip-player-${i}`, "");
+    setContent(`player-${i}`, "");
   }
 }
 
-export function setInstanceContent(selector: string, content: string): void {
-  const tooltip = getElementFromSelector(selector);
-  if (isTooltipster(tooltip)) {
-    tooltip.tooltipster("instance").content(content);
-  }
+export function setContent(name: GameTooltipName, content: string): void {
+  gameTooltips.get(name)?.tooltip.setContent(content);
 }
 
-export function setPosition(selector: string, x: number, y: number): void {
-  const tooltip = getElementFromSelector(selector);
-  tooltip.css("left", x).css("top", y);
-}
-
-export function setInstanceOption(
-  selector: string,
-  option: string,
-  value: string | readonly string[],
+/**
+ * Puts an in-game tooltip's anchor over an element of the game canvas, so that the tooltip opens
+ * above or below the element. A tooltip over the element would take the pointer from it and close.
+ */
+export function setPosition(
+  name: GameTooltipName,
+  rect: Readonly<Pick<DOMRect, "x" | "y" | "width" | "height">>,
 ): void {
-  const tooltip = getElementFromSelector(selector);
-  if (isTooltipster(tooltip)) {
-    tooltip.tooltipster("instance").option(option, value);
-  }
-}
-
-export function getStatus(selector: string): JQueryTooltipster.ITooltipStatus {
-  const tooltip = getElementFromSelector(selector);
-  if (isTooltipster(tooltip)) {
-    return tooltip.tooltipster("status");
-  }
-  return {
-    destroyed: true,
-    destroying: false,
-    enabled: false,
-    open: false,
-    state: "closed",
-  };
-}
-
-export function reposition(selector: string): void {
-  const tooltip = getElementFromSelector(selector);
-  if (isTooltipster(tooltip)) {
-    tooltip.tooltipster("reposition");
-  }
-}
-
-function getOptionsFromType(
-  type: TooltipOptionType = "default",
-): JQueryTooltipster.ITooltipsterOptions {
-  switch (type) {
-    case "clipboard": {
-      return clipboardOptions;
-    }
-
-    case "nav": {
-      return navOptions;
-    }
-
-    case "default": {
-      return defaultOptions;
-    }
-  }
-}
-
-function appendDiv(selector: string, id: string) {
-  const newElement = document.createElement("div");
-  newElement.setAttribute("id", id);
-
-  const parentElement = getHTMLElement(selector);
-  parentElement.append(newElement);
-}
-
-function createGameTooltips() {
-  // Initialize some basic tooltips.
-  const tooltips = [
-    "chat",
-    "deck",
-    "discard",
-    "efficiency-text",
-    "efficiency-number",
-    "hypo-back",
-    "hypo-edit-cards",
-    "hypo-show-drawn",
-    "kill",
-    "leader",
-    "lobby",
-    "lobby-small",
-    "time-taken",
-    "pace",
-    "replay",
-    "restart",
-    "spectators",
-    "strikes",
-    "turn-number",
-  ];
-  for (const tooltip of tooltips) {
-    const id = `tooltip-${tooltip}`;
-    appendDiv("#game-tooltips", id);
-    create(`#${id}`, gameOptions);
+  const gameTooltip = gameTooltips.get(name);
+  if (gameTooltip === undefined) {
+    return;
   }
 
-  // The "time-taken" tooltip should have centered text.
-  setInstanceOption("#tooltip-time-taken", "theme", TOOLTIP_THEME_CENTERED);
+  const { anchor } = gameTooltip;
+  anchor.style.left = `${rect.x}px`;
+  anchor.style.top = `${rect.y}px`;
+  anchor.style.width = `${rect.width}px`;
+  anchor.style.height = `${rect.height}px`;
 }
 
-function createPlayerTooltips() {
-  // Dynamically create the player tooltips.
-  for (const i of eRange(MAX_PLAYERS)) {
-    let id = `tooltip-player-${i}`;
-    appendDiv("#game-tooltips", id);
-    create(`#${id}`, gameOptions);
-    setInstanceOption(`#${id}`, "theme", TOOLTIP_THEME_CENTERED);
-
-    id = `tooltip-character-assignment-${i}`;
-    appendDiv("#game-tooltips", id);
-    create(`#${id}`, gameOptions);
-    setInstanceOption(`#${id}`, "theme", TOOLTIP_THEME_CENTERED);
-  }
+/** Whether the tooltip is still fading out after it was closed. */
+export function isClosing(name: GameTooltipName): boolean {
+  return gameTooltips.get(name)?.tooltip.isClosing ?? false;
 }
 
-function createCardTooltips() {
-  // Dynamically create the card note tooltips. (We add the number of suits because we also need
-  // note tooltips for the stack bases.)
-  for (const order of eRange(MAX_CARDS_IN_A_DECK + MAX_SUITS_IN_A_VARIANT)) {
-    const id = `tooltip-card-${order}`;
-    appendDiv("#game-tooltips", id);
-    create(`#${id}`, gameOptions);
-  }
-}
-
-function getElementFromSelector(selector: string): JQuery {
-  return typeof selector === "string" ? $(selector) : selector;
-}
-
-function isTooltipster(element: JQuery): boolean {
-  return element.hasClass("tooltipstered");
+/** Creates an in-game tooltip, which "konvaTooltips.ts" positions and opens. */
+function createGameTooltip(
+  name: GameTooltipName,
+  options: { readonly interactive?: boolean; readonly centered?: boolean },
+) {
+  const anchor = document.createElement("div");
+  getHtmlElement("#game-tooltips").append(anchor);
+  const tooltip = new Tooltip(anchor, {
+    content: "",
+    ...options,
+  });
+  gameTooltips.set(name, {
+    anchor,
+    tooltip,
+  });
 }

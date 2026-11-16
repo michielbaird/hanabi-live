@@ -1,22 +1,19 @@
-import {
-  arrayCopyTwoDimensional,
-  assertDefined,
-  tupleKeys,
-} from "complete-common";
-import { getVariant } from "../gameData";
-import type { CardState } from "../interfaces/CardState";
-import type { GameMetadata } from "../interfaces/GameMetadata";
-import type { GameState } from "../interfaces/GameState";
-import type { Variant } from "../interfaces/Variant";
-import { getNumCopiesOfCard } from "../rules/deck";
-import type { CardOrder } from "../types/CardOrder";
-import type { PlayerIndex } from "../types/PlayerIndex";
-import type { Rank } from "../types/Rank";
-import type { SuitIndex } from "../types/SuitIndex";
-import type { SuitRankTuple } from "../types/SuitRankTuple";
-import type { GameAction } from "../types/gameActions";
+import { arrayCopyTwoDimensional, tupleKeys } from "complete-common";
+import { getVariantById } from "../gameData.ts";
+import type { CardIdentity } from "../interfaces/CardIdentity.ts";
+import type { CardState } from "../interfaces/CardState.ts";
+import type { GameMetadata } from "../interfaces/GameMetadata.ts";
+import type { GameState } from "../interfaces/GameState.ts";
+import type { Variant } from "../interfaces/Variant.ts";
+import { getNumCopiesOfCard } from "../rules/deck.ts";
+import type { CardOrder } from "../types/CardOrder.ts";
+import type { PlayerIndex } from "../types/PlayerIndex.ts";
+import type { Rank } from "../types/Rank.ts";
+import type { SuitIndex } from "../types/SuitIndex.ts";
+import type { SuitRankTuple } from "../types/SuitRankTuple.ts";
+import type { GameAction } from "../types/gameActions.ts";
 
-let cachedVariantID: number | undefined;
+let cachedVariantId: number | undefined;
 let cachedCardCountMap: readonly number[][] = [];
 
 export function cardDeductionReducer(
@@ -30,6 +27,7 @@ export function cardDeductionReducer(
     case "cardIdentity":
     case "clue":
     case "discard":
+    case "misplay":
     case "play":
     case "draw": {
       return makeDeductions(deck, oldDeck, hands, metadata);
@@ -48,20 +46,22 @@ function makeDeductions(
   metadata: GameMetadata,
 ): readonly CardState[] {
   const newDeck: CardState[] = [...deck];
-  const variant = getVariant(metadata.options.variantName);
+  const variant = getVariantById(metadata.options.variantId);
   const cardCountMap = getCardCountMap(variant);
 
   // We need to calculate our own unknown cards first because those possibilities will be needed for
-  // pretending like we know what the other players see.
-  updateAllCardPossibilities(
-    metadata.ourPlayerIndex,
-    metadata.ourPlayerIndex,
-    hands,
-    newDeck,
-    oldDeck,
-    cardCountMap,
-    metadata,
-  );
+  // pretending like we know what the other players see. Without a seat, we see every card.
+  if (metadata.ourPlayerIndex !== undefined) {
+    updateAllCardPossibilities(
+      metadata.ourPlayerIndex,
+      metadata.ourPlayerIndex,
+      hands,
+      newDeck,
+      oldDeck,
+      cardCountMap,
+      metadata,
+    );
+  }
 
   for (const playerIndex of tupleKeys(hands)) {
     if (playerIndex !== metadata.ourPlayerIndex) {
@@ -80,10 +80,189 @@ function makeDeductions(
   return newDeck;
 }
 
+/**
+ * Recalculates the possibilities of every card in a hand from its clues, as if each card with a
+ * full identity in `identities` had that identity. (A hypothetical can show a card as another card,
+ * and empathy should match what is shown.) The cards keep their real identities.
+ */
+export function recalculateDeductions(
+  deck: readonly CardState[],
+  hands: GameState["hands"],
+  identities: ReadonlyArray<CardIdentity | undefined>,
+  metadata: GameMetadata,
+): readonly CardState[] {
+  const variant = getVariantById(metadata.options.variantId);
+  const cardCountMap = getCardCountMap(variant);
+  const { ourPlayerIndex } = metadata;
+
+  const workingDeck = deck.map((card): CardState => {
+    if (typeof card.location !== "number") {
+      return card;
+    }
+
+    const shownIdentity = getFullIdentity(identities[card.order]);
+    if (shownIdentity !== undefined) {
+      const [suitIndex, rank] = shownIdentity;
+      return {
+        ...card,
+        suitIndex,
+        rank,
+        possibleCards: [shownIdentity],
+        possibleCardsForEmpathy: card.possibleCardsFromClues,
+      };
+    }
+
+    return {
+      ...card,
+      possibleCards:
+        card.suitIndex === undefined || card.rank === undefined
+          ? card.possibleCardsFromClues
+          : [[card.suitIndex, card.rank]],
+      possibleCardsForEmpathy: card.possibleCardsFromClues,
+    };
+  });
+
+  // Our own possibilities come first, because they are needed to pretend like we know what the
+  // other players see. Possibilities only shrink, so repeat until nothing changes.
+  const otherPlayerIndexes = [...tupleKeys(hands)].filter(
+    (playerIndex) => playerIndex !== ourPlayerIndex,
+  );
+  const playerIndexes =
+    ourPlayerIndex === undefined
+      ? otherPlayerIndexes
+      : [ourPlayerIndex, ...otherPlayerIndexes];
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const playerIndex of playerIndexes) {
+      for (const hand of hands) {
+        for (const order of hand) {
+          const card = workingDeck[order];
+          if (
+            card === undefined
+            || (playerIndex !== ourPlayerIndex && playerIndex !== card.location)
+            || card.revealedToPlayer[playerIndex] === true
+          ) {
+            continue;
+          }
+
+          updateCardPossibilities(
+            card,
+            playerIndex,
+            ourPlayerIndex,
+            workingDeck,
+            cardCountMap,
+            metadata,
+          );
+          const newCard = workingDeck[order] ?? card;
+          if (
+            newCard.possibleCards.length !== card.possibleCards.length
+            || newCard.possibleCardsForEmpathy.length
+              !== card.possibleCardsForEmpathy.length
+          ) {
+            changed = true;
+          }
+        }
+      }
+    }
+  }
+
+  const newDeck = deck.map((card) => {
+    const workingCard = workingDeck[card.order];
+    if (workingCard === undefined || workingCard === card) {
+      return card;
+    }
+
+    // A shown identity only changes what the players see, so keep what we know about the card.
+    const possibleCards =
+      getFullIdentity(identities[card.order]) === undefined
+        ? workingCard.possibleCards
+        : card.possibleCards;
+    const { possibleCardsForEmpathy } = workingCard;
+    if (
+      possibilitiesEqual(possibleCards, card.possibleCards)
+      && possibilitiesEqual(
+        possibleCardsForEmpathy,
+        card.possibleCardsForEmpathy,
+      )
+    ) {
+      return card;
+    }
+
+    return {
+      ...card,
+      possibleCards,
+      possibleCardsForEmpathy,
+    };
+  });
+
+  return newDeck.every((card, order) => card === deck[order]) ? deck : newDeck;
+}
+
+/**
+ * Returns the identities that a card in the deck can have, as far as the player at
+ * `metadata.ourPlayerIndex` knows, or, without a seat, as far as we know from every card that has
+ * left the deck. One list covers every card in the deck, since no clue can touch them.
+ */
+export function getDeckPossibilities(
+  deck: readonly CardState[],
+  metadata: GameMetadata,
+): readonly SuitRankTuple[] {
+  const variant = getVariantById(metadata.options.variantId);
+  const cardCountMap = getCardCountMap(variant);
+  const allIdentities = variant.suits.flatMap((_suit, suitIndex) =>
+    variant.ranks
+      .filter((rank) => (cardCountMap[suitIndex]?.[rank] ?? 0) > 0)
+      .map((rank): SuitRankTuple => [suitIndex as SuitIndex, rank]),
+  );
+  const { ourPlayerIndex } = metadata;
+  const deckPossibilities =
+    ourPlayerIndex === undefined
+      ? deck
+          .filter((card) => card.location !== "deck")
+          .map((card) => card.possibleCards)
+      : generateDeckPossibilities(
+          undefined,
+          deck,
+          ourPlayerIndex,
+          ourPlayerIndex,
+          metadata,
+        );
+
+  return filterCardPossibilities(
+    allIdentities,
+    deckPossibilities,
+    cardCountMap,
+  );
+}
+
+function getFullIdentity(
+  identity: CardIdentity | undefined,
+): SuitRankTuple | undefined {
+  return identity === undefined
+    || identity.suitIndex === undefined
+    || identity.rank === undefined
+    ? undefined
+    : [identity.suitIndex, identity.rank];
+}
+
+function possibilitiesEqual(
+  a: readonly SuitRankTuple[],
+  b: readonly SuitRankTuple[],
+): boolean {
+  return (
+    a.length === b.length
+    && a.every(
+      ([suitIndex, rank], index) =>
+        b[index]?.[0] === suitIndex && b[index][1] === rank,
+    )
+  );
+}
+
 /** Mutates the deck in-place. */
 function updateAllCardPossibilities(
   playerIndex: PlayerIndex,
-  ourPlayerIndex: PlayerIndex,
+  ourPlayerIndex: PlayerIndex | undefined,
   hands: GameState["hands"],
   // eslint-disable-next-line complete/prefer-readonly-parameter-types
   deck: CardState[],
@@ -123,7 +302,7 @@ function updateAllCardPossibilities(
 function shouldUpdateCardPossibilities(
   card: CardState,
   playerIndex: PlayerIndex,
-  ourPlayerIndex: PlayerIndex,
+  ourPlayerIndex: PlayerIndex | undefined,
   deck: readonly CardState[],
   oldDeck: readonly CardState[],
 ): boolean {
@@ -151,20 +330,19 @@ function shouldUpdateCardPossibilities(
 
   const oldCard = oldDeck[card.order];
 
-  if (oldCard === undefined || oldCard.location === "deck") {
-    // This is a newly drawn card and hasn't had any calculations yet.
-    return true;
-  }
-
-  // If the possibilities on the other cards in the deck do not change, then the result of our
-  // calculation won't change. We only need to recalculate the card if the input (possibilities)
-  // changed.
-  return deckPossibilitiesDifferent(
-    card.order,
-    deck,
-    oldDeck,
-    playerIndex,
-    ourPlayerIndex,
+  // A newly drawn card has not had any calculations yet. Otherwise, if the possibilities on the
+  // other cards in the deck do not change, then the result of our calculation won't change. We only
+  // need to recalculate the card if the input (possibilities) changed.
+  return (
+    oldCard === undefined
+    || oldCard.location === "deck"
+    || deckPossibilitiesDifferent(
+      card.order,
+      deck,
+      oldDeck,
+      playerIndex,
+      ourPlayerIndex,
+    )
   );
 }
 
@@ -172,7 +350,7 @@ function shouldUpdateCardPossibilities(
 function updateCardPossibilities(
   card: CardState,
   playerIndex: PlayerIndex,
-  ourPlayerIndex: PlayerIndex,
+  ourPlayerIndex: PlayerIndex | undefined,
   // eslint-disable-next-line complete/prefer-readonly-parameter-types
   deck: CardState[],
   cardCountMap: readonly number[][],
@@ -215,7 +393,7 @@ function updateCardPossibilities(
 function getCardPossibilitiesForPlayer(
   card: CardState | undefined,
   playerIndex: PlayerIndex,
-  ourPlayerIndex: PlayerIndex,
+  ourPlayerIndex: PlayerIndex | undefined,
 ): readonly SuitRankTuple[] {
   if (card === undefined) {
     return [];
@@ -227,13 +405,33 @@ function getCardPossibilitiesForPlayer(
   }
 
   const revealedToThisPlayer = card.revealedToPlayer[playerIndex] ?? false;
-  if (revealedToThisPlayer && card.suitIndex !== null && card.rank !== null) {
+  if (
+    revealedToThisPlayer
+    && card.suitIndex !== undefined
+    && card.rank !== undefined
+  ) {
     // If we know the suit and rank, it might be because it is morphed.
     return [[card.suitIndex, card.rank]];
   }
 
-  if (playerIndex === ourPlayerIndex || revealedToThisPlayer) {
-    // This is revealed to the player or we are the requested player => just use our best knowledge.
+  if (revealedToThisPlayer) {
+    return card.possibleCards;
+  }
+
+  // A card that left this player's own hand without being revealed to them (e.g. into the hole) was
+  // seen by everyone else. Their last empathy for it is exactly what they knew. (Replays know the
+  // true identity, so "possibleCards" would leak it to the player we are viewing as.)
+  if (
+    typeof card.location !== "number"
+    && card.revealedToPlayer.every(
+      (revealed, index) => revealed || index === playerIndex,
+    )
+  ) {
+    return card.possibleCardsForEmpathy;
+  }
+
+  if (playerIndex === ourPlayerIndex) {
+    // We are the requested player => just use our best knowledge.
     return card.possibleCards;
   }
 
@@ -246,22 +444,24 @@ function getCardPossibilitiesForPlayer(
 }
 
 function generateDeckPossibilities(
-  excludeCardOrder: CardOrder,
+  excludeCardOrder: CardOrder | undefined,
   deck: readonly CardState[],
   playerIndex: PlayerIndex,
-  ourPlayerIndex: PlayerIndex,
+  ourPlayerIndex: PlayerIndex | undefined,
   metadata: GameMetadata,
 ): ReadonlyArray<readonly SuitRankTuple[]> {
   const deckPossibilities: Array<readonly SuitRankTuple[]> = [];
   for (const card of deck) {
-    if (canBeUsedToDisprovePossibility(card, excludeCardOrder, playerIndex)) {
-      const cardPossibilities = getCardPossibilitiesForPlayer(
-        card,
-        playerIndex,
-        ourPlayerIndex,
-      );
-      deckPossibilities.push(cardPossibilities);
+    if (!canBeUsedToDisprovePossibility(card, excludeCardOrder, playerIndex)) {
+      continue;
     }
+
+    const cardPossibilities = getCardPossibilitiesForPlayer(
+      card,
+      playerIndex,
+      ourPlayerIndex,
+    );
+    deckPossibilities.push(cardPossibilities);
   }
 
   /**
@@ -301,7 +501,7 @@ function generateDeckPossibilities(
    * applies to more than just cards that have one possibility (such as red 5 in the example).
    */
   deckPossibilities.sort((a, b) => a.length - b.length);
-  const variant = getVariant(metadata.options.variantName);
+  const variant = getVariantById(metadata.options.variantId);
   const cardCountMap = getCardCountMap(variant);
 
   return deckPossibilities.filter((a) => isPossibleCard(a, cardCountMap));
@@ -336,7 +536,7 @@ function isPossibleCard(
 
 function canBeUsedToDisprovePossibility(
   card: CardState | undefined,
-  excludeCardOrder: CardOrder,
+  excludeCardOrder: CardOrder | undefined,
   playerIndex: PlayerIndex,
 ): boolean {
   return (
@@ -353,7 +553,7 @@ function deckPossibilitiesDifferent(
   deck: readonly CardState[],
   oldDeck: readonly CardState[],
   playerIndex: PlayerIndex,
-  ourPlayerIndex: PlayerIndex,
+  ourPlayerIndex: PlayerIndex | undefined,
 ): boolean {
   for (const [order, card] of deck.entries()) {
     const oldCard = oldDeck[order];
@@ -373,22 +573,24 @@ function deckPossibilitiesDifferent(
       return true;
     }
 
-    if (currentlyUsed) {
-      const previousPossibilities = getCardPossibilitiesForPlayer(
-        oldCard,
-        playerIndex,
-        ourPlayerIndex,
-      );
+    if (!currentlyUsed) {
+      continue;
+    }
 
-      const currentPossibilities = getCardPossibilitiesForPlayer(
-        card,
-        playerIndex,
-        ourPlayerIndex,
-      );
+    const previousPossibilities = getCardPossibilitiesForPlayer(
+      oldCard,
+      playerIndex,
+      ourPlayerIndex,
+    );
 
-      if (previousPossibilities.length !== currentPossibilities.length) {
-        return true;
-      }
+    const currentPossibilities = getCardPossibilitiesForPlayer(
+      card,
+      playerIndex,
+      ourPlayerIndex,
+    );
+
+    if (previousPossibilities.length !== currentPossibilities.length) {
+      return true;
     }
   }
 
@@ -404,140 +606,90 @@ function deckPossibilitiesDifferent(
   return false;
 }
 
-function filterCardPossibilities(
+export function filterCardPossibilities(
   cardPossibilities: readonly SuitRankTuple[],
   deckPossibilities: ReadonlyArray<readonly SuitRankTuple[]>,
   cardCountMap: readonly number[][],
 ): readonly SuitRankTuple[] {
-  /**
-   * Tracks what possibilities have yet to be validated for a specific card from a specific
-   * perspective. When a specific possibility/identity for that card is validated in the
-   * `possibilityValid` function (by finding a working combination of card identities), it will
-   * check if it is possible to swap the identity for our specific card and still have a working
-   * combination. If so, then the new identity for our specific card is also valid and does not need
-   * to be validated again (so it is removed from the array).
-   */
-  const possibilitiesToValidate = [...cardPossibilities];
-
-  return cardPossibilities.filter((possibility) => {
-    // If the possibility is not in the list that still needs validation then it must mean the
-    // possibility is already validated and we can exit early.
-    if (!hasPossibility(possibilitiesToValidate, possibility)) {
-      return true;
-    }
-    return possibilityValid(
-      possibility,
-      deckPossibilities,
-      0,
-      cardCountMap,
-      possibilitiesToValidate,
-    );
-  });
-}
-
-function hasPossibility(
-  possibilitiesToValidate: readonly SuitRankTuple[],
-  [suitIndex, rank]: SuitRankTuple,
-): boolean {
-  return possibilitiesToValidate.some(
-    ([suitIndexCandidate, rankCandidate]) =>
-      suitIndexCandidate === suitIndex && rankCandidate === rank,
+  return cardPossibilities.filter((possibility) =>
+    possibilityValid(possibility, deckPossibilities, cardCountMap),
   );
 }
 
-/** Mutates the `countCountMap` and `possibilitiesToValidate` in-place. */
+/**
+ * Checks whether our card can have the given identity while every card in `deckPossibilities` has
+ * one of its own possibilities, without using more copies of an identity than exist.
+ *
+ * This is a bipartite matching between cards and card copies, so it is solved with augmenting paths
+ * in polynomial time. (Backtracking over every combination is exponential when there is no valid
+ * combination, which froze games with many unknown clued cards, such as Throw It in a Hole.)
+ */
 function possibilityValid(
-  [suitIndex, rank]: readonly [SuitIndex, Rank],
+  [suitIndex, rank]: SuitRankTuple,
   deckPossibilities: ReadonlyArray<readonly SuitRankTuple[]>,
-  index: number,
   cardCountMap: readonly number[][],
-  // eslint-disable-next-line complete/prefer-readonly-parameter-types
-  possibilitiesToValidate: SuitRankTuple[],
 ): boolean {
-  if (deckPossibilities.length === index) {
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-    if (cardCountMap[suitIndex]![rank]! > 0) {
-      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion, no-param-reassign
-      cardCountMap[suitIndex]![rank]!--;
+  const remaining = new Map<number, number>();
+  function capacity(key: number, s: SuitIndex, r: Rank): number {
+    return remaining.get(key) ?? cardCountMap[s]?.[r] ?? 0;
+  }
 
-      updatePossibilitiesToValidate(cardCountMap, possibilitiesToValidate);
+  const ownKey = identityKey(suitIndex, rank);
+  const ownCapacity = capacity(ownKey, suitIndex, rank);
+  if (ownCapacity <= 0) {
+    return false;
+  }
+  remaining.set(ownKey, ownCapacity - 1);
 
-      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion, no-param-reassign
-      cardCountMap[suitIndex]![rank]!++;
+  /** The deck cards currently assigned to each identity. */
+  const assigned = new Map<number, number[]>();
 
-      return true;
+  // eslint-disable-next-line complete/prefer-readonly-parameter-types
+  function assign(card: number, visited: Set<number>): boolean {
+    const possibilities = deckPossibilities[card] ?? [];
+    for (const [s, r] of possibilities) {
+      const key = identityKey(s, r);
+      if (visited.has(key)) {
+        continue;
+      }
+      visited.add(key);
+
+      const cards = assigned.get(key) ?? [];
+      if (cards.length < capacity(key, s, r)) {
+        cards.push(card);
+        assigned.set(key, cards);
+        return true;
+      }
+
+      // Every copy is taken, so try to move one of the cards using it to another identity.
+      for (const [index, other] of cards.entries()) {
+        if (assign(other, visited)) {
+          cards[index] = card;
+          return true;
+        }
+      }
     }
 
     return false;
   }
 
-  // Avoiding duplicating the map for performance, so trying to undo the mutation as we exit.
-  // eslint-disable-next-line @typescript-eslint/no-non-null-assertion, no-param-reassign
-  cardCountMap[suitIndex]![rank]!--;
-
-  // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-  if (cardCountMap[suitIndex]![rank]! >= 0) {
-    const suitRankTuples = deckPossibilities[index];
-    assertDefined(
-      suitRankTuples,
-      `Failed to find the the deck possibility at index: ${index}`,
-    );
-
-    for (const i of suitRankTuples.keys()) {
-      const possibilityIndex = (i + index) % suitRankTuples.length;
-      const possibility = suitRankTuples[possibilityIndex];
-      if (possibility === undefined) {
-        continue;
-      }
-
-      if (
-        possibilityValid(
-          possibility,
-          deckPossibilities,
-          index + 1,
-          cardCountMap,
-          possibilitiesToValidate,
-        )
-      ) {
-        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion, no-param-reassign
-        cardCountMap[suitIndex]![rank]!++;
-        return true;
-      }
+  for (const card of deckPossibilities.keys()) {
+    if (!assign(card, new Set())) {
+      return false;
     }
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-non-null-assertion, no-param-reassign
-  cardCountMap[suitIndex]![rank]!++;
-
-  return false;
+  return true;
 }
 
-/** Mutates the `possibilitiesToValidate` in-place. */
-function updatePossibilitiesToValidate(
-  cardCountMap: readonly number[][],
-  // eslint-disable-next-line complete/prefer-readonly-parameter-types
-  possibilitiesToValidate: SuitRankTuple[],
-) {
-  let j = 0;
-
-  for (const suitRankTuple of possibilitiesToValidate) {
-    const [suitIndex, rank] = suitRankTuple;
-
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-    if (cardCountMap[suitIndex]![rank]! <= 0) {
-      // eslint-disable-next-line no-param-reassign
-      possibilitiesToValidate[j] = [suitIndex, rank];
-      j++;
-    }
-  }
-
-  // eslint-disable-next-line no-param-reassign
-  possibilitiesToValidate.length = j;
+function identityKey(suitIndex: SuitIndex, rank: Rank): number {
+  // Ranks are at most 7 (the "START" rank).
+  return suitIndex * 8 + rank;
 }
 
 /** @returns A two-dimensional array which is indexed by suit index, then rank. */
 function getCardCountMap(variant: Variant): readonly number[][] {
-  if (variant.id === cachedVariantID) {
+  if (variant.id === cachedVariantId) {
     return arrayCopyTwoDimensional(cachedCardCountMap) as readonly number[][];
   }
 
@@ -550,7 +702,7 @@ function getCardCountMap(variant: Variant): readonly number[][] {
     }
   }
 
-  cachedVariantID = variant.id;
+  cachedVariantId = variant.id;
   cachedCardCountMap = arrayCopyTwoDimensional(
     possibleCardMap,
   ) as readonly number[][];

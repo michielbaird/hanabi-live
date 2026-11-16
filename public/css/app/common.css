@@ -1,0 +1,192 @@
+/* The suit's letter on a card in color-blind mode, in the New UI. */
+@font-face {
+  font-family: "Kalam";
+  font-style: normal;
+  font-weight: 700;
+  src: url("/public/webfonts/kalam-latin-700-normal.woff2") format("woff2");
+}
+
+/* source-sans-pro-300 - latin_greek_cyrillic */
+@font-face {
+  font-family: "Source Sans Pro";
+  font-style: normal;
+  font-weight: 300;
+  src: url("/public/webfonts/source-sans-pro-v14-latin_greek_cyrillic-300.woff2")
+    format("woff2");
+}
+
+/* source-sans-pro-300italic - latin_greek_cyrillic */
+@font-face {
+  font-family: "Source Sans Pro";
+  font-style: italic;
+  font-weight: 300;
+  src: url("/public/webfonts/source-sans-pro-v14-latin_greek_cyrillic-300italic.woff2")
+    format("woff2");
+}
+
+/* source-sans-pro-italic - latin_greek_cyrillic */
+@font-face {
+  font-family: "Source Sans Pro";
+  font-style: italic;
+  font-weight: 400;
+  src: url("/public/webfonts/source-sans-pro-v14-latin_greek_cyrillic-italic.woff2")
+    format("woff2");
+}
+
+/* source-sans-pro-regular - latin_greek_cyrillic */
+@font-face {
+  font-family: "Source Sans Pro";
+  font-style: normal;
+  font-weight: 400;
+  src: url("/public/webfonts/source-sans-pro-v14-latin_greek_cyrillic-regular.woff2")
+    format("woff2");
+}
+
+/*
+  Semibold and bold, from the "@fontsource/source-sans-pro" package (version 5.3.0). Each script
+  is in its own file, which the browser loads only when a page uses it.
+*/
+@font-face {
+  font-family: "Source Sans Pro";
+  font-style: normal;
+  font-weight: 600;
+  src: url("/public/webfonts/source-sans-pro-latin-600-normal.woff2")
+    format("woff2");
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+    U+0304, U+0308, U+0329, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "Source Sans Pro";
+  font-style: normal;
+  font-weight: 600;
+  src: url("/public/webfonts/source-sans-pro-greek-600-normal.woff2")
+    format("woff2");
+  unicode-range: U+0370-03FF;
+}
+
+@font-face {
+  font-family: "Source Sans Pro";
+  font-style: normal;
+  font-weight: 600;
+  src: url("/public/webfonts/source-sans-pro-cyrillic-600-normal.woff2")
+    format("woff2");
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+
+@font-face {
+  font-family: "Source Sans Pro";
+  font-style: normal;
+  font-weight: 700;
+  src: url("/public/webfonts/source-sans-pro-latin-700-normal.woff2")
+    format("woff2");
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+    U+0304, U+0308, U+0329, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "Source Sans Pro";
+  font-style: normal;
+  font-weight: 700;
+  src: url("/public/webfonts/source-sans-pro-greek-700-normal.woff2")
+    format("woff2");
+  unicode-range: U+0370-03FF;
+}
+
+@font-face {
+  font-family: "Source Sans Pro";
+  font-style: normal;
+  font-weight: 700;
+  src: url("/public/webfonts/source-sans-pro-cyrillic-700-normal.woff2")
+    format("woff2");
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+
+html,
+body,
+#page-wrapper {
+  height: 100%;
+}
+
+#page-wrapper {
+  padding-top: var(--header-height);
+}
+
+body {
+  background-color: var(--page-bg);
+  background-image: url("/public/img/dark-wood.png");
+  background-repeat: repeat;
+  background-attachment: fixed;
+}
+
+body[data-screen="game"] {
+  background-color: var(--game-bg);
+}
+
+/*
+  The "align-center" class will do horizontal centering (in "defaults.css")
+  The "align-center-v" class will do vertical centering
+*/
+.align-center-v {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.padding0p75 {
+  padding-bottom: 0.75em;
+}
+
+/* An icon before its label. */
+.icon-label {
+  margin-right: 0.4em;
+}
+
+.button .icon-label {
+  margin-right: 0.625em;
+}
+
+.horizontal {
+  margin: 0;
+  padding: 0;
+}
+
+.horizontal > li {
+  list-style-type: none;
+  float: left;
+  margin-right: 1em;
+}
+
+.container.max {
+  width: calc(90% - 2em);
+}
+
+.score-modifier {
+  font-size: 0.75em;
+}
+
+.green {
+  color: var(--green-text);
+}
+
+.red {
+  color: var(--error);
+}
+
+@media screen and (max-width: 1440px) {
+  .container.max {
+    width: calc(100% - 2em);
+  }
+}
+
+@media screen and (max-width: 736px) {
+  /* Fix the box margins on smaller resolutions */
+  .container.max {
+    margin-left: 1em;
+    margin-right: 1em;
+  }
+}

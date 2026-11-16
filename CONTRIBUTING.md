@@ -6,17 +6,11 @@ With issues:
 
 With pull requests:
 
+- First, read the [installation instructions](docs/install.md).
+- Your pull requests need to pass the linter. Run the "lint.sh" script before
+  you submit your pull request.
 - We hang out in [the Discord server](https://discord.gg/FADvkJp) in the
   `#website-development` channel. Come say hi.
-- Your pull requests need to pass the linter. To set up the linter, read and
-  follow the [installation instructions](docs/install.md).
-- Help me fix all these bugs and issues!
-
-## Server Code
-
-The long-term plan for the codebase is to migrate the server from Golang to
-TypeScript. Thus, any changes that you do to Golang code should also be
-performed to the new TypeScript server at "packages/server".
 
 ## Creating a New Variant
 
@@ -33,7 +27,7 @@ performed to the new TypeScript server at "packages/server".
   use an existing function as a template.)
 - Note that the clue color palate will add clue colors from left to right for
   the variant in the order that the suits are listed for that variant.
-- Once your modifications are complete, run `npm run create-variants-json` to
+- Once your modifications are complete, run `bun run create-variants-json` to
   create a new version of "variants.json" and "variants.txt". (The
   "variants.json" file is used by the server as the list of allowed variant
   combinations.)

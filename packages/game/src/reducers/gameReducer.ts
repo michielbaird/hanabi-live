@@ -1,32 +1,29 @@
 // Functions for building a game state for every turn.
 
 /* eslint-disable no-param-reassign */
-/* eslint-disable unicorn/no-null */
 
-import { assertDefined, assertNotNull, tupleEntries } from "complete-common";
+import { assertDefined } from "complete-common";
 import type { Draft } from "immer";
 import { castDraft, original, produce } from "immer";
-import { ClueType } from "../enums/ClueType";
-import { EndCondition } from "../enums/EndCondition";
-import { getVariant } from "../gameData";
-import type { CardNote } from "../interfaces/CardNote";
-import type { CardState } from "../interfaces/CardState";
-import type { GameMetadata } from "../interfaces/GameMetadata";
-import type { GameState } from "../interfaces/GameState";
-import type { Variant } from "../interfaces/Variant";
+import { VALID_PLAYER_INDEXES } from "../constants.ts";
+import { getVariantById } from "../gameData.ts";
+import type { CardNote } from "../interfaces/CardNote.ts";
+import type { GameMetadata } from "../interfaces/GameMetadata.ts";
+import type { GameState } from "../interfaces/GameState.ts";
+import type { Variant } from "../interfaces/Variant.ts";
 import {
   getCardStatus,
   isCardCritical,
   isCardNeededForMaxScore,
-} from "../rules/card";
-import { isCardClued } from "../rules/cardState";
+} from "../rules/card.ts";
+import { isCardClued } from "../rules/cardState.ts";
+import { isPassTurnClue } from "../rules/clues.ts";
 import {
-  getAdjustedClueTokens,
+  getClueCost,
   getNewClueTokensAfterAction,
-} from "../rules/clueTokens";
-import { isInitialDealFinished } from "../rules/deck";
-import { getChopIndex } from "../rules/hand";
-import { getStackDirection, getStackStartRank } from "../rules/playStacks";
+} from "../rules/clueTokens.ts";
+import { isInitialDealFinished } from "../rules/deck.ts";
+import { getStackDirection, getStackStartRank } from "../rules/playStacks.ts";
 import {
   getClueText,
   getDiscardText,
@@ -35,34 +32,43 @@ import {
   getPlayText,
   getPlayerName,
   millisecondsToClockString,
-} from "../rules/text";
-import { hasReversedSuits } from "../rules/variants/variantIdentity";
+} from "../rules/text.ts";
+import { hasReversedSuits } from "../rules/variants/variantIdentity.ts";
 import type {
   ActionDiscard,
+  ActionMisplay,
   ActionPlay,
   GameAction,
-} from "../types/gameActions";
-import type { SuitIndex } from "../types/SuitIndex";
-import { cardsReducer } from "./cardsReducer";
-import { ddaReducer } from "./ddaReducer";
-import { knownTrashReducer } from "./knownTrashReducer";
-import { statsReducer } from "./statsReducer";
-import { turnReducer } from "./turnReducer";
+} from "../types/gameActions.ts";
+import type { Perspective } from "../types/Perspective.ts";
+import type { SuitIndex } from "../types/SuitIndex.ts";
+import { cardsReducer } from "./cardsReducer.ts";
+import { ddaReducer } from "./ddaReducer.ts";
+import { knownTrashReducer } from "./knownTrashReducer.ts";
+import { statsReducer } from "./statsReducer.ts";
+import { turnReducer } from "./turnReducer.ts";
 
 /** Computes the next game state from a given action. */
-export const gameReducer = produce(gameReducerFunction, {} as GameState);
+export function gameReducer(
+  gameState: GameState,
+  action: GameAction,
+  perspective: Perspective,
+  metadata: GameMetadata,
+  ourNotes?: readonly CardNote[],
+): GameState {
+  return produce(gameState, (draft) => {
+    gameReducerFunction(draft, action, perspective, metadata, ourNotes);
+  });
+}
 
 function gameReducerFunction(
   gameState: Draft<GameState>,
   action: GameAction,
-  playing: boolean,
-  shadowing: boolean,
-  finished: boolean,
-  hypothetical: boolean,
+  perspective: Perspective,
   metadata: GameMetadata,
   ourNotes?: readonly CardNote[],
 ) {
-  const variant = getVariant(metadata.options.variantName);
+  const variant = getVariantById(metadata.options.variantId);
 
   switch (action.type) {
     /**
@@ -72,96 +78,106 @@ function gameReducerFunction(
      * {
      *   type: "clue",
      *   clue: { type: 0, value: 1 },
-     *   giver: 1,
-     *   list: [11],
-     *   target: 2,
+     *   playerIndex: 1,
+     *   orders: [11],
+     *   receiverIndex: 2,
      *   turn: 0,
      * }
      * ```
      */
     case "clue": {
-      gameState.clueTokens -= getAdjustedClueTokens(1, variant);
+      gameState.clueTokens -= getClueCost(variant);
 
-      assertNotNull(
+      assertDefined(
         gameState.turn.segment,
         `A "${action.type}" action happened before all of the initial cards were dealt.`,
       );
 
-      const targetHand = gameState.hands[action.target];
+      const targetHand = gameState.hands[action.receiverIndex];
       assertDefined(
         targetHand,
-        `Failed to find the hand at index: ${action.target}`,
+        `Failed to find the hand at index: ${action.receiverIndex}`,
       );
 
-      const negativeList = action.ignoreNegative
-        ? []
-        : targetHand.filter((i) => !action.list.includes(i));
+      const negativeList =
+        action.ignoreNegative === true
+          ? []
+          : targetHand.filter((i) => !action.orders.includes(i));
 
-      // Even though the objects for each clue type are the exact same, a switch statement is needed
-      // to satisfy the TypeScript compiler.
-      switch (action.clue.type) {
-        case ClueType.Color: {
-          const clue = castDraft({
-            type: action.clue.type,
-            value: action.clue.value,
-            giver: action.giver,
-            target: action.target,
-            segment: gameState.turn.segment,
-            list: action.list,
-            negativeList,
-          });
-          gameState.clues.push(clue);
-          break;
-        }
+      // A pass touches no cards, so it does not belong in the clue log.
+      if (!isPassTurnClue(action)) {
+        // Even though the objects for each clue type are the exact same, a switch statement is
+        // needed to satisfy the TypeScript compiler.
+        switch (action.clue.type) {
+          case undefined: {
+            gameState.clues.push(
+              castDraft({
+                type: undefined,
+                value: undefined,
+                visibleType: action.clue.visibleType,
+                giver: action.playerIndex,
+                target: action.receiverIndex,
+                segment: gameState.turn.segment,
+                list: action.orders,
+                negativeList,
+              }),
+            );
+            break;
+          }
 
-        case ClueType.Rank: {
-          const clue = castDraft({
-            type: action.clue.type,
-            value: action.clue.value,
-            giver: action.giver,
-            target: action.target,
-            segment: gameState.turn.segment,
-            list: action.list,
-            negativeList,
-          });
-          gameState.clues.push(clue);
-          break;
+          case "color": {
+            const clue = castDraft({
+              type: action.clue.type,
+              color: action.clue.color,
+              giver: action.playerIndex,
+              target: action.receiverIndex,
+              segment: gameState.turn.segment,
+              list: action.orders,
+              negativeList,
+            });
+            gameState.clues.push(clue);
+            break;
+          }
+
+          case "rank": {
+            const clue = castDraft({
+              type: action.clue.type,
+              rank: action.clue.rank,
+              giver: action.playerIndex,
+              target: action.receiverIndex,
+              segment: gameState.turn.segment,
+              list: action.orders,
+              negativeList,
+            });
+            gameState.clues.push(clue);
+            break;
+          }
         }
       }
 
-      const text = getClueText(action, targetHand, hypothetical, metadata);
+      const text = getClueText(action, targetHand, perspective, metadata);
       gameState.log.push({
         turn: gameState.turn.turnNum + 1,
         text,
       });
 
-      // Handle the "Card Cycling" game option.
-      const giverHand = gameState.hands[action.giver];
-      assertDefined(
-        giverHand,
-        `Failed to find the hand at index: ${action.giver}`,
-      );
-
-      cardCycle(giverHand, castDraft(gameState.deck), metadata);
-
       break;
     }
 
     /**
-     * A player just discarded a card.
+     * A player just discarded a card, or failed to play it.
      *
      * ```ts
      * {
      *   type: "discard",
      *   playerIndex: 0,
      *   order: 4,
-     *   suitIndex: 2,
-     *   rank: 1,
-     *   failed: false,
+     *   identity: { suitIndex: 2, rank: 1 },
      * }
      * ```
      */
-    case "discard": {
+    case "discard":
+    case "misplay": {
       // Remove it from the hand.
       const hand = gameState.hands[action.playerIndex];
       assertDefined(
@@ -170,11 +186,20 @@ function gameReducerFunction(
       );
 
       const handIndex = hand.indexOf(action.order);
-      let slot: number | null = null;
+      let slot: number | undefined;
       if (handIndex !== -1) {
         // It is possible for players to misplay the deck.
         slot = hand.length - handIndex;
         hand.splice(handIndex, 1);
+      }
+
+      if (action.type === "misplay") {
+        // We intentionally do not validate the size of the strikes array because we allow more than
+        // 3 strikes in hypotheticals.
+        gameState.strikes.push({
+          order: action.order,
+          segment: gameState.turn.segment ?? 1,
+        });
       }
 
       if (
@@ -182,22 +207,18 @@ function gameReducerFunction(
           gameState,
           action,
           variant,
-          playing,
-          shadowing,
-          finished,
+          perspective,
         )
       ) {
-        if (action.suitIndex === -1) {
-          throw new Error(
-            `The suit index for a discarded card was: ${action.suitIndex}`,
-          );
+        if (action.identity === undefined) {
+          throw new Error("The identity of a discarded card is unknown.");
         }
 
         // Add it to the discard stacks.
-        const discardStack = gameState.discardStacks[action.suitIndex];
+        const discardStack = gameState.discardStacks[action.identity.suitIndex];
         assertDefined(
           discardStack,
-          `Failed to find the discard stack at index: ${action.suitIndex}`,
+          `Failed to find the discard stack at index: ${action.identity.suitIndex}`,
         );
 
         discardStack.push(action.order);
@@ -221,15 +242,15 @@ function gameReducerFunction(
       // We do not want include the "(critical)" text for dead suits.
       const critical =
         isCardCritical(
-          action.suitIndex,
-          action.rank,
+          action.identity?.suitIndex,
+          action.identity?.rank,
           gameState.deck,
           gameState.playStackDirections,
           variant,
         )
         && isCardNeededForMaxScore(
-          action.suitIndex,
-          action.rank,
+          action.identity?.suitIndex,
+          action.identity?.rank,
           gameState.deck,
           gameState.playStacks,
           gameState.playStackDirections,
@@ -237,16 +258,17 @@ function gameReducerFunction(
           variant,
         );
 
-      const text = getDiscardText(
-        action,
-        slot,
-        touched,
-        critical,
-        playing,
-        shadowing,
-        hypothetical,
-        metadata,
-      );
+      const text =
+        action.type === "misplay"
+          ? getPlayText(action, slot, touched, perspective, metadata)
+          : getDiscardText(
+              action,
+              slot,
+              touched,
+              critical,
+              perspective,
+              metadata,
+            );
       gameState.log.push({
         turn: gameState.turn.turnNum + 1,
         text,
@@ -269,6 +291,13 @@ function gameReducerFunction(
      * ```
      */
     case "draw": {
+      // A skipped or repeated card order would leave a hole in the deck that breaks later rules.
+      if (action.order !== gameState.deck.length) {
+        throw new Error(
+          `Received a draw for card order ${action.order}, but the next card order in the deck is: ${gameState.deck.length}`,
+        );
+      }
+
       gameState.cardsRemainingInTheDeck--;
       const hand = gameState.hands[action.playerIndex];
       if (hand !== undefined) {
@@ -296,13 +325,13 @@ function gameReducerFunction(
      * ```ts
      * {
      *   type: "gameOver",
-     *   endCondition: 1,
+     *   endCondition: "normal",
      *   playerIndex: 0,
      * }
      * ```ts
      */
     case "gameOver": {
-      if (action.endCondition !== EndCondition.Normal) {
+      if (action.endCondition !== "normal") {
         gameState.score = 0;
       }
 
@@ -311,7 +340,7 @@ function gameReducerFunction(
         action.playerIndex,
         gameState.score,
         metadata,
-        action.votes,
+        action.voters,
       );
       gameState.log.push({
         turn: gameState.turn.turnNum + 1,
@@ -343,7 +372,7 @@ function gameReducerFunction(
       );
 
       const handIndex = hand.indexOf(action.order);
-      let slot: number | null = null;
+      let slot: number | undefined;
       if (handIndex !== -1) {
         slot = hand.length - handIndex;
         hand.splice(handIndex, 1);
@@ -355,21 +384,17 @@ function gameReducerFunction(
           gameState,
           action,
           variant,
-          playing,
-          shadowing,
-          finished,
+          perspective,
         )
       ) {
-        if (action.suitIndex === -1) {
-          throw new Error(
-            `The suit index for a played card was: ${action.suitIndex}`,
-          );
+        if (action.identity === undefined) {
+          throw new Error("The identity of a played card is unknown.");
         }
 
-        const playStack = gameState.playStacks[action.suitIndex];
+        const playStack = gameState.playStacks[action.identity.suitIndex];
         assertDefined(
           playStack,
-          `Failed to find the play stack at index: ${action.suitIndex}`,
+          `Failed to find the play stack at index: ${action.identity.suitIndex}`,
         );
 
         playStack.push(action.order);
@@ -393,15 +418,7 @@ function gameReducerFunction(
       );
 
       const touched = isCardClued(cardState);
-      const text = getPlayText(
-        action,
-        slot,
-        touched,
-        playing,
-        shadowing,
-        hypothetical,
-        metadata,
-      );
+      const text = getPlayText(action, slot, touched, perspective, metadata);
       gameState.log.push({
         turn: gameState.turn.turnNum + 1,
         text,
@@ -411,25 +428,26 @@ function gameReducerFunction(
     }
 
     case "playerTimes": {
-      for (const [playerIndex, playerTime] of tupleEntries(
-        action.playerTimes,
-      )) {
-        // Player times are negative in untimed games.
-        const modifier = metadata.options.timed ? 1 : -1;
-        const milliseconds = playerTime * modifier;
-        const durationString = millisecondsToClockString(milliseconds);
+      for (const playerIndex of VALID_PLAYER_INDEXES) {
+        const playerTime = action.playerTimesMs[playerIndex];
+        if (playerTime === undefined) {
+          break;
+        }
+
+        const durationString = millisecondsToClockString(playerTime);
         const playerName = getPlayerName(playerIndex, metadata);
 
-        const text = metadata.options.timed
-          ? `${playerName} had ${durationString} left`
-          : `${playerName} took: ${durationString}`;
+        const text =
+          metadata.options.timeControl === undefined
+            ? `${playerName} took: ${durationString}`
+            : `${playerName} had ${durationString} left`;
         gameState.log.push({
           turn: gameState.turn.turnNum + 1,
           text,
         });
       }
 
-      const clockString = millisecondsToClockString(action.duration);
+      const clockString = millisecondsToClockString(action.durationMs);
       const text = `The total game duration was: ${clockString}`;
       gameState.log.push({
         turn: gameState.turn.turnNum + 1,
@@ -439,32 +457,8 @@ function gameReducerFunction(
       break;
     }
 
-    /**
-     * A player failed to play a card.
-     *
-     * ```ts
-     * {
-     *   type: "strike",
-     *   num: 1,
-     *   turn: 32,
-     *   order: 24,
-     * }
-     * ```
-     */
-    // TODO: This message is unnecessary and will be removed in a future version of the code
-    case "strike": {
-      // We intentionally do not validate the size of the strikes array because we allow more than 3
-      // strikes in hypotheticals.
-      gameState.strikes.push({
-        order: action.order,
-        segment: gameState.turn.segment ?? 1,
-      });
-
-      break;
-    }
-
     // Some actions do not affect the main state or are handled by another reducer.
-    case "setEffMod":
+    case "setEfficiencyModifier":
     case "editNote":
     case "noteList":
     case "noteListPlayer":
@@ -489,9 +483,7 @@ function gameReducerFunction(
   // Resolve the stack direction.
   if (action.type === "play" && (hasReversedSuits(variant) || variant.sudoku)) {
     const suitIndex =
-      action.suitIndex === -1
-        ? (gameState.deck[action.order]?.suitIndex ?? undefined)
-        : action.suitIndex;
+      action.identity?.suitIndex ?? gameState.deck[action.order]?.suitIndex;
 
     if (suitIndex !== undefined) {
       // We have to wait until the deck is updated with the information of the card that we played
@@ -515,9 +507,7 @@ function gameReducerFunction(
   // In Sudoku variants, resolve the stack starting value.
   if (action.type === "play" && variant.sudoku) {
     const suitIndex =
-      action.suitIndex === -1
-        ? (gameState.deck[action.order]?.suitIndex ?? undefined)
-        : action.suitIndex;
+      action.identity?.suitIndex ?? gameState.deck[action.order]?.suitIndex;
 
     if (suitIndex !== undefined) {
       const playStack = gameState.playStacks[suitIndex];
@@ -536,9 +526,10 @@ function gameReducerFunction(
   // Discarding or playing cards can make other card cards in that suit not playable anymore and can
   // make other cards critical.
   if (
-    (action.type === "play" || action.type === "discard")
-    && action.suitIndex !== -1
-    && action.rank !== -1
+    (action.type === "play"
+      || action.type === "discard"
+      || action.type === "misplay")
+    && action.identity !== undefined
   ) {
     // For a no-variant game, we would only have to iterate over cards of the same suit to check for
     // non-playability. But other variants become more complicated, so we iterate over the entire
@@ -575,10 +566,9 @@ function gameReducerFunction(
       action,
       originalState,
       gameState,
-      playing,
-      shadowing,
+      perspective,
       metadata,
-      ourNotes ?? null,
+      ourNotes ?? undefined,
     ),
   );
 
@@ -603,44 +593,17 @@ function gameReducerFunction(
   );
 }
 
-function cardCycle(
-  // eslint-disable-next-line complete/prefer-readonly-parameter-types
-  hand: number[],
-  deck: readonly CardState[],
-  metadata: GameMetadata,
-) {
-  if (!metadata.options.cardCycle) {
-    return;
-  }
-
-  // We do not need to reorder anything if the chop is slot 1 (the left-most card).
-  const chopIndex = getChopIndex(hand, deck);
-  if (chopIndex === hand.length - 1) {
-    return;
-  }
-
-  // Remove the chop card from their hand.
-  const newHand = hand.splice(chopIndex, 1);
-  const removedCardOrder = newHand[0];
-  if (removedCardOrder !== undefined) {
-    // Add it to the end (the left-most position).
-    hand.push(removedCardOrder);
-  }
-}
-
 function throwItInAHolePlayedOrMisplayed(
   gameState: Draft<GameState>,
-  action: ActionPlay | ActionDiscard,
+  action: ActionPlay | ActionDiscard | ActionMisplay,
   variant: Variant,
-  playing: boolean,
-  shadowing: boolean,
-  finished: boolean,
+  perspective: Perspective,
 ) {
-  if (!variant.throwItInAHole || (!playing && !shadowing) || finished) {
+  if (perspective !== "seat" || !variant.throwItInAHole) {
     return false;
   }
 
-  if ((action.type === "discard" && action.failed) || action.type === "play") {
+  if (action.type === "misplay" || action.type === "play") {
     // In "Throw It in a Hole" variants, plays and unknown misplayed cards go the hole instead of
     // the play stack / discard pile.
     gameState.hole.push(action.order);

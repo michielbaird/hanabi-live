@@ -1,0 +1,1477 @@
+# Changelog
+
+This page lists the changes to Hanab Live.
+
+Note that minor changes, bug fixes, and internal changes are intentionally not
+listed here. You can see those from
+[the commit history](https://github.com/Hanabi-Live/hanabi-live/commits/main/)
+of the repository.
+
+## November 15th, 2026
+
+- In a replay, Page Up enters a hypothetical, and Page Down leaves it.
+- Ctrl + C no longer copies the game ID in a replay. Use the new `/seed` and
+  `/id` chat commands to see the seed and the database ID of the game.
+- Cards no longer list each suit with the ranks that it can be. They always show
+  the separate suit and rank pips.
+
+## November 13th, 2026
+
+- "Reduced motion" also stops the action log from sliding in replays.
+- In a replay, or when you spectate without shadowing a player, Ctrl + Space
+  narrows each hand by its own player's notes.
+- The emote and emoji picker, and the modals that ask for a turn, a card, an
+  efficiency modifier, or a new replay leader, have a close button.
+
+## November 12th, 2026
+
+- The list of the other games on a seed now shows the games with options that
+  change the rules (such as "Bottom-Deck Blind Plays") after the games without
+  them.
+- Removed the variant pages (`/variant/[id]`) and their API
+  (`/api/v1/variants/[id]`).
+- Hold Ctrl + Space to see every hand as its player sees it, narrowed by your
+  notes.
+- When you are not the owner of a table, the button on the "Change Options"
+  screen now says "Suggest to Table Owner".
+- On the "Watch a Specific Replay" page, press Ctrl + Enter in the JSON box to
+  watch the replay.
+- Trash cards in a hand are now faded in speedruns too, as in other games.
+- The profile page no longer shows the total number of max scores. The "Missing
+  Scores" page still shows it.
+- Profiles now show the time spent reviewing games in solo and shared replays.
+  It includes the time rebuilt from the old server's logs from April 1st to
+  September 5th, 2026.
+- Player profiles now show the total time spent playing and reviewing.
+- Notes and table names now count down the characters left near their limit, as
+  chat messages do, and are not saved when they are too long. Before, the server
+  cut them short.
+- A new "Reduced motion" setting leaves out the fireworks, explosions, shaking,
+  and pulses in games. Cards still move.
+- Joining a shared replay no longer keeps it open for another 30 minutes. Only
+  activity in the replay, such as the leader going to another turn or drawing an
+  arrow, or chat, keeps it open.
+
+## November 11th, 2026
+
+- The "Missing Scores" page now shows a dash instead of 0 for a variant that no
+  one in the list has played.
+- The `/setvariant` command now works for every player at a pre-game table. A
+  player who is not the owner proposes the variant to the owner.
+
+## November 10th, 2026
+
+- In shared replays, the "Use Shared Turns" button now says "Join Hypothetical"
+  while the leader is in a hypothetical.
+- If a game ends while you are in a hypothetical, you can now keep using it in
+  the review.
+- Server restarts without a reason are no longer announced in the lobby.
+- The "New Game" page now remembers the last table name that you used.
+- The "Edit Cards" and "Show Hidden" buttons in hypotheticals now look like the
+  "Ready" button: a green border when on, and struck-through text when off.
+- The firework for completing a play stack is now shorter.
+- The text in the action log now slides only in replays, so that it does not
+  distract you during a game.
+- Bots are now listed on a separate tab of the online users list, and they no
+  longer count as online users.
+- Clicking the skull now opens a menu to vote to end the game or to end it now,
+  and shows how many players voted. Right-clicking the skull no longer ends the
+  game.
+- When the clues leave a card with possibilities that the suit and rank pips
+  cannot show, such as "any Pink card or a red 3", the card now lists each suit
+  with the ranks that it can be.
+- The new flashlight button beside "Give Clue" shows the target's hand as they
+  would see it after the selected clue. It turns off at the start of each turn.
+- Buttons now show an outline when you move to them with the keyboard.
+- The "New UI" setting shows games and replays in a redesigned game screen. It
+  is in testing and off by default. A "Classic UI" button switches to the
+  classic screen at any time, and a "New UI" button switches back.
+- In replays, a misplayed card now moves to its play stack and then straight to
+  the discard pile, instead of exploding on the strike tracker.
+- Tooltips now fade in quickly instead of growing with a bounce, and their lines
+  have more space between them.
+- In the old game UI, the "Ready", "Edit Cards", "Show Hidden", and post-clue
+  empathy buttons are now checkboxes, so you can see whether each one is on.
+  "Show Hidden" is now "Show drawn cards".
+- When a card shows rows of possibilities, a suit that is ruled out now shares a
+  row with the other suits that the clues allowed the same ranks, with its pip
+  crossed out.
+- The emote and emoji picker now opens quickly. It shows one category at a time,
+  and it has a search box. Flag emoji were removed.
+- Chat messages longer than 300 characters are no longer cut short. Instead, the
+  chat input counts down the characters left near the limit, and does not send a
+  message that is too long.
+
+## November 9th, 2026
+
+- Added the current global BetterTTV emotes that were missing, including `:tf:`.
+- "New Game", "Watch Replay", "Resources", and "Settings" now open a full page
+  instead of a pop-up. Also, their design has been updated.
+- Added the current global Twitch emotes, and removed the Twitch and BetterTTV
+  emotes that are no longer global.
+- The emoji and emote pickers are now in alphabetical order.
+- Removed the Twitch Turbo emotes `KappaHD` and `MiniK`.
+- Removed the stats page.
+- Added the current global FrankerFaceZ emotes, and removed the ones that are no
+  longer global.
+- Checkboxes and radio buttons now match the dark theme.
+- In "Throw It in a Hole" variants, played cards now spin into the hole instead
+  of fading out.
+- Misplayed cards now launch like a dud firework, explode on the strike tracker,
+  and fall into the discard pile.
+- The "New Game" screen now has a "Custom Seed" option for playing a specific
+  deal, replacing the `!seed` table name.
+- After the site updates, the page now reloads automatically instead of asking
+  for a hard refresh.
+- The pregame chat now says when a spectator joins or leaves the game.
+- The "New Game" screen now has a "Replay Game" option for replaying part of an
+  existing game, replacing the `!replay` table name.
+- Unexpected errors now include a reference to pass on to an administrator.
+- Bots now have a robot icon in the "Online Users" list.
+- Dark mode is now saved to your account instead of each browser. New accounts
+  start with the system's theme.
+- Hypotheticals now have a "Pass" button (or the right arrow key), which spends
+  a clue to pass the turn to the next player.
+- The efficiency tooltip now shows "Spare clues" (remaining possible clues minus
+  cards remaining to get) instead of "Number finesses required".
+- The server keeps live games in PostgreSQL and no longer needs Redis.
+- In "Throw It in a Hole" games, the number of cards in the hole is now shown in
+  the middle of the play stacks.
+- Going to `/test` (such as https://hanab.live/test) logs you in as the shared
+  "test" account.
+- Replay JSON links made before September 18th, 2026 no longer open.
+- Everyone must sign in again once, because the session cookie format changed.
+- Click the selected player, color, or number in the clue area again to deselect
+  it.
+- Completing a play stack now sets off a firework. When the team gets a clue
+  back, a spark flies to the clue count.
+- After a game, players can click "Ready" to tell the leader that they will not
+  play another game.
+- A perfect score now sets off a fireworks finale over the play stacks.
+- If you enable the H-Group features, you can now also set your highest H-Group
+  level. Pre-game tables show it beside your name, with a link to that level's
+  page.
+- Losing the last copy of a card now flashes the card and the maximum score in
+  red.
+- The strike that ends the game now flashes all of the strike squares in red.
+- When the deck runs out, it now pulses, and its count of 0 turns amber.
+- When a note determines the suit or rank shown on a card, the note icon now
+  shows a large pencil instead of glowing.
+- The text in the action log now slides up and down when it changes.
+- Hold the left mouse button on the deck (or hold Space) to show which suits and
+  ranks can still be in it.
+- The direction arrow on Rainbow and Omni cards (including their dark, muddy,
+  and cocoa versions) now shows all of their colors.
+- Click a name in the online users list to open a menu with "Profile", "Private
+  Message", "Add to Friends", and "Block".
+- The "Other Scores" screen now shows 10 games at a time, with a "Show More
+  Scores" button.
+- The "Settings" screen now shows "Saved" beside a setting when you change it.
+- After a game, "Restart game" and "Remake table" now keep everyone at the same
+  table. "Restart game" now starts the next game without showing the pre-game
+  screen first.
+- Removed the `/s`, `/s2` to `/s6`, and `/startin` chat commands, which started
+  a game automatically.
+- Signing in with a username that has no account now asks you to confirm before
+  it creates the account, so a typo no longer creates a new account.
+- In shared replays, a hypothetical no longer takes you away from the turn that
+  you are looking at. It appears when you use the shared turns again.
+- In shared replays, spectators can now pause the shared turns during a
+  hypothetical.
+- Seed pages now show the perfect score rate, the average score, how hard the
+  seed is compared to the other seeds of its variant, and each game's
+  percentile.
+
+## November 8th, 2026
+
+- Removed the full-history and full-seed API aliases.
+- Removed the videos page.
+- Removed the following chat commands:
+  - `/playerinfo`
+  - `/vote` (tap the skull button instead, which also works on touch devices)
+  - `/tagdelete` (use `/untag` instead)
+  - `/linked` (use `/links` instead)
+- The deck tooltip in a shared replay shows how long the replay has been
+  running.
+- Slightly changed the appearance of number pips to try and make them less
+  visually buggy.
+- Removed the card cycling option and the games that used it.
+- Removed the legacy starting player option and the pre-April 2020 games that
+  did not start with the first player.
+- Added a confirmation modal when playing a card whose note says it is
+  unplayable.
+- Removed legacy seeds (those beginning with `legacy-`), which only those games
+  used.
+- The note icon glows when the note determines the suit or rank shown on the
+  card.
+- Added a link to the changelog in the resources dialog.
+- The lobby user list now refers to the Hyphenated group by its new name, the
+  H-Group.
+- The lobby and history pages are now a bit wider on wide monitors.
+
+## November 7th, 2026
+
+- Average scores and strikeout rates are no longer calculated or shown.
+- In speedrun mode, clicking to give a clue with no clue tokens now plays a buzz
+  sound effect.
+- Cards with a "spook" note now show a ghost.
+- Opening a link to a shared replay now joins the existing shared replay of that
+  game instead of creating a separate copy.
+- Each browser tab now keeps its own signed-in account, so reloading one tab no
+  longer switches it to the account most recently used in another tab.
+- Added the following chat commands:
+  - `/block`
+  - `/unblock`
+  - `/blocked`
+- Players with a block between them cannot join or spectate each other's tables
+  or send each other private messages. (They can still the blocked person's
+  public messages though.)
+- Added a warning before an idle game ends.
+- Added a "Spoiler-Free Review" mode for reviews, which only reveals what has
+  already happened.
+- Players at a full table are now told when someone else tries to join.
+
+## November 6th, 2026
+
+- The server was rewritten in Rust, replacing the Go server. Live game state is
+  now stored durably in Redis, so games survive restarts without having to do
+  anything special on the server.
+- Errors shown to players now include an actionable cause and a diagnostic ID.
+- Table names are now based on the table owner instead of being randomly
+  generated.
+- Removed the friends history feature.
+- Removed support for legacy SHA-256 password hashes. Users who have not logged
+  in since May 1st, 2020 will need to request a password reset.
+
+## November 5th, 2026
+
+- Disconnected players are removed from a pregame table after a short grace
+  period, and abandoned pregame tables are closed.
+- Simplified the global statistics page.
+
+## November 1st, 2026
+
+- Added advanced filters to the shared missing scores page.
+
+## October 20th, 2026
+
+- Added some missing double dark variants, such as "Black & Dark Orange".
+
+## October 16th, 2026
+
+- Deleting a lobby message in Discord now also deletes it on the site.
+- Added the following note shorthands for unclued finesses (call to play):
+  - `[ctp]`
+  - `[xf]`
+
+## October 7th, 2026
+
+- Added the `/pmhistory` chat command, which shows recent private messages.
+
+## October 2nd, 2026
+
+- Added dark mode, with a System / Light / Dark setting.
+
+## September 27th, 2026
+
+- Added a read-only tag search API:
+  - `/api/v1/tags/[username]`
+  - `/api/v1/tag/[tag]`
+
+## June 18th, 2026
+
+- The time in `/si` can omit the 0 before the decimal point.
+
+## June 13th, 2026
+
+- Changed the arrow color of chop-moved cards for H-Group players.
+
+## May 20th, 2026
+
+- Added the `/split` chat command, which lets a pregame table's owner move the
+  listed players to a new table with the same settings. The first listed player
+  owns the new table. `/splitauto` (or `/sa`) splits the table into two tables
+  by number of games played, putting the more experienced half at one table and
+  the less experienced half at the other.
+
+## April 11th, 2026
+
+- Note hotkeys now keep only the parts of a note that affect the card, removing
+  prose.
+
+## April 3rd, 2026
+
+- Added Shift + Alt + right-click as a shortcut for a "ptd" note.
+
+## March 14th, 2026
+
+- The game board redraws when the window is resized, without reloading the page.
+- Added identity tokens and the `/token` chat command, which let other sites
+  confirm a player's identity.
+
+## March 10th, 2026
+
+- Added the "Scarce Ones" variants, which have one fewer 1 in each suit.
+
+## February 1st, 2026
+
+- Cards with a discard permission note ("ptd", "ctd", or "discard") get a maroon
+  border.
+- A "bd" (Baton Discard) note marks a card as chop moved.
+
+## January 11th, 2026
+
+- Spectators now keep spectating when a table is restarted.
+
+## January 5th, 2026
+
+- The deck tooltip now shows the table owner.
+
+## January 2nd, 2026
+
+- The "Matryoshka" variants use a new Ruby suit instead of Red.
+
+## December 28th, 2025
+
+- The orange suit now has a reverse-arrows pip.
+- Added the "Dark Orange" suit and variants combining Orange and Dark Orange
+  with other suits.
+- Added a
+  [pips reference page](https://hanab.live/public/standalone/pips-reference.html).
+- Updated the black pip.
+
+## November 11th, 2025
+
+- Added the "Play a sound when its my turn" option.
+- Sound options are now chosen from a dropdown.
+
+## November 3rd, 2025
+
+- The orange suit now has a better stack tooltip.
+
+## October 20th, 2025
+
+- Added the "Orange" suit, where playing a card discards it and discarding a
+  card plays it.
+
+## September 16th, 2025
+
+- Added hanabi.wiki to the list of resources.
+
+## July 28th, 2025
+
+- Notes support autocompletion, emotes, and emojis.
+
+## July 27th, 2025
+
+- The pregame screen has buttons to switch between playing and spectating (Alt +
+  J and Alt + P).
+
+## July 26th, 2025
+
+- Added the "White Reversed & Rainbow" variants.
+- Added a button to apply the variant found by `/findvariant`.
+
+## July 22nd, 2025
+
+- Added an emote and emoji picker next to the chat input.
+
+## June 9th, 2025
+
+- Clicking a notification focuses the tab.
+
+## June 5th, 2025
+
+- Added the `/api/v1/variants-full` API endpoint, with more information about
+  each variant.
+
+## November 10th, 2024
+
+- The deck tooltip shows the length of the game.
+
+## October 19th, 2024
+
+- Added the `/vote` chat command to vote to terminate a game.
+- The deck tooltip shows the game's database ID.
+- Removed the Discord-only convention question commands, such as `/notation`,
+  `/oop`, and `/rtfm`.
+
+## September 28th, 2024
+
+- Alt + A plays a clap sound for everyone in a shared replay.
+
+## July 23rd, 2024
+
+- Private messages received during a game show a chat notification.
+
+## June 20th, 2024
+
+- Added an animation while waiting for the server after performing an action.
+
+## June 10th, 2024
+
+- Discarding a clued card adds "(clued)" to the action log.
+
+## May 24th, 2024
+
+- Discarding a critical card adds "(critical)" to the action log.
+
+## March 8th, 2024
+
+- Ctrl + Shift + Alt + right-click adds a "kt" note, replacing the shortcut that
+  copied the last note section.
+
+## December 12th, 2023
+
+- Added the `/terminate` chat command to terminate an ongoing game.
+- Added the `/link` chat command, which links another account to yours so you
+  won't be dealt the same seeds.
+- Added the Sudoku 4-suit variants and the dark 6-suit variants.
+
+## August 10th, 2023
+
+- The Candy Corn Mix, Holiday Mix, and RGB Mix variants show suit names under
+  the stacks.
+
+## July 27th, 2023
+
+- Reworked the Sudoku interface.
+
+## July 26th, 2023
+
+- Added the "Sudoku" variants.
+
+## July 6th, 2023
+
+- Ctrl + left-click opens a card's note, for Macs without right-click.
+
+## May 31st, 2023
+
+- A variant is now considered hard at 1.33 efficiency or higher.
+
+## March 3rd, 2023
+
+- Added the "RGB Mix" variants.
+
+## February 9th, 2023
+
+- Pausing or unpausing a game plays a sound.
+
+## February 1st, 2023
+
+- Added the "Valentine Mix" variants.
+- Seed pages show a chart of how often each score was reached, and the lobby's
+  other-scores screen links to them.
+- The games list on variant pages links each game's seed.
+
+## January 20th, 2023
+
+- A `!` note now shows an exclamation mark on the card.
+
+## January 18th, 2023
+
+- The lobby table list and game name now show the table options.
+
+## January 11th, 2023
+
+- Spectators can use the right-click note shortcuts (such as shift + right-click
+  for `f`).
+- A finished game's shared replay now keeps the table name, adding the game
+  number.
+- In a hypothetical, Empathy shows morphed cards as their morphed identity.
+
+## January 4th, 2023
+
+- Added the "Matryoshka" variants.
+
+## January 3rd, 2023
+
+- A `?` note shows a question mark on the card.
+- Left-clicking the skull now votes to terminate the game, and right-clicking
+  terminates it immediately.
+
+## December 28th, 2022
+
+- "unknown" is now a synonym for the "blank" card note.
+
+## December 16th, 2022
+
+- Anyone can pass the shared replay leader by clicking the crown, not just the
+  leader.
+- Total variant statistics no longer count strikeouts.
+
+## December 8th, 2022
+
+- Spectators' own notes now change how cards look for them (e.g. chop move and
+  finesse borders), as players' notes do.
+
+## December 1st, 2022
+
+- Added the "Holiday Mix" variants.
+- Added 3 new emotes.
+
+## November 29th, 2022
+
+- Morphing can make a card blank or restore it.
+- Morphed cards count toward deductions and `/copy`.
+- Escape now closes the morph dialog.
+
+## November 22nd, 2022
+
+- More chop move abbreviations in notes (such as `ttcm` and `atcm`) mark a card
+  as chop moved.
+
+## November 12th, 2022
+
+- Spectators' notes are kept after they leave and shown after the game, below
+  the players' notes.
+- A new trash can icon marks cards that their holder can deduce are trash.
+
+## October 28th, 2022
+
+- Added Zen mode, which hides chat notifications and the spectator count. You
+  can activate it by right-clicking the chat button in a game.
+
+## October 6th, 2022
+
+- Added the "Funnels" variants.
+
+## October 5th, 2022
+
+- Restarting a game offers to remake the table as a pre-game, so players can
+  join or leave first.
+
+## May 31st, 2022
+
+- Suit pips are highlighted when a positive color clue touched that suit.
+- Players can spectate a table before it starts by clicking on the spectators
+  section of the row.
+
+## February 23rd, 2022
+
+- The player buttons in the clue area show a radio-button dot for the selected
+  player.
+
+## February 14th, 2022
+
+- Arrows can now be used in solo replays.
+
+## February 5th, 2022
+
+- The Discord bot replies publicly instead of privately, and its commands work
+  only in the Discord lobby channel.
+
+## January 27th, 2022
+
+- Added "Odds and Evens" variants.
+
+## January 26th, 2022
+
+- Discord spoilers (e.g., `||text||`) are hidden in the lobby chat until hovered
+  over.
+
+## January 19th, 2022
+
+- The morphing dialog now shows a grid of every card, so a card can be picked
+  with one click.
+
+## January 15th, 2022
+
+- Efficiency is now shown on the missing scores pages.
+
+## January 11th, 2022
+
+- Added the /copy chat command, which copies a hypothetical (with anonymized
+  players) to the clipboard.
+
+## January 8th, 2022
+
+- The full history API now includes user tags.
+
+## January 5th, 2022
+
+- The Git repository for this website has moved to the Hanabi-Live organization.
+
+## January 4th, 2022
+
+- Added new JSON routes to the API.
+
+## January 2nd, 2022
+
+- The history, variant, and seed pages now load dynamically and show a spinner.
+
+## December 23rd, 2021
+
+- Added the `/levels` chat command.
+- Added the `/manual` chat command.
+- Added the `/sin` chat command.
+- On narrow screens, the online users heading shows the number of users online.
+
+## December 18th, 2021
+
+- The dedicated statistics pages are now paginated and filterable.
+
+## December 14th, 2021
+
+- Added the `/tagsdeleteall` chat command.
+
+## December 10th, 2021
+
+- Added voting to terminate a game.
+
+## December 9th, 2021
+
+- Morphing now uses a dialog.
+
+## December 7th, 2021
+
+- Added 11 new emotes.
+
+## November 29th, 2021
+
+- Replaced browser dialogs with better-looking modals.
+
+## November 2nd, 2021
+
+- Players who are not the host can now propose options.
+
+## October 29th, 2021
+
+- Options can be changed in the pre-game screen.
+- Added the "Synesthesia" and "Critical Fours" variants.
+- Notes can now be edited on mobile.
+
+## August 3rd, 2021
+
+- While in a game, the up and down arrow keys will toggle the replay.
+
+## May 11th, 2021
+
+- Added indicators for cards that could be the last copy (for double discard
+  avoidance).
+
+## May 3rd, 2021
+
+- Added tooltips for the play stacks.
+
+## April 24th, 2021
+
+- In "Up or Down" variants, there is now a pip for the start card.
+
+## March 15th, 2021
+
+- Added the "clued" identity note.
+
+## March 11th, 2021
+
+- Typing the start of a message and pressing up recalls your earlier messages
+  that begin with it.
+
+## March 5th, 2021
+
+- The shift + right click and alt + right click shortcuts now put the
+  corresponding identity note in square brackets.
+- Players who are not the leader can now suggest variants with the dropdown.
+
+## February 11th, 2021
+
+- Card possibilities are now reduced by complex deduction, not just by counting
+  visible cards.
+
+## January 7th, 2021
+
+- Added the ability to put negative identity notes with "!", like "!b".
+
+## December 6th, 2020
+
+- Overhauled the hypothetical interface.
+
+## December 5th, 2020
+
+- The future efficiency tooltip now shows more detailed information.
+
+## December 1st, 2020
+
+- Cards that have been denoted as being finessed with an "f" note will now
+  automatically modify the future efficiency.
+- Added the `/bga` and `/doc` chat commands.
+
+## November 26th, 2020
+
+- Added the "Impostor" detrimental character.
+- Added efficiency for "Throw It in a Hole" variants.
+
+## November 21st, 2020
+
+- Hypotheticals can now be started in the middle of a game, not just in a
+  replay.
+- You can Ctrl + click a table row in the lobby to put a link for that table in
+  the clipboard.
+
+## November 20th, 2020
+
+- Added the "Deceptive-Ones" and "Deceptive-Fives" variants.
+- The current turn of a game is now stored in the URL.
+
+## November 18th, 2020
+
+- Hovering over the turn number shows the maximum rounds left and other
+  statistics.
+- In the Keldon layout, the current player arrow points at the player instead of
+  their cards.
+
+## November 11th, 2020
+
+- Identity list notes will now automatically change the pips on a card to match.
+
+## November 1st, 2020
+
+- Future efficiency will now be shown on the right side of a game. You can
+  manually modify it by right-clicking.
+
+## October 29th, 2020
+
+- Removed the `/here` chat command to ping Discord.
+
+## August 31st, 2020
+
+- The lobby plays a sound when the server shuts down or restarts.
+
+## August 25th, 2020
+
+- Added the "Dark Prism" variants.
+- The timer now starts when the first player has loaded (instead of when the
+  game has started).
+- Players with H-Group features enabled hear sounds for order chop moves and for
+  discards that cause or happen in a double discard situation.
+
+## August 24th, 2020
+
+- Improved the shared missing scores page.
+
+## August 21st, 2020
+
+- Overlapping suit abbreviations are now handled automatically.
+
+## August 18th, 2020
+
+- The "Your Turn" UI now shows in the in-game replay.
+- Seeds are now sorted by score.
+
+## August 14th, 2020
+
+- Anyone can now change the shared replay leader with the "/setleader" chat
+  command.
+- JSON games support detrimental characters.
+
+## August 13th, 2020
+
+- The loading time of the website has been reduced due to lazy initialization.
+
+## July 30th, 2020
+
+- Added the `/suggest` chat command.
+
+## July 29th, 2020
+
+- Added the `/missingscores` chat command.
+- Five and six blind-plays in a row each have their own sound.
+
+## July 28th, 2020
+
+- Misplays are now allowed in hypotheticals.
+- The create game dialog now remembers its options and hides extra options by
+  default.
+
+## July 26th, 2020
+
+- The history page can now be filtered by score.
+
+## July 25th, 2020
+
+- The lobby status is now clickable.
+
+## July 24th, 2020
+
+- The site was renamed to Hanab Live.
+
+## July 20th, 2020
+
+- Rewrote the efficiency calculation.
+
+## July 14th, 2020
+
+- Rank pips look like numbers.
+- Added double discard detection.
+
+## July 13th, 2020
+
+- You no longer have to refresh the game after it ends in order to get
+  up-to-date card information.
+
+## July 12th, 2020
+
+- The cursor changes over cards to show when you can drag or Empathy.
+- Stack bases can now be morphed.
+
+## July 7th, 2020
+
+- Added animations for cards coming from the deck.
+- Added the ability for animations to go in reverse.
+
+## June 28th, 2020
+
+- Added the logo to the header.
+
+## June 21st, 2020
+
+- Added mobile support for touching cards and other UI elements in-game.
+- Added borders for clued cards.
+- Arrows can now be placed on everything in the score area.
+
+## June 14th, 2020
+
+- Added the `/kick` chat command for administrators.
+
+## June 9th, 2020
+
+- The history page can now be filtered.
+
+## June 1st, 2020
+
+- Added the `/seed` endpoint.
+- Perspectives can now be shifted in solo replays.
+- Added reversed variants with special suits.
+
+## May 31st, 2020
+
+- Added the "unclued" note.
+- Added an endpoint for creating tables automatically.
+
+## May 30th, 2020
+
+- Added the friends history feature.
+
+## May 29th, 2020
+
+- Added the tags feature, so that you can tag games with arbitrary text. Use
+  `/tag` and `/untag` while in a game.
+- Added a critical card indicator.
+- The deck tooltip now shows the seed.
+
+## May 28th, 2020
+
+- Added the `/shrug` chat commands to display `¯\_(ツ)_/¯`.
+- Added the `/setleader` chat command.
+- Added reversed variants.
+
+## May 25th, 2020
+
+- Added a translucent dark box drawn behind the hand of the player whose turn it
+  is.
+- Added a password reset link to the login screen.
+
+## May 24th, 2020
+
+- Speedruns no longer announce how close they came to the record.
+
+## May 16th, 2020
+
+- Negative information can now cause a card to appear as its true suit or rank.
+- Server notices are highlighted in the chat.
+
+## May 15th, 2020
+
+- In a hypothetical, cards can now be morphed into blank cards.
+
+## May 12th, 2020
+
+- Added the `/new` chat command to link the H-Group beginner's guide.
+
+## May 9th, 2020
+
+- Added the friends feature. Tables with friends will be automatically sorted to
+  the top of the list.
+- Added the `/friend`, `/unfriend`, and `/friends` chat commands.
+
+## May 8th, 2020
+
+- Added a message of the day feature.
+
+## May 5th, 2020
+
+- Added the `/changevariant` chat command.
+
+## May 1st, 2020
+
+- Passwords are stored more securely (with Argon2 hashing).
+- Added a new "Your Turn" UI in-game.
+
+## April 16th, 2020
+
+- Re-added the desktop notification feature.
+
+## April 15th, 2020
+
+- Added 41 new emotes.
+- Added tab completion for emotes.
+- Games are now warned 10 minutes before a shutdown ends them (in addition to
+  the existing 5 minutes).
+
+## April 14th, 2020
+
+- In the chat, the up and down arrows now recall previous chat messages.
+
+## April 13th, 2020
+
+- The profile shows the date the player joined the website.
+
+## April 12th, 2020
+
+- Added a password reset page.
+
+## April 11th, 2020
+
+- Added the `/rules` chat command to show the community guidelines.
+- Added the "All History" button to the bottom of the history page.
+- Shutdowns end unfinished games after 30 minutes, warning them 5 minutes
+  before.
+
+## April 5th, 2020
+
+- Added server-side rate limiting to prevent denial of service attacks.
+- In a shared replay, you can now change your perspective to a specific player.
+
+## March 23rd, 2020
+
+- Removed the desktop notification feature.
+
+## March 31st, 2020
+
+- While in a game, there is now an indicator to show that a player is currently
+  typing.
+- In the lobby, inactive users are given a special icon and faded.
+
+## March 30th, 2020
+
+- Added the ability to send private messages with `/pm`.
+- Added the `/whoami` chat command.
+- Added the ability for administrators to mute people.
+- Added the "Slow-Witted" and "Quacker" detrimental characters.
+
+## March 29th, 2020
+
+- Added the `/uptime` chat command.
+- Hypotheticals now have a back button.
+
+## March 28th, 2020
+
+- Added the "Forgetful" detrimental character.
+
+## March 27th, 2020
+
+- Added the `/findvariant` chat command.
+- Added the "Make numbers on cards match the art style" option.
+
+## March 26th, 2020
+
+- The variant dropdown is now searchable.
+- Scheduled restarts and shutdowns are announced in game chats as well as the
+  lobby.
+
+## March 25th, 2020
+
+- Added a random variant button.
+- Joined tables are sorted to the top.
+
+## March 23rd, 2020
+
+- Added an option for "Enable H-Group features".
+
+## March 22nd, 2020
+
+- Re-added the card cycling option.
+- Revamped the statistics and missing scores pages.
+- Tables are now sorted by status.
+
+## November 19th, 2019
+
+- Added in-game hypotheticals.
+- Added morphing a card inside of a hypotheticals.
+
+## November 17th, 2019
+
+- A "blank" note blanks out a card.
+- An "f" note gives a card an aqua border.
+
+## November 1st, 2019
+
+- Added the `/startin` chat command.
+- Added the "Prism-Ones" and "Multi-Fives" variants.
+
+## October 31st, 2019
+
+- Added the `/link` chat command.
+
+## September 24th, 2019
+
+- Added the "Cocoa Rainbow" and "Chiaroscuro Pink" variants.
+
+## September 23rd, 2019
+
+- Added the "Extremely Ambiguous" variants and a speedrun mode setting.
+
+## September 20th, 2019
+
+- Added the "Very Ambiguous" variants.
+
+## September 16th, 2019
+
+- Added the "Alternating Clues" variants.
+- The variant can now be searched in the create game dialog.
+- Clues in Cow & Pig variants play moo and oink sounds.
+
+## September 13th, 2019
+
+- Added the "Throw It in a Hole" variants.
+- Added the `/maintenance` chat command.
+- The turn can now be given in a replay URL.
+- Dropping a card where it cannot go, such as discarding at 8 clues, plays an
+  error sound.
+
+## September 5th, 2019
+
+- Added a red border around the discard pile when at 0 clues.
+
+## September 3rd, 2019
+
+- Added the "Ambiguous and Dual-Color" variants.
+
+## September 2nd, 2019
+
+- A tooltip shows the time taken on a turn.
+
+## August 15th, 2019
+
+- Added a sound for discarding clued cards.
+
+## August 7th, 2019
+
+- Replaced synth sounds with piano sounds.
+
+## August 6th, 2019
+
+- Links in the chat are clickable.
+- Added the "Null" variants.
+
+## August 1st, 2019
+
+- Added the `/pause` and `/unpause` chat commands.
+
+## July 30th, 2019
+
+- Added the "Omni" variants.
+
+## July 29th, 2019
+
+- Cards can be morphed in solo replays.
+
+## May 1st, 2019
+
+- Profiles show the total time played.
+
+## April 30th, 2019
+
+- Added the "Prism-Ones" variants.
+- Spectators can write notes.
+- Chat is kept when a game is restarted.
+
+## April 20th, 2019
+
+- Spectators can shadow a player.
+
+## April 17th, 2019
+
+- You can see empathy for your own hand.
+
+## April 16th, 2019
+
+- Added pausing.
+- Added the "Cow & Pig", "Number Blind", "Pink", "Color Mute", and "Number Mute"
+  variants.
+
+## April 15th, 2019
+
+- Empty play stacks can be right-clicked.
+
+## April 14th, 2019
+
+- Cards morph according to their notes.
+
+## April 13th, 2019
+
+- Added correspondence games.
+- Added "Gray" variants.
+- Dead cards are faded.
+
+## April 11th, 2019
+
+- Cards that have already been played are faded.
+
+## April 7th, 2019
+
+- Settings are stored on the server.
+- The BGA layout is the default.
+- Added "real-life mode".
+
+## March 27th, 2019
+
+- Added the `/replay` chat command.
+- History links are clickable.
+- Clues in Duck variants play a quack sound.
+
+## March 26th, 2019
+
+- The server announces when it goes down.
+- Speedruns in main variants announce how close they came to the record, with a
+  sound for a new record.
+
+## March 24th, 2019
+
+- Added a misplay animation.
+- Speedruns end as soon as a perfect score is impossible.
+
+## March 21st, 2019
+
+- Ctrl + C copies the game ID.
+- Pace and efficiency have tooltips.
+
+## March 20th, 2019
+
+- Strikes have tooltips. Clicking on a strike box shows the misplayed card.
+
+## March 17th, 2019
+
+- Added emotes and emoji autocompletion.
+
+## March 16th, 2019
+
+- Replays show the game ID.
+
+## March 11th, 2019
+
+- Added a "Turns left" counter.
+- Added a "nooo" sound that the leader of a shared replay can play for everyone.
+
+## February 24th, 2019
+
+- Added JSON games and the `/export` API.
+
+## February 15th, 2019
+
+- Added the ability to restart a game.
+
+## February 14th, 2019
+
+- Added animated arrows.
+
+## February 12th, 2019
+
+- Added speedrun mode, which does not count toward statistics.
+
+## February 10th, 2019
+
+- The deck tooltip shows the game options.
+- Clicking a played card goes to the turn it was played.
+- The delete key deletes the hovered note.
+
+## February 8th, 2019
+
+- A game that ends with a perfect score plays its own sound.
+
+## February 7th, 2019
+
+- Added a tutorial for new users.
+
+## February 1st, 2019
+
+- Added a "holy" sound that the leader of a shared replay can play for everyone.
+
+## January 30th, 2019
+
+- Two misplays in a row have their own sound.
+- A sound plays when a game ends, with a different one for a loss.
+
+## January 25th, 2019
+
+- Added pregame chat and a draggable/resizable in-game chat.
+
+## January 23rd, 2019
+
+- Added the "Clue Starved" variants.
+
+## January 10th, 2019
+
+- Added the missing scores page.
+
+## January 3rd, 2019
+
+- Up or Down cards are now labeled with their direction.
+
+## January 2nd, 2019
+
+- Added the "Up or Down" variants.
+
+## January 1st, 2019
+
+- Preplaying is now an optional setting.
+- Added three suit and four suit variants.
+- The history screens are full screen.
+
+## December 30th, 2018
+
+- Added the "White (6 Suits)" variant.
+
+## November 10th, 2018
+
+- Added the "Detrimental Characters" option.
+- Removed the card cycling option.
+
+## October 1st, 2018
+
+- Added lobby chat.
+
+## September 28th, 2018
+
+- Added the Board Game Arena layout option.
+
+## September 7th, 2018
+
+- Added speedrun hotkeys.
+
+## August 14th, 2018
+
+- The lobby shows all game modifiers.
+
+## August 13th, 2018
+
+- Added the `/help` chat command to get the list of commands.
+- Added the `/last` chat command to see how long it was before the last ping.
+
+## August 8th, 2018
+
+- Added password-protected games.
+- The lobby shows spectator names.
+
+## August 7th, 2018
+
+- Added shared replay progress indicators in the lobby.
+
+## July 24th, 2018
+
+- Added the `/here` chat command to ping Discord.
+
+## July 20th, 2018
+
+- Added the `/list` chat command to get the waiting list.
+
+## July 6th, 2018
+
+- Added the double discard feature.
+- The server tracks the maximum score.
+
+## July 5th, 2018
+
+- Added the `/next` chat command to be pinged on Discord.
+
+## June 29th, 2018
+
+- Added a buzz sound that the leader of a shared replay can play for everyone.
+
+## June 28th, 2018
+
+- Player names link to their profiles.
+
+## June 25th, 2018
+
+- Added idle table/game timeouts.
+- A sad sound plays when the maximum score decreases.
+
+## June 21st, 2018
+
+- Added the reverse hand direction option.
+- Added the "Dark Rainbow" variant.
+
+## June 18th, 2018
+
+- Added efficiency statistics.
+
+## March 4th, 2018
+
+- Added colorful arrows.
+
+## March 2nd, 2018
+
+- Added "Ambiguous", "Very Ambiguous", and "Color Blind" variants.
+
+## January 17th, 2018
+
+- Previous notes are highlighted when editing.
+
+## January 9th, 2018
+
+- The server was rewritten from Node.js to Go.
+- Added a new card back.
+- Players rejoin shared replays automatically.
+
+## January 7th, 2018
+
+- Two, three, and four blind-plays in a row each have their own sound.
+
+## November 29th, 2017
+
+- Added timer settings and an option to hide timers in untimed games.
+
+## November 26th, 2017
+
+- Added HTTPS.
+
+## November 21st, 2017
+
+- The lobby shows game progress.
+
+## November 19th, 2017
+
+- Colorblind mode lists component colors.
+
+## October 25th, 2017
+
+- Replays can be watched and shared by ID.
+
+## October 23rd, 2017
+
+- Positive/negative clues are now recorded on every card.
+
+## October 22nd, 2017
+
+- Notes work in replays and shared replays.
+- Game results are announced on Discord.
+- Arrows replace border indicators, and gold borders replace clue circles.
+
+## October 21st, 2017
+
+- The lobby shows table options.
+- The history shows game dates and other players.
+
+## October 3rd, 2017
+
+- In replays, faded pips show which suits and ranks clues have ruled out.
+
+## September 23rd, 2017
+
+- Added a separate setting for the timer ticking sound.
+
+## September 6th, 2017
+
+- The shared replay leader can indicate cards.
+- Followers can detach from a shared replay.
+
+## August 14th, 2017
+
+- Added score comparisons to the history.
+
+## August 11th, 2017
+
+- Added suit and rank pips.
+
+## August 8th, 2017
+
+- Shared replays show when a note is added.
+
+## August 3rd, 2017
+
+- Added the "Dual-Color Mix" variant.
+
+## August 1st, 2017
+
+- Added a new font.
+
+## July 30th, 2017
+
+- Added the "White & Rainbow (6 Suits)" variant.
+- The clue label turns red at 8 clues.
+
+## July 27th, 2017
+
+- Added automatic resume.
+- Added a cursor for the shared replay leader.
+
+## July 26th, 2017
+
+- Added the card cycling option.
+- Added black clues to black suit variants.
+
+## July 24th, 2017
+
+- Hovering over the spectator count shows the spectators.
+- Added a shared replay leader icon.
+
+## July 23rd, 2017
+
+- Added lobby hotkeys and credits.
+
+## July 22nd, 2017
+
+- Notes are stored on the server and persist across computers.
+- Improved the login screen.
+
+## July 21st, 2017
+
+- Tables get randomly generated names.
+
+## July 20th, 2017
+
+- Added shared replays.
+
+## July 19th, 2017
+
+- Changed the appearance of dual-color suits.
+- Timers are shown in untimed games.
+- Renamed "loss rate" to "strikeout rate".
+
+## July 17th, 2017
+
+- Lobby chat is echoed to and from Discord.
+
+## July 16th, 2017
+
+- Added dual-color variants.
+- Added clue hotkeys.
+
+## July 14th, 2017
+
+- Added colorblind mode.
+
+## July 12th, 2017
+
+- The lobby shows each player's status.
+- Added a spectator count.
+- Games now automatically end when no more cards can be played.
+
+## July 9th, 2017
+
+- A sound plays when a player's timer runs low.
+- Blind-plays and misplays have their own sounds.
+
+## July 7th, 2017
+
+- Added the "Bottom-Deck Blind-Plays" table option.
+
+## July 6th, 2017
+
+- Added the "Timed" table option.
+- A different sound plays when another player takes their turn.
+
+## July 2nd, 2017
+
+- The initial release, based on Keldon's Hanabi server.

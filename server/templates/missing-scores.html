@@ -1,0 +1,52 @@
+{% extends "layout.html" %}{% block body %}
+
+<div id="page-wrapper">
+  <!-- Header -->
+  <header id="header">
+    <h1>{% include "logo.html" %}</h1>
+    <nav id="nav"></nav>
+  </header>
+
+  <!-- Main -->
+  <section id="main" class="container max history-page">
+    <header>
+      <h2><img src="/public/img/logos/header.svg" width="259" /></h2>
+    </header>
+    <div class="row uniform 100%">
+      <div class="col-12">
+        <section class="box">
+          <h2 class="align-center">{{ namesTitle }}</h2>
+
+          {% if singleMissingScores %} {% include "profile-buttons.html" %}
+          <h3>Current Max Scores:</h3>
+          <table class="history plain">
+            <thead>
+              <tr>
+                {% for players in [2,3,4,5,6] %}
+                <th class="center">{{ players }}-player</th>
+                {% endfor %}
+                <th class="center">Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                {% for row in summary.perType %}
+                <td class="center">
+                  {{ row.total }} &nbsp;({{ row.percentage }}%)
+                </td>
+                {% endfor %}
+                <td class="center">
+                  {{ summary.total }} &nbsp;({{ summary.percentage }}%)
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          {% endif %}
+          <div id="public-page-table" data-table="{{ table }}"></div>
+        </section>
+      </div>
+    </div>
+  </section>
+</div>
+
+{% include "public-page-scripts.html" %} {% endblock %}

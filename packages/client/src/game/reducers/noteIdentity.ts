@@ -5,8 +5,16 @@ import type {
   SuitRankTuple,
   Variant,
 } from "@hanabi-live/game";
-import { ALL_RESERVED_NOTES, START_CARD_RANK } from "@hanabi-live/game";
+import {
+  ALL_RESERVED_NOTES,
+  DEFAULT_CARD_RANKS,
+  RANK_GROUP_NAMES,
+  SQUISH_GROUP_NAME,
+  START_CARD_RANK,
+  SUIT_GROUP_NAMES,
+} from "@hanabi-live/game";
 import { eRange, newArray } from "complete-common";
+import { START_CARD_RANK_LABEL } from "../../constants.ts";
 
 /**
  * Represents the card identities that a card could possibly be.
@@ -27,7 +35,7 @@ interface CardIdentities {
   readonly ranks: Rank[];
 }
 
-function parseSuit(variant: Variant, suitText: string): SuitIndex | null {
+function parseSuit(variant: Variant, suitText: string): SuitIndex | undefined {
   const suitAbbreviationIndex = variant.suitAbbreviations.findIndex(
     (abbreviation) => abbreviation.toLowerCase() === suitText,
   );
@@ -38,45 +46,36 @@ function parseSuit(variant: Variant, suitText: string): SuitIndex | null {
   const suitNameIndex = variant.suits.findIndex(
     (suit) => suit.displayName.toLowerCase() === suitText,
   );
-  if (suitNameIndex !== -1) {
-    return suitNameIndex as SuitIndex;
-  }
-
-  return null;
+  return suitNameIndex === -1 ? undefined : (suitNameIndex as SuitIndex);
 }
 
-function parseRank(rankText: string): Rank | null {
+function parseRank(rankText: string): Rank | undefined {
   switch (rankText) {
     case "0":
-    case "s":
-    case "S": {
+    case START_CARD_RANK_LABEL.toLowerCase():
+    case START_CARD_RANK_LABEL: {
       return START_CARD_RANK;
     }
 
-    case "1": {
-      return 1;
-    }
-
-    case "2": {
-      return 2;
-    }
-
-    case "3": {
-      return 3;
-    }
-
-    case "4": {
-      return 4;
-    }
-
-    case "5": {
-      return 5;
-    }
-
     default: {
-      return null;
+      return (
+        DEFAULT_CARD_RANKS.find((rank) => rank.toString() === rankText)
+        ?? undefined
+      );
     }
   }
+}
+
+const identityPatterns = new Map<string, RegExp>();
+
+/** Variant identity patterns are large, so compile each one once. */
+function identityPattern(pattern: string): RegExp {
+  let regExp = identityPatterns.get(pattern);
+  if (regExp === undefined) {
+    regExp = new RegExp(pattern);
+    identityPatterns.set(pattern, regExp);
+  }
+  return regExp;
 }
 
 /**
@@ -93,8 +92,8 @@ export function parseIdentity(
   if (keyword.toLowerCase() === "blank") {
     // Create a blank morph.
     return {
-      suitIndex: null,
-      rank: null,
+      suitIndex: undefined,
+      rank: undefined,
     };
   }
 
@@ -103,7 +102,7 @@ export function parseIdentity(
     return "original";
   }
 
-  const identityMatch = new RegExp(
+  const identityMatch = identityPattern(
     variant.identityNotePattern.toLowerCase(),
   ).exec(keyword.toLowerCase());
 
@@ -122,9 +121,11 @@ export function parseIdentity(
 }
 
 function parseIdentities(variant: Variant, keyword: string): CardIdentities {
-  const identityMatch = new RegExp(variant.identityNotePattern).exec(keyword);
-  let suitIndex: SuitIndex | null = null;
-  let rank: Rank | null = null;
+  const identityMatch = identityPattern(variant.identityNotePattern).exec(
+    keyword,
+  );
+  let suitIndex: SuitIndex | undefined;
+  let rank: Rank | undefined;
   if (identityMatch !== null) {
     const squishText = extractSquishText(identityMatch);
     const suitIndices: SuitIndex[] = [];
@@ -133,15 +134,18 @@ function parseIdentities(variant: Variant, keyword: string): CardIdentities {
       for (const letter of squishText) {
         suitIndex = parseSuit(variant, letter);
         rank = parseRank(letter);
-        if (suitIndex !== null) {
+        if (suitIndex !== undefined) {
           suitIndices.push(suitIndex);
-        } else if (rank !== null) {
+        } else if (rank !== undefined) {
           ranks.push(rank);
         }
       }
 
       if (suitIndices.length + ranks.length > 0) {
-        return { suitIndices, ranks };
+        return {
+          suitIndices,
+          ranks,
+        };
       }
     }
     const suitText = extractSuitText(identityMatch);
@@ -155,8 +159,8 @@ function parseIdentities(variant: Variant, keyword: string): CardIdentities {
   }
 
   return {
-    suitIndices: suitIndex === null ? [] : [suitIndex],
-    ranks: rank === null ? [] : [rank],
+    suitIndices: suitIndex === undefined ? [] : [suitIndex],
+    ranks: rank === undefined ? [] : [rank],
   };
 }
 
@@ -303,19 +307,32 @@ export function getPossibilitiesFromKeywords(
 }
 
 function extractSuitText(match: RegExpMatchArray): string | undefined {
-  return match[1] ?? match[4] ?? match[5] ?? undefined;
+  return firstGroup(match, SUIT_GROUP_NAMES);
 }
 
 function extractRankText(match: RegExpMatchArray): string | undefined {
-  return match[2] ?? match[3] ?? match[6] ?? undefined;
+  return firstGroup(match, RANK_GROUP_NAMES);
 }
 
-function extractSquishText(match: RegExpMatchArray): string | undefined {
-  const text = match[7]?.trim();
-
-  if (text !== undefined && !ALL_RESERVED_NOTES.has(text.toLowerCase())) {
-    return text;
+/** Only one alternative of an identity note pattern matches, so at most one group is defined. */
+function firstGroup(
+  match: RegExpMatchArray,
+  groupNames: readonly string[],
+): string | undefined {
+  for (const groupName of groupNames) {
+    const text = match.groups?.[groupName];
+    if (text !== undefined) {
+      return text;
+    }
   }
 
   return undefined;
+}
+
+function extractSquishText(match: RegExpMatchArray): string | undefined {
+  const text = match.groups?.[SQUISH_GROUP_NAME]?.trim();
+
+  return text === undefined || ALL_RESERVED_NOTES.has(text.toLowerCase())
+    ? undefined
+    : text;
 }

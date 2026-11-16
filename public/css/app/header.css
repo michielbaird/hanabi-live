@@ -1,0 +1,50 @@
+#header {
+  background: var(--header-bg);
+  border-bottom: var(--header-border);
+  color: var(--header-text);
+  cursor: default;
+  height: var(--header-height);
+  left: 0;
+  line-height: var(--header-height);
+  position: fixed;
+  top: 0;
+  width: 100%;
+  z-index: var(--z-header);
+}
+
+#header a {
+  cursor: pointer;
+}
+
+#header h1 {
+  color: inherit;
+  height: inherit;
+  left: 1.25em;
+  line-height: inherit;
+  margin: 0;
+  padding: 0;
+  position: absolute;
+  top: 0;
+}
+
+#header nav {
+  height: inherit;
+  line-height: inherit;
+  position: absolute;
+  right: 0.75em;
+  top: 0;
+  vertical-align: middle;
+}
+
+/* The logo in the header bar */
+.logo {
+  height: var(--header-height);
+  vertical-align: bottom;
+}
+
+@media screen and (max-width: 980px) {
+  /* Hide the logo text */
+  #logo-text {
+    display: none;
+  }
+}

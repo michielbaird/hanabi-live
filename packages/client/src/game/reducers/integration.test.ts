@@ -6,14 +6,14 @@ import {
   getEfficiencyFromGameState,
   getFutureEfficiency,
 } from "@hanabi-live/game";
-import { beforeAll, describe, expect, test } from "@jest/globals";
 import { assertDefined, eRange } from "complete-common";
-import { loadGameJSON } from "../../../test/loadGameJSON";
+import { beforeAll, describe, expect, test } from "vitest";
+import { loadGameJson } from "../../../test/loadGameJson.ts";
 import rainbowOnesAndPinkGame from "../../../test_data/rainbow-ones_and_pink.json";
 import upOrDownGame from "../../../test_data/up_or_down.json";
 import upOrDownFinalCards from "../../../test_data/up_or_down_final_cards.json";
 import upOrDownTurn5Cards from "../../../test_data/up_or_down_turn5.json";
-import type { State } from "../types/State";
+import type { State } from "../types/State.ts";
 
 let testState: State;
 
@@ -21,13 +21,13 @@ describe("integration", () => {
   describe("Up or Down test game", () => {
     beforeAll(() => {
       // Load the game and get the final state.
-      testState = loadGameJSON(upOrDownGame);
+      testState = loadGameJson(upOrDownGame);
     });
 
     describe("at turn 5", () => {
       test("has the correct cards on each player's hands", () => {
-        const turn5State = getGameStateAtTurn(testState, 4);
-        expect(turn5State.hands).toEqual([
+        const turn5State = getTurn5GameState(testState);
+        expect(turn5State.hands).toEqual<unknown>([
           [0, 1, 2, 3],
           [4, 5, 6, 7],
           [8, 9, 11, 16],
@@ -36,7 +36,7 @@ describe("integration", () => {
       });
 
       test("has the correct stats", () => {
-        const turn5State = getGameStateAtTurn(testState, 4);
+        const turn5State = getTurn5GameState(testState);
         expect(turn5State.turn.turnNum).toBe(4);
         expect(turn5State.turn.currentPlayerIndex).toBe(0);
         expect(turn5State.score).toBe(2);
@@ -60,7 +60,7 @@ describe("integration", () => {
       test.each([...eRange(18)])(
         "card %i has the correct pips and possibilities",
         (order) => {
-          const turn5State = getGameStateAtTurn(testState, 4);
+          const turn5State = getTurn5GameState(testState);
 
           const card = turn5State.deck[order];
           assertDefined(card, `Failed to find the card at order: ${order}`);
@@ -82,7 +82,7 @@ describe("integration", () => {
     describe("final state", () => {
       test("has the correct cards on each player's hands", () => {
         const finalState = getFinalState(testState);
-        expect(finalState.hands).toEqual([
+        expect(finalState.hands).toEqual<unknown>([
           [27, 32, 35],
           [22, 30, 43],
           [31, 36, 41, 44],
@@ -93,14 +93,14 @@ describe("integration", () => {
       test("has the correct stats", () => {
         const finalState = getFinalState(testState);
         expect(finalState.turn.turnNum).toBe(50);
-        expect(finalState.turn.currentPlayerIndex).toBeNull();
+        expect(finalState.turn.currentPlayerIndex).toBeUndefined();
         expect(finalState.score).toBe(24);
         expect(finalState.clueTokens).toBe(2);
-        expect(finalState.stats.pace).toBeNull();
+        expect(finalState.stats.pace).toBeUndefined();
         const efficiency = getEfficiencyFromGameState(finalState);
         expect(efficiency).toBeCloseTo(1.39);
         const futureEfficiency = getFutureEfficiency(finalState);
-        expect(futureEfficiency).toBeNull();
+        expect(futureEfficiency).toBeUndefined();
         expect(finalState.stats.potentialCluesLost).toBe(18);
 
         expect(finalState.playStackDirections).toEqual([
@@ -137,13 +137,13 @@ describe("integration", () => {
   describe("Rainbow-Ones & Pink test game", () => {
     beforeAll(() => {
       // Load the game and get the final state.
-      testState = loadGameJSON(rainbowOnesAndPinkGame);
+      testState = loadGameJson(rainbowOnesAndPinkGame);
     });
 
     describe("final state", () => {
       test("has the correct cards on each player's hands", () => {
         const finalState = getFinalState(testState);
-        expect(finalState.hands).toEqual([
+        expect(finalState.hands).toEqual<unknown>([
           [34, 37, 39, 43],
           [38, 40, 44, 47],
           [28, 31, 33, 42],
@@ -153,23 +153,24 @@ describe("integration", () => {
       test("has the correct stats", () => {
         const finalState = getFinalState(testState);
         expect(finalState.turn.turnNum).toBe(53);
-        expect(finalState.turn.currentPlayerIndex).toBeNull();
+        expect(finalState.turn.currentPlayerIndex).toBeUndefined();
         expect(finalState.score).toBe(25);
         expect(finalState.clueTokens).toBe(8);
-        expect(finalState.stats.pace).toBeNull();
+        expect(finalState.stats.pace).toBeUndefined();
         const efficiency = getEfficiencyFromGameState(finalState);
         expect(efficiency).toBeCloseTo(1.39);
         const futureEfficiency = getFutureEfficiency(finalState);
-        expect(futureEfficiency).toBeNull();
+        expect(futureEfficiency).toBeUndefined();
         expect(finalState.stats.potentialCluesLost).toBe(18);
       });
     });
   });
 });
 
-function getGameStateAtTurn(state: State, turn: number): GameState {
-  const gameState = state.replay.states[turn];
-  assertDefined(gameState, `Failed to get the game state at turn: ${turn}`);
+function getTurn5GameState(state: State): GameState {
+  // Turns are 0-indexed in the replay states.
+  const gameState = state.replay.states[4];
+  assertDefined(gameState, "Failed to get the game state at turn 5.");
 
   return gameState;
 }

@@ -1,37 +1,44 @@
-import { assertNotNull } from "complete-common";
 import Konva from "konva";
-import * as modals from "../../modals";
-import { getCanvasColors } from "../../theme";
-import { globals } from "./UIGlobals";
-import { LABEL_COLOR } from "./constants";
-import { drawCards } from "./drawCards";
-import * as drawCardsBrowser from "./drawCardsBrowser";
-import { drawUI } from "./drawUI";
-import * as keyboard from "./keyboard";
+import { globals as lobbyGlobals } from "../../Globals.ts";
+import * as modals from "../../modals.ts";
+import { getCanvasColors } from "../../theme.ts";
+import { getCardImages } from "../cardImages.ts";
+import { globals } from "./UiGlobals.ts";
+import {
+  LABEL_COLOR,
+  RANK_FONT_FAMILY,
+  STROKE_WIDTH_UNIT,
+} from "./constants.ts";
+import { drawUi } from "./drawUi.ts";
+import * as keyboard from "./keyboard.ts";
 
-// When the HanabiUI object is instantiated, we do not know how many players are in the game or what
+/**
+ * The labels of the loading screen, in fractions of the stage height. Their height is also their
+ * font size, and the progress count sits below the loading label.
+ */
+const LOADING_LABEL = {
+  h: 0.05,
+  loadingY: 0.7,
+  progressY: 0.8,
+} as const;
+
+// When the HanabiUi object is instantiated, we do not know how many players are in the game or what
 // the variant is. Now that the server has sent us that information, we can initialize the UI.
-export function uiInit(): void {
-  assertNotNull(
-    globals.lobby.imageLoader,
-    "Failed to find the image loader when initializing the user interface.",
-  );
-
+export function uiInit(onDrawn: () => void): void {
   // Once the initial page (e.g. the login screen / lobby) is finished loading and ready, all of the
-  // images relating to the game screen start to get pre-loaded by the "Loader" class. Copy the
-  // reference to the existing "Loader" object to our UI globals (for convenience).
-  globals.imageLoader = globals.lobby.imageLoader;
+  // images relating to the game screen start to get pre-loaded by the "Loader" class.
+  const { imageLoader } = lobbyGlobals;
 
-  if (globals.imageLoader.failed) {
-    showImageLoadError([...globals.imageLoader.failedFiles][0]!);
+  if (imageLoader.failed) {
+    showImageLoadError([...imageLoader.failedFiles][0]!);
     return;
   }
 
-  if (globals.imageLoader.finished) {
+  if (imageLoader.finished) {
     // The user has spent enough time in the lobby before joining a game such that all of the
     // game-related images have had time to fully download. This means we do not have to show the
     // loading screen; skip directly to the next step.
-    finishedDownloadingImages();
+    finishedDownloadingImages(onDrawn);
     return;
   }
 
@@ -41,12 +48,14 @@ export function uiInit(): void {
 
   // The Loader object was not instantiated without a progress callback or a finished callback, so
   // attach those now.
-  globals.imageLoader.progressCallback = (done: number, total: number) => {
+  imageLoader.progressCallback = (done: number, total: number) => {
     progressLabel.text(`${done}/${total}`);
     loadingLayer.batchDraw();
   };
-  globals.imageLoader.finishedCallback = finishedDownloadingImages;
-  globals.imageLoader.failedCallback = showImageLoadError;
+  imageLoader.finishedCallback = () => {
+    finishedDownloadingImages(onDrawn);
+  };
+  imageLoader.failedCallback = showImageLoadError;
 
   const winW = globals.stage.width();
   const winH = globals.stage.height();
@@ -56,44 +65,39 @@ export function uiInit(): void {
     listening: false,
   });
 
-  const loadingLabel = new Konva.Text({
+  const labelHeight = LOADING_LABEL.h * winH;
+  const labelConfig = {
     fill: LABEL_COLOR,
     stroke: getCanvasColors().loadingLabelStroke,
-    strokeWidth: 0.001_056 * winH,
-    text: "Loading...",
+    strokeWidth: STROKE_WIDTH_UNIT * winH,
     align: "center",
     x: 0,
-    y: 0.7 * winH,
     width: winW,
-    height: 0.05 * winH,
-    fontFamily: "Arial",
+    height: labelHeight,
+    fontFamily: RANK_FONT_FAMILY,
     fontStyle: "bold",
-    fontSize: 0.05 * winH,
+    fontSize: labelHeight,
     listening: false,
+  } as const;
+
+  const loadingLabel = new Konva.Text({
+    ...labelConfig,
+    text: "Loading...",
+    y: LOADING_LABEL.loadingY * winH,
   });
   loadingLayer.add(loadingLabel);
 
   const progressLabel = new Konva.Text({
-    fill: LABEL_COLOR,
-    stroke: getCanvasColors().loadingLabelStroke,
-    strokeWidth: 0.001_056 * winH,
+    ...labelConfig,
     text: "0 / 0",
-    align: "center",
-    x: 0,
-    y: 0.8 * winH,
-    width: winW,
-    height: 0.05 * winH,
-    fontFamily: "Arial",
-    fontStyle: "bold",
-    fontSize: 0.05 * winH,
-    listening: false,
+    y: LOADING_LABEL.progressY * winH,
   });
   loadingLayer.add(progressLabel);
 
   globals.stage.add(loadingLayer);
 
   // Images may have loaded before this UI subscribed to progress updates.
-  globals.imageLoader.progress();
+  imageLoader.progress();
 }
 
 function showImageLoadError(filePath: string) {
@@ -102,26 +106,16 @@ function showImageLoadError(filePath: string) {
   );
 }
 
-function finishedDownloadingImages() {
+function finishedDownloadingImages(onDrawn: () => void) {
   // Build images for every card (with respect to the variant that we are playing and whether or not
   // we have the colorblind UI feature enabled).
-  globals.cardImages = drawCards(
-    globals.variant,
-    globals.lobby.settings.colorblindMode,
-    globals.lobby.settings.styleNumbers,
-    true,
-    drawCardsBrowser.cardRendererBackend,
-  );
+  globals.cardImages = getCardImages(globals.variant);
 
   // Draw the user interface.
-  drawUI();
+  drawUi();
 
   // Keyboard hotkeys can only be initialized once the clue buttons are drawn.
   keyboard.init();
 
-  // Tell the server that we are finished loading the UI and we now need the specific actions that
-  // have taken place in this game so far.
-  globals.lobby.conn!.send("getGameInfo2", {
-    tableID: globals.lobby.tableID,
-  });
+  onDrawn();
 }

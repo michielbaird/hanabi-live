@@ -1,4 +1,4 @@
-import type { SuitRankTuple } from "../types/SuitRankTuple";
+import type { SuitRankTuple } from "../types/SuitRankTuple.ts";
 
 export interface CardNote {
   /** The possible card identities included in the note (or an empty array if there are none). */
@@ -8,6 +8,7 @@ export interface CardNote {
   readonly needsFix: boolean;
   readonly questionMark: boolean;
   readonly exclamationMark: boolean;
+  readonly spook: boolean;
   readonly chopMoved: boolean;
   readonly finessed: boolean;
   readonly discardPermission: boolean;

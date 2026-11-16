@@ -1,49 +1,50 @@
-import { beforeEach, describe, expect, jest, test } from "@jest/globals";
-import { globals } from "../../UIGlobals";
-import * as ourHand from "../../ourHand";
-import * as replay from "../../replay";
-import * as cluesView from "./cluesView";
-import { onActiveChanged } from "./replayView";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 
-jest.mock("konva", () => ({}));
-jest.mock("../../../../tooltips", () => ({}));
-jest.mock("../../../../utils", () => ({}));
-jest.mock("../../konvaTooltips", () => ({}));
-jest.mock("../../timer", () => ({}));
-jest.mock("../../zen", () => ({}));
-jest.mock("../../ourHand", () => ({
-  checkSetDraggableAll: jest.fn(),
+vi.mock("konva", () => ({
+  default: {},
 }));
-jest.mock("../../replay", () => ({
-  adjustShuttles: jest.fn(),
+vi.mock("../../../../tooltips.ts", () => ({}));
+vi.mock("../../../../utils.ts", () => ({ escapeHtml: vi.fn() }));
+vi.mock("../../konvaTooltips.ts", () => ({}));
+vi.mock("../../timer.ts", () => ({}));
+vi.mock("../../zen.ts", () => ({ toggleZen: vi.fn() }));
+vi.mock("../../replay.ts", () => ({
+  adjustShuttles: vi.fn(),
 }));
-jest.mock("./cluesView", () => ({
-  refreshArrows: jest.fn(),
+vi.mock("./cluesView.ts", () => ({
+  refreshArrows: vi.fn(),
 }));
-jest.mock("../../UIGlobals", () => ({
+vi.mock("../../../../Globals.ts", () => ({
+  globals: {},
+}));
+vi.mock("../../UiGlobals.ts", () => ({
   globals: {
     elements: {
       replayArea: {
-        visible: jest.fn(),
+        visible: vi.fn(),
       },
       premoveCancelButton: {
-        show: jest.fn(),
+        show: vi.fn(),
       },
     },
     state: {
-      premove: null,
+      premove: undefined,
     },
     layers: {
       UI: {
-        batchDraw: jest.fn(),
+        batchDraw: vi.fn(),
       },
     },
   },
 }));
+const { globals } = await import("../../UiGlobals.ts");
+const replay = await import("../../replay.ts");
+const cluesView = await import("./cluesView.ts");
+const { onActiveChanged } = await import("./replayView.ts");
 
 describe("replay activation", () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   test("keeps replay controls hidden in a hypothetical when observers reinitialize", () => {
@@ -58,7 +59,6 @@ describe("replay activation", () => {
     );
     expect(replay.adjustShuttles).toHaveBeenCalledWith(true);
     expect(cluesView.refreshArrows).toHaveBeenCalledWith(true);
-    expect(ourHand.checkSetDraggableAll).toHaveBeenCalledTimes(1);
   });
 
   test("preserves visible replay controls outside a hypothetical", () => {
@@ -80,6 +80,5 @@ describe("replay activation", () => {
     expect(globals.elements.replayArea?.visible).toHaveBeenLastCalledWith(true);
     expect(replay.adjustShuttles).not.toHaveBeenCalled();
     expect(cluesView.refreshArrows).toHaveBeenCalledWith(false);
-    expect(ourHand.checkSetDraggableAll).toHaveBeenCalledTimes(1);
   });
 });

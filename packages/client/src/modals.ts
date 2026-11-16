@@ -1,510 +1,359 @@
 // Modals (boxes that hover on top of the UI).
 
-import type { Rank, Suit, SuitRankTuple, Variant } from "@hanabi-live/game";
-import { assertDefined, parseIntSafe } from "complete-common";
-import { globals } from "./Globals";
-import * as noteIdentity from "./game/reducers/noteIdentity";
-import { SoundType } from "./game/types/SoundType";
-import type { HanabiCard } from "./game/ui/HanabiCard";
-import { morphReplayFromModal } from "./game/ui/HanabiCardClick";
-import * as lobbyNav from "./lobby/nav";
-import * as sounds from "./sounds";
-import { getHTMLElement, getHTMLInputElement } from "./utils";
-
-/** Used by the morph dialog. */
-type DragAreaType = "playArea" | "discardArea" | null;
+import type {
+  CardIdentity,
+  CardOrder,
+  SuitRankTuple,
+  Variant,
+} from "@hanabi-live/game";
+import { emojiPickerClosed } from "./emojiPickerSlice.ts";
+import { morphCard } from "./game/hypothetical.ts";
+import * as noteIdentity from "./game/reducers/noteIdentity.ts";
+import type { MessageModal } from "./messageModalSlice.ts";
+import { messageModalClosed, messageModalShown } from "./messageModalSlice.ts";
+import type { PromptModal } from "./promptModalSlice.ts";
+import { promptModalClosed, promptModalShown } from "./promptModalSlice.ts";
+import { errorOccurredChanged } from "./sessionSlice.ts";
+import { store } from "./store.ts";
+import { getHtmlElement } from "./utils.ts";
 
 let allowCloseModal = true;
-let currentModal: HTMLElement | null = null;
-let morphDragArea: DragAreaType = null;
+/** An administrator's reason for a restart or stop, shown until its warning modal is closed. */
+let downtimeMessage: string | undefined;
+let currentModal: HTMLElement | undefined;
+/** The element that had focus before the modal opened, which gets focus back when it closes. */
+let lastActiveElement: HTMLElement | undefined;
+let confirmModalOnConfirm: (() => void) | undefined;
+let confirmModalOnCancel: (() => void) | undefined;
+let idleModalKeepPlaying: (() => void) | undefined;
+let promptOnSubmit: ((answer: string) => void) | undefined;
+let promptOnCancel: (() => void) | undefined;
 
-const createGameSubmit = getHTMLElement("#create-game-submit");
-const createTablePassword = getHTMLInputElement("#createTablePassword");
-const errorModalButton = getHTMLElement("#error-modal-button");
-const errorModalDescription = getHTMLElement("#error-modal-description");
-const pageCover = getHTMLElement("#page-cover");
-const modalsContainer = getHTMLElement("#modals-container");
-const morphModalButtonCancel = getHTMLElement("#morph-modal-button-cancel");
-const morphModalButtonOK = getHTMLElement("#morph-modal-button-ok");
-const morphModalDescription = getHTMLElement("#morph-modal-description");
-const morphModalTextbox = getHTMLInputElement("#morph-modal-textbox");
-const passwordModalCancel = getHTMLElement("#password-modal-cancel");
-const passwordModalID = getHTMLInputElement("#password-modal-id");
-const passwordModalPassword = getHTMLInputElement("#password-modal-password");
-const passwordModalSubmit = getHTMLElement("#password-modal-submit");
-const warningModalButton = getHTMLElement("#warning-modal-button");
-const warningModalDescription = getHTMLElement("#warning-modal-description");
+/** The modal that "MessageModal.tsx" renders the content of. */
+const MESSAGE_MODAL_ID = "message-modal";
+/** The modal that "PromptModal.tsx" renders the content of. */
+const PROMPT_MODAL_ID = "prompt-modal";
+export const EMOJI_MODAL_ID = "emoji-modal";
+
+const modalDialog = getModalDialog();
+const modalsContainer = getHtmlElement("#modals-container");
+
+function getModalDialog(): HTMLDialogElement {
+  const element = document.querySelector("#modal-dialog");
+  if (!(element instanceof HTMLDialogElement)) {
+    throw new TypeError("Failed to find the modal dialog.");
+  }
+  return element;
+}
 
 export function init(): void {
-  // Close modal on escape press or by clicking outside.
-  pageCover.addEventListener("pointerdown", () => {
-    closeModals();
-  });
-  document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && currentModal !== null) {
+  // The dialog covers the screen, so a click on the dialog itself is a click beside the modal.
+  modalDialog.addEventListener("pointerdown", (event) => {
+    if (event.target === modalDialog) {
       closeModals();
     }
   });
-
-  // Password modal setup.
-  passwordModalPassword.addEventListener("keypress", (event) => {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      passwordSubmit();
+  document.addEventListener("keydown", (event) => {
+    if (currentModal === undefined || event.key !== "Escape") {
+      return;
     }
-  });
-  passwordModalSubmit.addEventListener("pointerdown", () => {
-    passwordSubmit();
-  });
-  passwordModalCancel.addEventListener("pointerdown", () => {
+
+    // The key press must not also act on the screen behind the modal (e.g. leaving a replay). It
+    // must not close the dialog either, because some modals cannot be closed.
+    event.preventDefault();
+    event.stopImmediatePropagation();
     closeModals();
   });
-
-  // Warning modal setup.
-  warningModalButton.addEventListener("pointerdown", () => {
+  // Other requests to close the dialog, such as the back gesture on Android.
+  modalDialog.addEventListener("cancel", (event) => {
+    event.preventDefault();
     closeModals();
   });
-
-  // Error modal setup.
-  errorModalButton.addEventListener("pointerdown", () => {
-    globalThis.location.reload();
-  });
-
-  // Create Game modal setup.
-  createTablePassword.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") {
-      createGameSubmit.click();
-    }
-  });
-
-  // Morph modal textbox.
-  const morphTextboxObserver = new MutationObserver(() => {
-    const { suit } = morphModalTextbox.dataset;
-    const { rank } = morphModalTextbox.dataset;
-    morphModalTextbox.value = `${suit} ${rank}`;
-  });
-  morphTextboxObserver.observe(morphModalTextbox, {
-    attributes: true,
-    attributeFilter: ["data-suit", "data-rank"],
-  });
-  morphModalTextbox.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      morphModalButtonOK.click();
-    } else if (event.key === "Escape") {
-      event.preventDefault();
-      event.stopPropagation();
-      morphModalButtonCancel.click();
+  // The browser can close the dialog without a "cancel" event that we can stop.
+  modalDialog.addEventListener("close", () => {
+    if (currentModal !== undefined && !modalDialog.open) {
+      if (allowCloseModal) {
+        closeModals();
+      } else {
+        modalDialog.showModal();
+      }
     }
   });
 }
 
-function passwordSubmit() {
-  const tableIDString = passwordModalID.value;
-  const tableID = parseIntSafe(tableIDString); // The server expects this as a number
-
-  const password = passwordModalPassword.value;
-
-  globals.conn!.send("tableJoin", {
-    tableID,
-    password,
+export function askForPassword(tableId: number): void {
+  showMessageModal({
+    type: "password",
+    tableId,
   });
-
-  // Record the password in local storage (cookie).
-  localStorage.setItem("joinTablePassword", password);
-
-  closeModals();
 }
 
-export function askForPassword(tableID: number): void {
-  allowCloseModal = true;
-
-  passwordModalID.setAttribute("value", tableID.toString());
-
-  // We want to fill in the text field with the player's last typed-in password.
-  const password = localStorage.getItem("joinTablePassword");
-  if (password !== null && password !== "") {
-    passwordModalPassword.value = password;
-  }
-
-  // eslint-disable-next-line func-style, unicorn/consistent-function-scoping
-  const ready = () => {
-    passwordModalPassword.focus();
-    passwordModalPassword.select();
-  };
-  showModal("#password-modal", true, undefined, ready);
+/** A card that the morph dialog changes into another card in a hypothetical. */
+export interface MorphTarget {
+  readonly order: CardOrder;
+  /** The identity that the dialog starts with. */
+  readonly identity: CardIdentity;
+  /** The cards that the card can be, which the dialog marks. */
+  readonly possibilities: readonly SuitRankTuple[];
 }
 
+/**
+ * Asks which card a card in a hypothetical is, and changes it into that card. A card of unknown
+ * identity that is played or discarded in a hypothetical asks for its identity first: then `onMove`
+ * gets whether the card changed, after the dialog closes, so that the move goes on only if it did.
+ */
 export function askForMorph(
-  card: HanabiCard | null,
+  target: MorphTarget,
   variant: Variant,
-  cardImages: ReadonlyMap<string, HTMLCanvasElement>,
-  draggedTo: DragAreaType = null,
+  onMove?: (changed: boolean) => void,
 ): void {
-  morphDragArea = draggedTo;
-  allowCloseModal = false;
-
-  const { suits, ranks } = variant;
-  const start =
-    card === null ? { suitIndex: null, rank: null } : card.getMorphedIdentity();
-  const startSuitIndex = start.suitIndex ?? 0;
-  const startRank = start.rank ?? 1;
-
-  const possibilities = card === null ? [] : card.state.possibleCardsForEmpathy;
-  const startSuit = suits[startSuitIndex];
-  assertDefined(
-    startSuit,
-    `Failed to get the suit at index: ${startSuitIndex}`,
+  showPrompt(
+    {
+      type: "morph",
+      description:
+        onMove === undefined
+          ? "Select the card you want to morph it into."
+          : "What will the card will be for the purposes of this hypothetical?",
+      variantId: variant.id,
+      startSuitIndex: target.identity.suitIndex ?? 0,
+      startRank: target.identity.rank ?? 1,
+      possibilities: target.possibilities,
+    },
+    (answer) => {
+      const cardIdentity = noteIdentity.parseIdentity(variant, answer);
+      if (cardIdentity !== undefined) {
+        morphCard(target.order, cardIdentity);
+      }
+      onMove?.(cardIdentity !== undefined);
+    },
+    () => {
+      onMove?.(false);
+    },
+    false,
   );
-
-  fillMorphModalWithRadios(
-    "#morph-modal-cards",
-    suits,
-    ranks,
-    startSuit,
-    startRank,
-    possibilities,
-    cardImages,
-  );
-
-  showModal("#morph-modal", false);
-  setTimeout(() => {
-    morphModalTextbox.focus();
-    morphModalTextbox.select();
-  }, 100);
-
-  if (draggedTo === null) {
-    // If action is null, the function was called from "HanabiCardClick.ts" during replay hypo.
-    morphModalDescription.textContent =
-      "Select the card you want to morph it into.";
-
-    // We can't use "addEventListener" because we can't easily remove the previous listener.
-    // eslint-disable-next-line unicorn/prefer-add-event-listener
-    morphModalButtonOK.onclick = () => {
-      morphReplayOkButton(card, variant);
-    };
-
-    // We can't use "addEventListener" because we can't easily remove the previous listener.
-    // eslint-disable-next-line unicorn/prefer-add-event-listener
-    morphModalButtonCancel.onclick = morphReplayCancelButton;
-  } else {
-    // The function was called from "LayoutChild.ts" during in-game hypo.
-    morphModalDescription.textContent =
-      "What will the card will be for the purposes of this hypothetical?";
-
-    // We can't use "addEventListener" because we can't easily remove the previous listener.
-    // eslint-disable-next-line unicorn/prefer-add-event-listener
-    morphModalButtonOK.onclick = () => {
-      morphInGameOkButton(card, variant);
-    };
-
-    // We can't use "addEventListener" because we can't easily remove the previous listener.
-    // eslint-disable-next-line unicorn/prefer-add-event-listener
-    morphModalButtonCancel.onclick = () => {
-      morphInGameCancelButton(card);
-    };
-  }
-}
-
-function morphFinishLayout(card: HanabiCard | null) {
-  // Finish drag action.
-  if (card === null) {
-    return;
-  }
-
-  card.getLayoutParent().continueDragAction(morphDragArea);
-}
-
-function morphReplayOkButton(
-  card: HanabiCard | null,
-  variant: Variant,
-): boolean {
-  allowCloseModal = true;
-  closeModals();
-
-  const cardIdentity = noteIdentity.parseIdentity(
-    variant,
-    morphModalTextbox.value,
-  );
-
-  if (cardIdentity === undefined) {
-    // The text that they entered does not correspond to a card.
-    return false;
-  }
-
-  morphReplayFromModal(card!, cardIdentity);
-  return true;
-}
-
-function morphInGameOkButton(card: HanabiCard | null, variant: Variant) {
-  const success = morphReplayOkButton(card, variant);
-  if (!success) {
-    morphDragArea = null;
-  }
-
-  morphFinishLayout(card);
-}
-
-function morphReplayCancelButton() {
-  allowCloseModal = true;
-  closeModals();
-}
-
-function morphInGameCancelButton(card: HanabiCard | null) {
-  morphReplayCancelButton();
-  morphDragArea = null;
-  morphFinishLayout(card);
 }
 
 export function showWarning(msg: string): void {
-  allowCloseModal = true;
-
-  // Warning messages include intentional markup from the server and client.
-  // eslint-disable-next-line unicorn/no-unsafe-dom-html
-  warningModalDescription.innerHTML = msg;
+  // An error stops the connection and can only be left by reloading, so a later (or delayed)
+  // warning must not replace it.
+  if (store.getState().session.errorOccurred) {
+    return;
+  }
 
   // Store the screen's active element.
-  globals.lastActiveElement = document.activeElement as HTMLElement;
+  lastActiveElement = document.activeElement as HTMLElement;
+  showMessageModal({
+    type: "warning",
+    html: msg,
+  });
+}
 
-  // Show the modal and focus the close button.
-  // eslint-disable-next-line func-style, unicorn/consistent-function-scoping
-  const ready = () => {
-    warningModalButton.focus();
-  };
-  showModal("#warning-modal", true, undefined, ready);
+/**
+ * Warns that an ongoing game will end soon because nobody has taken a turn, counting down until it
+ * ends. Players get a button that keeps the game going.
+ */
+export function showIdleWarning(
+  remainingMs: number,
+  onKeepPlaying: (() => void) | undefined,
+): void {
+  if (store.getState().session.errorOccurred) {
+    return;
+  }
+
+  lastActiveElement = document.activeElement as HTMLElement;
+  showMessageModal({
+    type: "idle",
+    deadline: Date.now() + remainingMs,
+    canKeepPlaying: onKeepPlaying !== undefined,
+  });
+  // Showing the modal closes any previous one, so the callback must be stored afterward.
+  idleModalKeepPlaying = onKeepPlaying;
+}
+
+/** Keeps the game of the idle warning going. */
+export function keepPlaying(): void {
+  idleModalKeepPlaying?.();
+  closeIdleWarning();
+}
+
+/** Closes the idle warning (and only it), for example after a turn keeps the game going. */
+export function closeIdleWarning(): void {
+  if (
+    currentModal?.id === MESSAGE_MODAL_ID
+    && store.getState().messageModal.modal?.type === "idle"
+  ) {
+    closeModals();
+  }
+}
+
+/**
+ * Asks the user to confirm an action. `onCancel` runs however the modal is dismissed, including
+ * when another modal replaces it.
+ */
+export function askForConfirmation(
+  title: string,
+  description: string,
+  confirmText: string,
+  onConfirm: () => void,
+  onCancel?: () => void,
+): void {
+  // An error stops the connection and can only be left by reloading.
+  if (store.getState().session.errorOccurred) {
+    onCancel?.();
+    return;
+  }
+
+  // Store the screen's active element.
+  lastActiveElement = document.activeElement as HTMLElement;
+  showMessageModal({
+    type: "confirm",
+    title,
+    description,
+    confirmText,
+  });
+
+  // Showing the modal closes any previous one (and cancels its confirmation), so the new callbacks
+  // must be stored afterward.
+  confirmModalOnConfirm = onConfirm;
+  confirmModalOnCancel = onCancel;
+}
+
+/** Confirms the action of the confirm modal. */
+export function confirm(): void {
+  const onConfirm = confirmModalOnConfirm;
+  confirmModalOnConfirm = undefined;
+  confirmModalOnCancel = undefined;
+  closeModals();
+  onConfirm?.();
+}
+
+/** The reason stays visible if a reconnect error (such as an outdated client) replaces it. */
+export function showDowntime(msg: string): void {
+  showWarning(msg);
+  downtimeMessage = msg;
 }
 
 export function showError(msg: string): void {
   // Do nothing if we are already showing the error modal.
-  if (globals.errorOccurred) {
+  if (store.getState().session.errorOccurred) {
     return;
   }
-  globals.errorOccurred = true;
+  // This also clears the buttons of the navigation bar.
+  store.dispatch(errorOccurredChanged(true));
 
-  // Clear out the top navigation buttons.
-  lobbyNav.show("nothing");
-
-  // Error messages include the formatted stack trace from "errors.ts".
-  // eslint-disable-next-line unicorn/no-unsafe-dom-html
-  errorModalDescription.innerHTML = msg;
-  showModal("#error-modal", false);
-
-  // Play a sound if the server has shut down.
-  if (msg.includes("The server is going down for scheduled maintenance.")) {
-    sounds.play(SoundType.DoubleDiscard);
-  }
+  showMessageModal(
+    {
+      type: "error",
+      html:
+        downtimeMessage === undefined
+          ? msg
+          : `${downtimeMessage}<br /><br />${msg}`,
+    },
+    false,
+  );
 }
 
-/** Initializes a modal for a specific element. */
-export function initModal(
-  buttonSelector: string,
-  selector: string,
-  before?: () => boolean,
-  test?: () => boolean,
-  focus?: (() => unknown) | string,
+/**
+ * Shows a prompt, which runs `onSubmit` with the answer. `onCancel` runs however the prompt is
+ * dismissed without an answer. A prompt that cannot be closed waits for its answer or
+ * `cancelPrompt`.
+ */
+export function showPrompt(
+  prompt: PromptModal,
+  onSubmit: (answer: string) => void,
+  onCancel?: () => void,
+  allowClose = true,
 ): void {
-  const button = getHTMLElement(buttonSelector);
+  showModal(`#${PROMPT_MODAL_ID}`, allowClose);
+  store.dispatch(promptModalShown(prompt));
+  // Showing the modal closes any previous one (and cancels its prompt), so the new callbacks must
+  // be stored afterward.
+  promptOnSubmit = onSubmit;
+  promptOnCancel = onCancel;
+}
 
-  button.addEventListener("click", () => {
-    if (test !== undefined) {
-      const result = test();
-      if (!result) {
-        return;
-      }
-    }
+/** Closes the prompt, and runs its function with the answer. */
+export function submitPrompt(answer: string): void {
+  const onSubmit = promptOnSubmit;
+  promptOnSubmit = undefined;
+  promptOnCancel = undefined;
+  allowCloseModal = true;
+  closeModals();
+  onSubmit?.(answer);
+}
 
-    showModal(selector, true, before);
+/** Closes the prompt without an answer, even one that cannot otherwise be closed. */
+export function cancelPrompt(): void {
+  allowCloseModal = true;
+  closeModals();
+}
 
-    if (focus === undefined) {
-      return;
-    }
-
-    setTimeout(() => {
-      if (typeof focus === "string") {
-        getHTMLElement(focus).focus();
-      } else {
-        focus();
-      }
-    }, 100);
+/** Shows the emote and emoji picker, with the focus in its search input. */
+export function showEmojiModal(searchInput: HTMLInputElement): void {
+  showModal(`#${EMOJI_MODAL_ID}`, true, () => {
+    searchInput.focus();
   });
 }
 
-export function showPrompt(
-  selector: string,
-  test: (() => unknown) | null = null,
-  focusElement: HTMLInputElement | null = null,
-  clickButtonElement: HTMLElement | null = null,
-): void {
-  // eslint-disable-next-line
-  if (!(test?.call(null) ?? true)) {
-    return;
-  }
-
-  if (focusElement !== null && clickButtonElement !== null) {
-    // We can't use "addEventListener" because we can't easily remove the previous listener.
-    // eslint-disable-next-line unicorn/prefer-add-event-listener
-    focusElement.onkeydown = (event) => {
-      if (event.key === "Enter") {
-        clickButtonElement.click();
-      }
-    };
-  }
-
-  showModal(selector, true);
-
-  if (focusElement !== null) {
-    setTimeout(() => {
-      focusElement.focus();
-      const oldType = focusElement.type;
-      if (oldType === "number" || oldType === "text") {
-        const { length } = focusElement.value;
-        // Cannot put the cursor past the text unless it's a text input.
-        focusElement.type = "text";
-        focusElement.setSelectionRange(0, length);
-        focusElement.type = oldType;
-      }
-    }, 100);
-  }
-}
-
-export function closeModals(fast = false): void {
+export function closeModals(): void {
   if (!allowCloseModal) {
     return;
   }
 
-  pageCover.classList.remove("show");
-  if (currentModal !== null) {
+  downtimeMessage = undefined;
+  idleModalKeepPlaying = undefined;
+  if (currentModal?.id === MESSAGE_MODAL_ID) {
+    store.dispatch(messageModalClosed());
+  }
+  if (currentModal?.id === PROMPT_MODAL_ID) {
+    store.dispatch(promptModalClosed());
+  }
+  if (currentModal?.id === EMOJI_MODAL_ID) {
+    store.dispatch(emojiPickerClosed());
+  }
+  if (currentModal !== undefined) {
     currentModal.classList.add("hidden");
-    currentModal.remove();
     modalsContainer.append(currentModal);
-    currentModal = null;
+    currentModal = undefined;
+  }
+  modalDialog.close();
+
+  if (lastActiveElement !== undefined) {
+    lastActiveElement.focus();
   }
 
-  if (fast) {
-    pageCover.style.display = "none";
-  } else {
-    setTimeout(() => {
-      pageCover.style.display = "none";
-    }, 100);
-  }
+  const onCancel = confirmModalOnCancel;
+  confirmModalOnConfirm = undefined;
+  confirmModalOnCancel = undefined;
+  onCancel?.();
 
-  if (globals.lastActiveElement !== null) {
-    globals.lastActiveElement.focus();
-  }
+  const onPromptCancel = promptOnCancel;
+  promptOnSubmit = undefined;
+  promptOnCancel = undefined;
+  onPromptCancel?.();
 }
 
 export function isModalVisible(): boolean {
-  return currentModal !== null;
+  return currentModal !== undefined;
 }
 
-function showModal(
-  selector: string,
-  allowClose: boolean,
-  before?: () => boolean,
-  ready?: () => void,
-) {
-  closeModals(true);
+/** Shows a message modal. Its buttons focus themselves once it renders. */
+function showMessageModal(modal: MessageModal, allowClose = true) {
+  showModal(`#${MESSAGE_MODAL_ID}`, allowClose);
+  store.dispatch(messageModalShown(modal));
+}
 
-  const element = getHTMLElement(selector);
+function showModal(selector: string, allowClose: boolean, ready?: () => void) {
+  closeModals();
+
+  const element = getHtmlElement(selector);
 
   currentModal = element;
   allowCloseModal = allowClose;
 
   element.classList.add("modal");
-
-  // We can't use "addEventListener" because we can't easily remove the previous listener.
-  // eslint-disable-next-line unicorn/prefer-add-event-listener
-  element.onpointerdown = (event) => {
-    // Do not bubble clicks to pageCover.
-    event.stopPropagation();
-  };
-
-  if (before !== undefined) {
-    const result = before();
-    if (!result) {
-      return;
-    }
-  }
-
-  pageCover.append(element);
-  pageCover.style.display = "flex";
-  pageCover.classList.add("show");
-
-  setTimeout(() => {
-    pageCover.append(element);
-    element.classList.remove("hidden");
-    if (ready !== undefined) {
-      ready();
-    }
-  }, 100);
-}
-
-function fillMorphModalWithRadios(
-  element: string,
-  suits: readonly Suit[],
-  ranks: readonly Rank[],
-  startSuit: Suit,
-  startRank: Rank,
-  possibilities: readonly SuitRankTuple[],
-  cardImages: ReadonlyMap<string, HTMLCanvasElement>,
-) {
-  const placeholder = getHTMLElement(element);
-  placeholder.replaceChildren();
-  const table = document.createElement("table");
-  table.classList.add("slim-table");
-
-  for (const rank of ranks) {
-    const row = document.createElement("tr");
-
-    for (const [suitIndex, suit] of suits.entries()) {
-      const cell = document.createElement("td");
-      const possibleCardIdentity = possibilities.some(
-        (possibility) =>
-          possibility[0] === suitIndex && possibility[1] === rank,
-      );
-      if (!possibleCardIdentity) {
-        cell.classList.add("faded");
-      }
-      const radio = document.createElement("input");
-      const radioId = `morph-radio-${suitIndex}-${rank}`;
-
-      radio.setAttribute("type", "radio");
-      radio.setAttribute("name", "morph-cards");
-      radio.setAttribute("id", radioId);
-      radio.setAttribute("value", `${suit.displayName} ${rank}`);
-      cell.append(radio);
-
-      const label = document.createElement("label");
-      label.setAttribute("for", radioId);
-      const cardImageLabel = `card-${suit.name}-${rank}`;
-      const image = cardImages.get(cardImageLabel);
-      assertDefined(
-        image,
-        `Failed to get the card image with label: ${cardImageLabel}`,
-      );
-      label.append(image);
-      cell.append(label);
-
-      if (suit === startSuit && rank === startRank) {
-        radio.setAttribute("checked", "checked");
-        morphModalTextbox.dataset["suit"] = suit.displayName;
-        morphModalTextbox.dataset["rank"] = rank === 7 ? "S" : rank.toString();
-      }
-      radio.addEventListener("change", () => {
-        if (!radio.checked) {
-          return;
-        }
-
-        // Set textbox data attribute.
-        morphModalTextbox.dataset["suit"] = suit.displayName;
-        morphModalTextbox.dataset["rank"] = rank === 7 ? "S" : rank.toString();
-      });
-
-      row.append(cell);
-    }
-
-    table.append(row);
-  }
-
-  placeholder.append(table);
+  element.classList.remove("hidden");
+  modalDialog.append(element);
+  modalDialog.showModal();
+  ready?.();
 }

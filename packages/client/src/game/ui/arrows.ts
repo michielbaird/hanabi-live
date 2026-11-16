@@ -1,38 +1,72 @@
 // Arrows are used to show which cards are touched by a clue (and to highlight things in shared
 // replays).
 
-import type { CardOrder, Clue, PlayerIndex, Suit } from "@hanabi-live/game";
+import type { Clue, HiddenClue, PlayerIndex, Suit } from "@hanabi-live/game";
 import {
-  ClueType,
+  EVEN_RANK_CLUE,
   getCharacterNameForPlayer,
   isCardDiscarded,
   isCardInPlayerHand,
   isCardPlayed,
 } from "@hanabi-live/game";
-import { assertEnumValue } from "complete-common";
 import Konva from "konva";
-import type * as KonvaContext from "konva/types/Context";
-import type { KonvaEventObject } from "konva/types/Node";
-import * as tooltips from "../../tooltips";
-import { ReplayActionType } from "../types/ReplayActionType";
-import { ReplayArrowOrder } from "../types/ReplayArrowOrder";
-import { CardLayout } from "./CardLayout";
-import { HanabiCard } from "./HanabiCard";
-import { globals } from "./UIGlobals";
+import type * as KonvaContext from "konva/lib/Context";
+import type { KonvaEventObject } from "konva/lib/Node";
+import { store } from "../../store.ts";
+import * as tooltips from "../../tooltips.ts";
+import type { ArrowTarget } from "../highlightArrow.ts";
+import { canDrawArrow, getToggledArrow, sendArrow } from "../highlightArrow.ts";
+import { getViewPlayerIndex } from "../ourSeat.ts";
+import { CardLayout } from "./CardLayout.ts";
+import { HanabiCard } from "./HanabiCard.ts";
+import { globals } from "./UiGlobals.ts";
+import * as cluePreview from "./cluePreview.ts";
 import {
   ARROW_COLOR,
   CARD_ANIMATION_DELAY_SECONDS,
   CARD_ANIMATION_LENGTH_SECONDS,
-} from "./constants";
-import type { Arrow } from "./controls/Arrow";
-import type { NodeWithTooltip } from "./controls/NodeWithTooltip";
-import { StrikeSquare } from "./controls/StrikeSquare";
-import { drawPip } from "./drawPip";
-import { getCardOrStackBase } from "./getCardOrStackBase";
-import * as konvaHelpers from "./konvaHelpers";
+  FULL_TURN_DEGREES,
+  HALF_TURN_DEGREES,
+  RIGHT_MOUSE_BUTTON,
+  STRIKE_ARROW_TARGETS,
+} from "./constants.ts";
+import type { Arrow } from "./controls/Arrow.ts";
+import type { NodeWithTooltip } from "./controls/NodeWithTooltip.ts";
+import { StrikeSquare } from "./controls/StrikeSquare.ts";
+import { drawPip } from "./drawPip.ts";
+import { getCardOrStackBase } from "./getCardOrStackBase.ts";
+import * as konvaHelpers from "./konvaHelpers.ts";
+
+/**
+ * Where an arrow points on an element that is not a card or a text label, as fractions of the
+ * element's width and height from its top-left corner.
+ */
+const ARROW_ANCHOR = {
+  /** The top middle of the deck. */
+  DECK: {
+    x: 0.5,
+    y: 0.1,
+  },
+
+  /** The first digit of the turn, score, plays, and clues numbers. */
+  SCORE_AREA_NUMBER: {
+    x: 0.15,
+  },
+
+  /** The max score number, which follows the score. */
+  MAX_SCORE: {
+    x: 0.7,
+  },
+} as const;
+
+/**
+ * How far an arrow pointing at a card stops short of the card's center, as a fraction of the stage
+ * height.
+ */
+const CARD_ARROW_BACKOFF = 0.075;
 
 function getClueArrowColor(
-  element: Konva.Node | null,
+  element: Konva.Node | undefined,
   preview: boolean,
 ): string {
   if (!(element instanceof HanabiCard)) {
@@ -44,31 +78,51 @@ function getClueArrowColor(
   // least one positive clue on it already, it will be retouched by the next clue.
   if (
     element.state.numPositiveClues >= 2
-    || (element.state.numPositiveClues >= 1 && preview)
+    || (preview && element.state.numPositiveClues >= 1)
   ) {
     return ARROW_COLOR.RETOUCHED;
   }
 
   // if H-Group features are enabled, use a different color for cards that have been chop-moved
-  if (globals.lobby.settings.hyphenatedConventions && element.note.chopMoved) {
+  if (
+    store.getState().session.settings.hGroupConventions
+    && element.note.chopMoved
+  ) {
     return ARROW_COLOR.CM_TOUCHED;
   }
 
   return ARROW_COLOR.DEFAULT;
 }
 
-export function hideAll(): void {
+/** Whether the arrows show a clue that the player is considering giving. */
+let potentialClueShown = false;
+
+export function isPotentialClueShown(): boolean {
+  return potentialClueShown;
+}
+
+/** Hides every arrow. Pass true when the arrows will next show a potential clue. */
+export function hideAll(potentialClue = false): void {
+  potentialClueShown = potentialClue;
+
+  // A potential clue can be previewed only while its arrows are shown.
+  cluePreview.setPotentialClue(undefined);
+
   let changed = false;
   for (const arrow of globals.elements.arrows) {
-    if (arrow.pointingTo !== null) {
-      changed = true;
-      arrow.pointingTo = null;
-      arrow.hide();
-      if (arrow.tween !== null) {
-        arrow.tween.destroy();
-        arrow.tween = null;
-      }
+    if (arrow.pointingTo === undefined) {
+      continue;
     }
+
+    changed = true;
+    arrow.pointingTo = undefined;
+    arrow.hide();
+    if (arrow.tween === undefined) {
+      continue;
+    }
+
+    arrow.tween.destroy();
+    arrow.tween = undefined;
   }
   if (changed) {
     globals.layers.arrow.batchDraw();
@@ -77,9 +131,9 @@ export function hideAll(): void {
 
 export function set(
   i: number,
-  element: Konva.Node | null,
-  giverPlayerIndex: PlayerIndex | null,
-  clue: Clue | null,
+  element: Konva.Node | undefined,
+  giverPlayerIndex: PlayerIndex | undefined,
+  clue: Clue | HiddenClue | undefined,
   preview = false,
   immediate = false,
 ): void {
@@ -108,27 +162,26 @@ export function set(
       rot = element.parent.parent.origRotation;
     }
     if (
-      (!globals.lobby.settings.keldonMode
-        && element.state.location === globals.metadata.ourPlayerIndex)
-      || (globals.lobby.settings.keldonMode
-        && element.state.location !== globals.metadata.ourPlayerIndex
+      (!store.getState().session.settings.keldonMode
+        && element.state.location === getViewPlayerIndex(globals.metadata))
+      || (store.getState().session.settings.keldonMode
+        && element.state.location !== getViewPlayerIndex(globals.metadata)
         && isCardInPlayerHand(element.state))
     ) {
       // In BGA mode, invert the arrows on our hand (so that it doesn't get cut off by the top of
       // the screen). In Keldon mode, invert the arrows for all other players.
-      rot += 180;
+      rot += HALF_TURN_DEGREES;
     }
   }
   arrow.rotation(rot);
 
   // We want the text to always be right-side up (e.g. have a rotation of 0)
-  arrow.text.rotation(360 - rot);
+  arrow.text.rotation(FULL_TURN_DEGREES - rot);
 
   // Set the arrow features.
-  if (clue === null) {
+  if (clue === undefined) {
     // This is a highlight arrow.
     const color = ARROW_COLOR.HIGHLIGHT;
-    arrow.base.stroke(color);
     arrow.base.fill(color);
 
     // Do not draw the circle.
@@ -138,7 +191,6 @@ export function set(
     // This is a clue arrow. Compute color using a small helper for clarity.
     const color = getClueArrowColor(element, preview);
 
-    arrow.base.stroke(color);
     arrow.base.fill(color);
 
     // Clue arrows have a circle that shows the type of clue given.
@@ -146,8 +198,10 @@ export function set(
       giverPlayerIndex,
       globals.metadata.characterAssignments,
     );
+    const visibleType = clue.type ?? clue.visibleType;
     if (
-      globals.variant.duck
+      visibleType === undefined
+      || globals.variant.duck
       || (giverCharacterName === "Quacker" && !globals.state.finished)
     ) {
       // Do not show the circle in variants where the clue types are supposed to be hidden.
@@ -156,13 +210,13 @@ export function set(
     } else {
       arrow.circle.show();
 
-      switch (clue.type) {
-        case ClueType.Color: {
+      switch (visibleType) {
+        case "color": {
           arrow.text.hide();
 
           // The circle for color clues should have a black border and a fill matching the color.
           arrow.circle.stroke("black");
-          if (globals.variant.cowAndPig) {
+          if (clue.type === undefined || globals.variant.cowAndPig) {
             // The specific clue color is hidden in "Cow & Pig" variants.
             arrow.circle.fill("white");
           } else {
@@ -175,7 +229,7 @@ export function set(
             arrow.circle.fill(clueColor.fill);
 
             // Additionally, draw the suit pip in colorblind mode.
-            if (globals.lobby.settings.colorblindMode) {
+            if (store.getState().session.settings.colorblindMode) {
               if (typeof clue.value === "number") {
                 throw new TypeError(
                   "The clue value was a number for a color clue.",
@@ -193,8 +247,6 @@ export function set(
                   );
                 });
                 arrow.suitPip!.show();
-              } else {
-                arrow.suitPip!.hide();
               }
             }
           }
@@ -202,15 +254,13 @@ export function set(
           break;
         }
 
-        case ClueType.Rank: {
-          let text = clue.value.toString();
-          if (globals.variant.cowAndPig) {
-            text = "#";
-          }
-          if (globals.variant.oddsAndEvens) {
-            text = "O";
-            if (clue.value === 2) {
-              text = "E";
+        case "rank": {
+          // The specific clue rank is hidden in "Cow & Pig" variants.
+          let text = "#";
+          if (clue.type === "rank" && !globals.variant.cowAndPig) {
+            text = clue.value.toString();
+            if (globals.variant.oddsAndEvens) {
+              text = clue.value === EVEN_RANK_CLUE ? "E" : "O";
             }
           }
           arrow.text.text(text);
@@ -220,25 +270,21 @@ export function set(
           arrow.circle.stroke("white");
           arrow.circle.fill("black");
 
-          if (globals.lobby.settings.colorblindMode) {
-            arrow.suitPip!.hide();
-          }
-
           break;
         }
       }
     }
   }
 
-  if (arrow.tween !== null) {
+  if (arrow.tween !== undefined) {
     arrow.tween.destroy();
-    arrow.tween = null;
+    arrow.tween = undefined;
   }
   if (
     immediate
+    || giverPlayerIndex === undefined
     || globals.animateFast
     || globals.isResizing
-    || giverPlayerIndex === null
   ) {
     const pos = getPos(element!, rot);
     arrow.setAbsolutePosition(pos);
@@ -257,8 +303,8 @@ function getPos(element: Konva.Node, rot: number) {
     // current position.
     if (
       element.tweening
-      && element.tweenFinalPosition !== null
-      && element.tweenFinalScale !== null
+      && element.tweenFinalPosition !== undefined
+      && element.tweenFinalScale !== undefined
     ) {
       const origPos = element.layout.position();
       const origScale = element.layout.scale();
@@ -274,9 +320,8 @@ function getPos(element: Konva.Node, rot: number) {
 
     // If we set the arrow at the absolute position of a card, it will point to the exact center.
     // Instead, back it off a little bit (accounting for the rotation of the hand).
-    const winH = globals.stage.height();
-    const distance = -0.075 * winH;
-    const rotRadians = (-rot / 180) * Math.PI;
+    const distance = -CARD_ARROW_BACKOFF * globals.stage.height();
+    const rotRadians = konvaHelpers.degreesToRadians(-rot);
     pos.x += distance * Math.sin(rotRadians); // sin(x) = cos(x + (PI * 3 / 2))
     pos.y -= distance * -Math.cos(rotRadians); // -cos(x) = sin(x + (PI * 3 / 2))
   } else if (element instanceof StrikeSquare) {
@@ -284,9 +329,8 @@ function getPos(element: Konva.Node, rot: number) {
   } else {
     switch (element) {
       case globals.elements.deck: {
-        // Order = ReplayArrowOrder.Deck (-1).
-        pos.x += element.width() * 0.5;
-        pos.y += element.height() * 0.1;
+        pos.x += element.width() * ARROW_ANCHOR.DECK.x;
+        pos.y += element.height() * ARROW_ANCHOR.DECK.y;
 
         break;
       }
@@ -295,26 +339,20 @@ function getPos(element: Konva.Node, rot: number) {
       case globals.elements.scoreNumberLabel:
       case globals.elements.playsNumberLabel:
       case globals.elements.cluesNumberLabel: {
-        pos.x += element.width() * 0.15;
+        pos.x += element.width() * ARROW_ANCHOR.SCORE_AREA_NUMBER.x;
 
         break;
       }
 
       case globals.elements.maxScoreNumberLabel: {
-        // Order = ReplayArrowOrder.MaxScore (-4).
-        pos.x += element.width() * 0.7;
+        pos.x += element.width() * ARROW_ANCHOR.MAX_SCORE.x;
 
         break;
       }
 
       default: {
-        // The type of Konva.Text.width is "any" for some reason.
         const textElement = element as Konva.Text;
-        const width = textElement.measureSize(textElement.text())
-          .width as number;
-        if (typeof width !== "number") {
-          throw new TypeError("The width of the element was not a number.");
-        }
+        const { width } = textElement.measureSize(textElement.text());
         pos.x += width / 2;
 
         break;
@@ -361,142 +399,92 @@ function animate(arrow: Arrow, card: HanabiCard, rot: number, giver: number) {
 
 export function click(
   event: KonvaEventObject<MouseEvent>,
-  order: CardOrder | ReplayArrowOrder,
+  target: ArrowTarget,
 ): void {
-  // "event.evt.buttons" is always 0 here.
-  if (event.evt.button !== 2) {
-    // We only care about right-clicks.
-    return;
-  }
-
-  // Do not allow followers in a shared replay to summon arrows because it could be misleading as to
-  // who the real replay leader is.
+  // We only care about right-clicks. ("event.evt.buttons" is always 0 here.)
   if (
-    globals.state.replay.shared !== null
-    && !globals.state.replay.shared.amLeader
+    event.evt.button !== RIGHT_MOUSE_BUTTON
+    || !canDrawArrow(globals.state, event.evt)
   ) {
     return;
   }
 
-  // Do not allow shared replay leaders to summon arrows when they are not in shared turns because
-  // it could be misleading as to whether or not the arrows are being shown to the other players.
-  if (
-    globals.state.replay.shared !== null
-    && !globals.state.replay.shared.useSharedSegments
-  ) {
-    return;
-  }
-
-  toggle(order);
+  toggle(target);
 }
 
 /** Toggles the "highlight" arrow on a particular element. */
-export function toggle(
-  order: CardOrder | ReplayArrowOrder,
-  alwaysShow = false,
-): void {
-  // Get the element corresponding to the "order" number.
-  const element = getElementFromOrder(order);
+export function toggle(target: ArrowTarget, alwaysShow = false): void {
+  const element = getElementFromTarget(target);
   if (!element) {
     return;
   }
 
   // Use the first arrow for highlighting a specific thing.
   const arrow = globals.elements.arrows[0]!;
-  const show =
-    alwaysShow
-    || arrow.pointingTo !== element
-    || arrow.base.fill() !== ARROW_COLOR.HIGHLIGHT;
+  const shown =
+    arrow.pointingTo === element && arrow.base.fill() === ARROW_COLOR.HIGHLIGHT
+      ? target
+      : undefined;
+  const show = getToggledArrow(shown, target, alwaysShow) !== undefined;
 
   hideAll();
   if (show) {
-    set(0, element, null, null);
+    set(0, element, undefined, undefined);
 
     // If this element has a tooltip and it is open, close it.
-    if (element.tooltipName !== undefined && element.tooltipName !== "") {
-      tooltips.close(`#tooltip-${element.tooltipName}`);
+    if (element.tooltipName !== undefined) {
+      tooltips.close(element.tooltipName);
     }
   }
 
-  if (
-    globals.state.replay.shared !== null
-    && globals.state.replay.shared.amLeader
-    && globals.state.replay.shared.useSharedSegments
-  ) {
-    globals.lobby.conn!.send("replayAction", {
-      tableID: globals.lobby.tableID,
-      type: ReplayActionType.Arrow,
-      order: show ? order : ReplayArrowOrder.Nothing,
-    });
-  }
+  sendArrow(globals.state, show ? target : undefined);
 }
 
-function getElementFromOrder(
-  order: CardOrder | ReplayArrowOrder,
+function getElementFromTarget(
+  target: ArrowTarget,
 ): NodeWithTooltip | undefined {
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-enum-comparison
-  if (order >= 0) {
-    // This is an arrow for a card. The order corresponds to the card's order in the deck.
-    return getCardOrStackBase(order as CardOrder);
+  if (typeof target === "number") {
+    return getCardOrStackBase(target);
   }
 
-  assertEnumValue(
-    order,
-    ReplayArrowOrder,
-    `Invalid replay arrow order: ${order}`,
-  );
-  return getElementFromNegativeOrder(order);
-}
-
-function getElementFromNegativeOrder(
-  order: ReplayArrowOrder,
-): NodeWithTooltip | undefined {
-  switch (order) {
-    case ReplayArrowOrder.Nothing: {
-      return undefined;
-    }
-
-    case ReplayArrowOrder.Deck: {
+  switch (target) {
+    case "deck": {
       return globals.elements.deck!;
     }
 
-    case ReplayArrowOrder.Turn: {
+    case "turn": {
       return globals.elements.turnNumberLabel!;
     }
 
-    case ReplayArrowOrder.Score: {
+    case "score": {
       return globals.elements.scoreNumberLabel!;
     }
 
-    case ReplayArrowOrder.MaxScore: {
+    case "maxScore": {
       return globals.elements.maxScoreNumberLabel!;
     }
 
-    case ReplayArrowOrder.Clues: {
+    case "clues": {
       return globals.elements.cluesNumberLabel!;
     }
 
-    case ReplayArrowOrder.Strike1: {
-      return globals.elements.strikeSquares[0]!;
+    case "strike1":
+    case "strike2":
+    case "strike3": {
+      return globals.elements.strikeSquares[
+        STRIKE_ARROW_TARGETS.indexOf(target)
+      ]!;
     }
 
-    case ReplayArrowOrder.Strike2: {
-      return globals.elements.strikeSquares[1]!;
-    }
-
-    case ReplayArrowOrder.Strike3: {
-      return globals.elements.strikeSquares[2]!;
-    }
-
-    case ReplayArrowOrder.Pace: {
+    case "pace": {
       return globals.elements.paceNumberLabel!;
     }
 
-    case ReplayArrowOrder.Efficiency: {
+    case "efficiency": {
       return globals.elements.efficiencyNumberLabel!;
     }
 
-    case ReplayArrowOrder.MinEfficiency: {
+    case "minEfficiency": {
       return globals.elements.efficiencyMinNeededLabel!;
     }
   }

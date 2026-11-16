@@ -1,5 +1,5 @@
-import type { Variant } from "../../interfaces/Variant";
-import { isColorMute, isNumberMute } from "./variantIdentity";
+import type { Variant } from "../../interfaces/Variant.ts";
+import { isColorMute, isNumberMute } from "./variantIdentity.ts";
 
 const HARD_VARIANT_EFFICIENCY_THRESHOLD = 1.33;
 
@@ -10,16 +10,13 @@ export function isHardVariant(
   minEfficiency: number,
 ): boolean {
   // Some variants are defined as always being hard, regardless of what the efficiency is.
-  if (
+  return (
     isColorMute(variant)
     || isNumberMute(variant)
     || variant.throwItInAHole
     || variant.cowAndPig
     || variant.duck
     || variant.upOrDown
-  ) {
-    return true;
-  }
-
-  return minEfficiency >= HARD_VARIANT_EFFICIENCY_THRESHOLD;
+    || minEfficiency >= HARD_VARIANT_EFFICIENCY_THRESHOLD
+  );
 }

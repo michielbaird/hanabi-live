@@ -1,18 +1,18 @@
-import { ClueType } from "./enums/ClueType";
-import type { CardOrder } from "./types/CardOrder";
-import type { ColorIndex } from "./types/ColorIndex";
-import type { PlayerIndex } from "./types/PlayerIndex";
-import type { Rank } from "./types/Rank";
-import type { RankClueNumber } from "./types/RankClueNumber";
-import type { SuitIndex } from "./types/SuitIndex";
+import { identityField } from "./cardEventIdentity.ts";
+import type { CardOrder } from "./types/CardOrder.ts";
+import type { ClueRank } from "./types/ClueRank.ts";
+import type { ColorIndex } from "./types/ColorIndex.ts";
+import type { PlayerIndex } from "./types/PlayerIndex.ts";
+import type { Rank } from "./types/Rank.ts";
+import type { SuitIndex } from "./types/SuitIndex.ts";
 import type {
   ActionCardIdentity,
   ActionClue,
   ActionDiscard,
   ActionDraw,
+  ActionMisplay,
   ActionPlay,
-  ActionStrike,
-} from "./types/gameActions";
+} from "./types/gameActions.ts";
 
 /** Helper functions to build a color `ActionClue` with a compact syntax. For use in tests. */
 export function colorClue(
@@ -24,19 +24,19 @@ export function colorClue(
   return {
     type: "clue",
     clue: {
-      type: ClueType.Color,
-      value,
+      type: "color",
+      color: value,
     },
-    giver,
-    list: list as CardOrder[],
-    target,
+    playerIndex: giver,
+    orders: list as CardOrder[],
+    receiverIndex: target,
     ignoreNegative: false,
   };
 }
 
 /** Helper functions to build a rank `ActionClue` with a compact syntax. For use in tests. */
 export function rankClue(
-  value: RankClueNumber,
+  value: ClueRank,
   giver: PlayerIndex,
   list: readonly number[], // We do not want to force the consumer to brand their numbers.
   target: PlayerIndex,
@@ -44,12 +44,12 @@ export function rankClue(
   return {
     type: "clue",
     clue: {
-      type: ClueType.Rank,
-      value,
+      type: "rank",
+      rank: value,
     },
-    giver,
-    list: list as CardOrder[],
-    target,
+    playerIndex: giver,
+    orders: list as CardOrder[],
+    receiverIndex: target,
     ignoreNegative: false,
   };
 }
@@ -58,15 +58,17 @@ export function rankClue(
 export function draw(
   playerIndex: PlayerIndex,
   order: number, // We do not want to force the consumer to brand their numbers.
-  suitIndex: SuitIndex | -1 = -1,
-  rank: Rank | -1 = -1,
+  suitIndex?: SuitIndex,
+  rank?: Rank,
 ): ActionDraw {
   return {
     type: "draw",
     playerIndex,
     order: order as CardOrder,
-    suitIndex,
-    rank,
+    ...identityField({
+      suitIndex,
+      rank,
+    }),
   };
 }
 
@@ -74,17 +76,35 @@ export function draw(
 export function discard(
   playerIndex: PlayerIndex,
   order: number, // We do not want to force the consumer to brand their numbers.
-  suitIndex: SuitIndex | -1,
-  rank: Rank | -1,
-  failed: boolean,
+  suitIndex: SuitIndex | undefined,
+  rank: Rank | undefined,
 ): ActionDiscard {
   return {
     type: "discard",
     playerIndex,
     order: order as CardOrder,
-    suitIndex,
-    rank,
-    failed,
+    ...identityField({
+      suitIndex,
+      rank,
+    }),
+  };
+}
+
+/** Helper functions to build a `ActionMisplay` with a compact syntax. For use in tests. */
+export function misplay(
+  playerIndex: PlayerIndex,
+  order: number, // We do not want to force the consumer to brand their numbers.
+  suitIndex: SuitIndex | undefined,
+  rank: Rank | undefined,
+): ActionMisplay {
+  return {
+    type: "misplay",
+    playerIndex,
+    order: order as CardOrder,
+    ...identityField({
+      suitIndex,
+      rank,
+    }),
   };
 }
 
@@ -99,8 +119,10 @@ export function play(
     type: "play",
     playerIndex,
     order: order as CardOrder,
-    suitIndex,
-    rank,
+    ...identityField({
+      suitIndex,
+      rank,
+    }),
   };
 }
 
@@ -115,21 +137,9 @@ export function actionCardIdentity(
     type: "cardIdentity",
     playerIndex,
     order: order as CardOrder,
-    suitIndex,
-    rank,
-  };
-}
-
-/** Helper functions to build a `ActionStrike` with a compact syntax. For use in tests. */
-export function strike(
-  num: 1 | 2 | 3,
-  order: number, // We do not want to force the consumer to brand their numbers.
-  turn: number,
-): ActionStrike {
-  return {
-    type: "strike",
-    num,
-    order: order as CardOrder,
-    turn,
+    ...identityField({
+      suitIndex,
+      rank,
+    }),
   };
 }

@@ -11,7 +11,6 @@
   "files.associations": {
     ".env*": "shellscript", // e.g., ".env.example" is the same as ".env".
     // @template-customization-start
-    "*.tmpl": "html", // Golang HTML templates are saved as "tmpl" files.
     "post-merge": "shellscript",
     // @template-customization-end
   },
@@ -46,9 +45,6 @@
     "yarn.lock": true,
     // @template-customization-start
     "**/*.min.js*": true,
-    "**/misc/keldon/": true,
-    "**/server-old/": true,
-    "**/card-images/": true,
     "**/packages/game/docs/**/*.html": true,
     // @template-customization-end
   },
@@ -80,6 +76,11 @@
   // Show TypeScript errors for files that don't happen to be currently open, which makes TypeScript
   // work similar to other compiled languages like Golang or Rust.
   "js/ts.tsserver.experimental.enableProjectDiagnostics": true,
+
+  // @template-customization-start
+  "npm.packageManager": "bun",
+  "python.terminal.useEnvFile": true,
+  // @template-customization-end
 
   // Automatically run the formatter when certain files are saved. We intentionally do not group
   // languages together because of this bug: https://github.com/microsoft/vscode/issues/168411
@@ -140,10 +141,10 @@
     "editor.formatOnSave": true,
   },
   // @template-customization-start
-  "[go]": {
+  "[rust]": {
     "editor.formatOnSave": true,
     "editor.tabSize": 4,
-    "editor.insertSpaces": false,
+    "editor.insertSpaces": true,
   },
   "[python]": {
     "editor.formatOnSave": true,

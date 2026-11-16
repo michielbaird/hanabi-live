@@ -3,15 +3,14 @@
 // ("analysisWorker.ts"), so nothing is sent to the server except the usual request for the game's
 // "/export/<id>" data.
 
-import { VERSION } from "@hanabi-live/data";
 import Konva from "konva";
-import * as replay from "./replay";
-import { getReplayButtonRow } from "./replayButtonRow";
-import { globals } from "./UIGlobals";
+import AnalysisWorker from "../../analysisWorker.mts?worker";
+import { isBotAnalysisEnabled } from "../../botAnalysisSetting.ts";
+import { store } from "../../store.ts";
+import * as replay from "./replay.ts";
+import { getReplayButtonRow } from "./replayButtonRow.ts";
+import { globals } from "./UiGlobals.ts";
 
-// The version is in the URL so that a new version of the client does not run an old worker from the
-// cache.
-const WORKER_URL = `/public/js/bundles/analysisWorker.min.js?${VERSION}`;
 /** The bot plays H-Group at levels 1 to 12. */
 const H_GROUP_LEVELS: readonly number[] = Array.from(
   { length: 12 },
@@ -67,42 +66,6 @@ const MISTAKE_COLOR = "#ff4040";
 const SUGGESTION_COLOR = "#ffb000";
 const SUMMARY_COLOR = "#58a6ff";
 
-const STORAGE_KEY = "botAnalysis";
-
-/**
- * Whether the user turned the bot analysis on in the settings. It is a client-only setting (kept in
- * localStorage, like the dark mode), and off by default.
- */
-export function isEnabled(): boolean {
-  try {
-    return localStorage.getItem(STORAGE_KEY) === "true";
-  } catch {
-    // localStorage may be unavailable (e.g. private browsing, disabled).
-    return false;
-  }
-}
-
-/** Called on page load to wire up the checkbox in the settings. */
-export function initSettings(): void {
-  const checkbox = document.querySelector<HTMLInputElement>("#botAnalysis");
-  if (checkbox === null) {
-    return;
-  }
-
-  checkbox.checked = isEnabled();
-  checkbox.addEventListener("change", () => {
-    try {
-      localStorage.setItem(STORAGE_KEY, String(checkbox.checked));
-    } catch {
-      // The localStorage API may be unavailable.
-    }
-
-    if (!checkbox.checked) {
-      clear();
-    }
-  });
-}
-
 /** Removes everything that the analysis added to the screen. */
 function clear() {
   stopWorker();
@@ -123,7 +86,7 @@ function clear() {
 
 /** Called when the game UI is created. */
 export function init(): void {
-  poll = globalThis.setInterval(updateButton, 1000);
+  poll = globalThis.setInterval(updateButton, 1000) as unknown as number;
 }
 
 /** Called when the game UI is destroyed. */
@@ -132,15 +95,7 @@ export function destroy(): void {
     globalThis.clearInterval(poll);
     poll = null;
   }
-  stopWorker();
-  panel?.remove();
-  panel = null;
-  dismissProgress();
-  result = null;
-  markers?.destroy();
-  markers = null;
-  commentText?.destroy();
-  commentText = null;
+  clear();
 }
 
 /**
@@ -174,10 +129,7 @@ export function refresh(): void {
  */
 function getStops(analysis: AnalysisResult): readonly number[] {
   const stops = analysis.comments.map(getSegment);
-  const finalSegment = globals.state.ongoingGame.turn.segment;
-  if (finalSegment !== null) {
-    stops.push(finalSegment);
-  }
+  stops.push(replay.getLastSegment());
   return stops;
 }
 
@@ -188,6 +140,9 @@ export function goToFlagged(direction: -1 | 1): void {
   }
 
   const current = globals.state.replay.segment;
+  if (current === undefined) {
+    return;
+  }
   const segments = getStops(result).filter((segment) =>
     direction > 0 ? segment > current : segment < current,
   );
@@ -215,19 +170,19 @@ function layoutButtons(analysis: AnalysisResult | null) {
     replayForwardAnalysisButton,
   } = globals.elements;
   if (
-    replayBackFullButton === null
-    || replayBackButton === null
-    || replayForwardButton === null
-    || replayForwardFullButton === null
-    || replayBackAnalysisButton === null
-    || replayForwardAnalysisButton === null
+    replayBackFullButton === undefined
+    || replayBackButton === undefined
+    || replayForwardButton === undefined
+    || replayForwardFullButton === undefined
+    || replayBackAnalysisButton === undefined
+    || replayForwardAnalysisButton === undefined
   ) {
     return;
   }
 
   const withButtons = analysis !== null && analysis.comments.length > 0;
   const row = getReplayButtonRow(
-    globals.lobby.settings.keldonMode,
+    store.getState().session.settings.keldonMode,
     withButtons,
   );
   const buttons = withButtons
@@ -253,17 +208,26 @@ function layoutButtons(analysis: AnalysisResult | null) {
 
   replayBackAnalysisButton.visible(withButtons);
   replayForwardAnalysisButton.visible(withButtons);
-  if (withButtons) {
-    const segments = getStops(analysis);
-    const current = globals.state.replay.segment;
-    replayBackAnalysisButton.setEnabled(segments.some((s) => s < current));
-    replayForwardAnalysisButton.setEnabled(segments.some((s) => s > current));
+  if (analysis === null || analysis.comments.length === 0) {
+    return;
   }
+  const segments = getStops(analysis);
+  const current = globals.state.replay.segment;
+  replayBackAnalysisButton.setEnabled(
+    current !== undefined && segments.some((s) => s < current),
+  );
+  replayForwardAnalysisButton.setEnabled(
+    current !== undefined && segments.some((s) => s > current),
+  );
 }
 
 function drawMarkers(analysis: AnalysisResult) {
   const { replayArea, replayBar, replayShuttle } = globals.elements;
-  if (replayArea === null || replayBar === null || replayShuttle === null) {
+  if (
+    replayArea === undefined
+    || replayBar === undefined
+    || replayShuttle === undefined
+  ) {
     return;
   }
 
@@ -330,7 +294,7 @@ function drawComment(analysis: AnalysisResult) {
   commentText = null;
 
   const { replayArea } = globals.elements;
-  if (replayArea === null) {
+  if (replayArea === undefined) {
     return;
   }
 
@@ -344,9 +308,7 @@ function drawComment(analysis: AnalysisResult) {
       .map((c) => `${analysis.players[c.player] ?? "?"}: ${c.text}`)
       .join("\n");
     mistake = here.some((c) => c.mistake);
-  } else if (
-    globals.state.replay.segment === globals.state.ongoingGame.turn.segment
-  ) {
+  } else if (globals.state.replay.segment === replay.getLastSegment()) {
     text = getSummary(analysis);
     mistake = false;
   } else {
@@ -388,13 +350,13 @@ function getSummary(analysis: AnalysisResult): string {
 /**
  * The analysis is for finished games that are in the database (so that "/export/<id>" has them).
  */
-function getDatabaseID(): number | null {
-  const state = globals.store === null ? null : globals.state;
-  if (state === null || !state.finished) {
-    return null;
+function getDatabaseID(): number | undefined {
+  const { state } = globals;
+  if (!state.finished) {
+    return undefined;
   }
-  const { databaseID } = state.replay;
-  return databaseID !== null && databaseID > 0 ? databaseID : null;
+  const { gameId } = state.replay;
+  return gameId !== undefined && gameId > 0 ? gameId : undefined;
 }
 
 /**
@@ -405,7 +367,7 @@ function getDatabaseID(): number | null {
 function isSupported(): boolean {
   const { options } = globals;
   const query = {
-    variant: options.variantName,
+    variant: globals.variant.name,
     emptyClues: options.emptyClues,
     detrimentalCharacters: options.detrimentalCharacters,
     oneExtraCard: options.oneExtraCard,
@@ -423,7 +385,10 @@ function isSupported(): boolean {
       supportCache.set(key, supported);
       updateButton();
     };
-    getWorker().postMessage({ type: "supports", ...query });
+    getWorker().postMessage({
+      type: "supports",
+      ...query,
+    });
   }
   return false;
 }
@@ -434,11 +399,14 @@ function isSupported(): boolean {
  */
 export function updateButton(): void {
   const { analysisButton } = globals.elements;
-  if (analysisButton === null) {
+  if (analysisButton === undefined) {
     return;
   }
 
-  const visible = isEnabled() && getDatabaseID() !== null && isSupported();
+  const visible =
+    isBotAnalysisEnabled()
+    && getDatabaseID() !== undefined
+    && isSupported();
   if (analysisButton.visible() === visible) {
     return;
   }
@@ -461,7 +429,7 @@ export function togglePanel(): void {
   }
 
   const { analysisButton } = globals.elements;
-  if (analysisButton === null) {
+  if (analysisButton === undefined) {
     return;
   }
 
@@ -527,7 +495,7 @@ function getWorker(): Worker {
     return worker;
   }
 
-  const newWorker = new Worker(WORKER_URL, { type: "module" });
+  const newWorker = new AnalysisWorker();
   newWorker.addEventListener(
     "message",
     (event: MessageEvent<WorkerMessage>) => {
@@ -596,7 +564,10 @@ function showProgress(): { text: HTMLElement; bar: HTMLProgressElement } {
   buttons.append(cancel);
   progress.append(text, bar, buttons);
   document.querySelector("#game")?.append(progress);
-  return { text, bar };
+  return {
+    text,
+    bar,
+  };
 }
 
 function dismissProgress() {
@@ -623,7 +594,7 @@ function showProgressError(message: string) {
 
 async function run(convention: string, conventionLabel: string) {
   const databaseID = getDatabaseID();
-  if (databaseID === null) {
+  if (databaseID === undefined) {
     showProgressError("This game can not be analyzed.");
     return;
   }

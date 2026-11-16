@@ -1,17 +1,26 @@
 /* eslint-disable no-param-reassign */
-/* eslint-disable unicorn/no-null */
 
 import type { Draft } from "immer";
 import { castDraft, produce } from "immer";
-import type { CardIdentity } from "./interfaces/CardIdentity";
-import type { GameMetadata } from "./interfaces/GameMetadata";
-import type { GameState } from "./interfaces/GameState";
-import { gameReducer } from "./reducers/gameReducer";
-import type { CardOrder } from "./types/CardOrder";
-import type { PlayerIndex } from "./types/PlayerIndex";
-import type { Rank } from "./types/Rank";
-import type { SuitIndex } from "./types/SuitIndex";
-import type { GameAction } from "./types/gameActions";
+import { getVariantById } from "./gameData.ts";
+import type { CardIdentity } from "./interfaces/CardIdentity.ts";
+import type { GameMetadata } from "./interfaces/GameMetadata.ts";
+import type { GameState } from "./interfaces/GameState.ts";
+import { recalculateDeductions } from "./reducers/cardDeductionReducer.ts";
+import { gameReducer } from "./reducers/gameReducer.ts";
+import { isCardPotentiallyPlayable } from "./rules/card.ts";
+import { getTotalCardsInDeck } from "./rules/deck.ts";
+import { isGameOver } from "./rules/gameOver.ts";
+import type { PlayerIndex } from "./types/PlayerIndex.ts";
+import type {
+  ActionClue,
+  ActionDiscard,
+  ActionDraw,
+  ActionMisplay,
+  ActionPlay,
+  ActionTurn,
+  HypotheticalWireEvent,
+} from "./types/gameActions.ts";
 
 export interface HypotheticalState {
   readonly ongoing: GameState;
@@ -29,32 +38,38 @@ export interface HypotheticalState {
    * A sparse array indexed by card order.
    *
    * If a card is in this array, it is being shown with an alternate identity. If the alternate
-   * identity is null/null, it is shown as blank.
+   * identity is undefined/undefined, it is shown as blank.
    */
   readonly morphedIdentities: readonly CardIdentity[];
 
-  readonly startingPlayerIndex: PlayerIndex | null;
+  readonly startingPlayerIndex: PlayerIndex | undefined;
+
+  /** Whether empathy has been deduced from cards shown as other identities. */
+  readonly deducedFromShownIdentities: boolean;
 }
 
-export interface ActionHypotheticalMorph {
-  readonly type: "morph";
+/** Shows a card as another identity, or as blank when its suit and rank are absent. */
+export type ActionHypotheticalMorph = Readonly<
+  Extract<HypotheticalWireEvent, { type: "morph" }>
+>;
 
-  /** -1 represents a card of an unknown card. */
-  readonly suitIndex: SuitIndex | -1;
+/** Shows a morphed card as its original identity again. */
+export type ActionHypotheticalUnmorph = Readonly<
+  Extract<HypotheticalWireEvent, { type: "unmorph" }>
+>;
 
-  /** -1 represents a card of an unknown rank. */
-  readonly rank: Rank | -1;
+/** A game action that a hypothetical move can produce. */
+export type HypotheticalGameAction =
+  | ActionClue
+  | ActionDiscard
+  | ActionDraw
+  | ActionMisplay
+  | ActionPlay
+  | ActionTurn;
 
-  readonly order: CardOrder;
-}
-
-export interface ActionHypotheticalUnmorph {
-  readonly type: "unmorph";
-  readonly order: CardOrder;
-}
-
+/** An action that a hypothetical can contain: a move's game actions, or a changed identity. */
 export type ActionIncludingHypothetical =
-  GameAction | ActionHypotheticalMorph | ActionHypotheticalUnmorph;
+  HypotheticalGameAction | ActionHypotheticalMorph | ActionHypotheticalUnmorph;
 
 export type HypotheticalStateAction =
   | ActionIncludingHypothetical
@@ -66,7 +81,6 @@ export function initializeHypotheticalState(
   ongoing: GameState,
   showDrawnCards: boolean,
   actions: readonly ActionIncludingHypothetical[],
-  finished: boolean,
   metadata: GameMetadata,
 ): HypotheticalState {
   let state: HypotheticalState = {
@@ -76,24 +90,72 @@ export function initializeHypotheticalState(
     drawnCardsInHypothetical: [],
     morphedIdentities: [],
     startingPlayerIndex: ongoing.turn.currentPlayerIndex,
+    deducedFromShownIdentities: false,
   };
 
   for (const action of actions) {
-    state = hypotheticalStateReducer(state, action, finished, metadata);
+    state = hypotheticalStateReducer(state, action, metadata);
   }
 
   return state;
 }
 
 /** Applies a hypothetical action, restores a saved state, or toggles drawn card identities. */
-export const hypotheticalStateReducer = produce(
-  hypotheticalStateReducerFunction,
-);
+export function hypotheticalStateReducer(
+  state: HypotheticalState,
+  action: HypotheticalStateAction,
+  metadata: GameMetadata,
+): HypotheticalState {
+  const newState = produceHypotheticalState(state, action, metadata);
+  // Restoring an original identity can leave undefined elements behind.
+  const shownIdentities: ReadonlyArray<CardIdentity | undefined> =
+    newState.morphedIdentities;
+
+  // Empathy should match the identities that cards in hands are shown as. Once it has been deduced
+  // from them, changing them or restoring an earlier state needs a recalculation as well.
+  const { ongoing } = newState;
+  const showsOtherIdentities = shownIdentities.some(
+    (identity, order) =>
+      identity !== undefined
+      && identity.suitIndex !== undefined
+      && identity.rank !== undefined
+      && typeof ongoing.deck[order]?.location === "number",
+  );
+  const shownIdentitiesChanged =
+    action.type === "morph"
+    || action.type === "unmorph"
+    || action.type === "back";
+  if (
+    !showsOtherIdentities
+    && !(shownIdentitiesChanged && newState.deducedFromShownIdentities)
+  ) {
+    return newState;
+  }
+
+  const deck = recalculateDeductions(
+    ongoing.deck,
+    ongoing.hands,
+    shownIdentities,
+    metadata,
+  );
+  return {
+    ...newState,
+    ongoing:
+      deck === ongoing.deck
+        ? ongoing
+        : {
+            ...ongoing,
+            deck,
+          },
+    deducedFromShownIdentities: true,
+  };
+}
+
+const produceHypotheticalState = produce(hypotheticalStateReducerFunction);
 
 function hypotheticalStateReducerFunction(
   state: Draft<HypotheticalState>,
   action: HypotheticalStateAction,
-  finished: boolean,
   metadata: GameMetadata,
 ) {
   switch (action.type) {
@@ -115,8 +177,8 @@ function hypotheticalStateReducerFunction(
           delete state.morphedIdentities[order];
         } else {
           state.morphedIdentities[order] = {
-            rank: null,
-            suitIndex: null,
+            rank: undefined,
+            suitIndex: undefined,
           };
         }
       }
@@ -125,8 +187,8 @@ function hypotheticalStateReducerFunction(
 
     case "morph": {
       state.morphedIdentities[action.order] = {
-        suitIndex: action.suitIndex === -1 ? null : action.suitIndex,
-        rank: action.rank === -1 ? null : action.rank,
+        suitIndex: action.identity.suitIndex,
+        rank: action.identity.rank,
       };
       return;
     }
@@ -143,39 +205,101 @@ function hypotheticalStateReducerFunction(
     }
   }
 
-  if (action.type === "draw") {
+  // Ignore invalid draws from persisted shared replay actions.
+  if (
+    action.type === "draw"
+    && (!Number.isSafeInteger(action.playerIndex)
+      || action.playerIndex < 0
+      || action.playerIndex >= state.ongoing.hands.length
+      || action.order !== state.ongoing.deck.length
+      || state.ongoing.cardsRemainingInTheDeck <= 0)
+  ) {
+    return;
+  }
+
+  // The hypothetical is over, so persisted replay actions cannot continue it.
+  if (state.ongoing.turn.currentPlayerIndex === undefined) {
+    return;
+  }
+
+  // Validate persisted replay actions, which bypass the local action planner. A card outside the
+  // acting player's hand would end up in two collections, or does not exist yet.
+  if (
+    action.type === "play"
+    || action.type === "discard"
+    || action.type === "misplay"
+  ) {
+    if (
+      state.ongoing.hands[action.playerIndex]?.includes(action.order) !== true
+    ) {
+      return;
+    }
+  } else if (action.type === "draw") {
     // Store every draw to be able to show/hide the cards in the future.
     state.drawnCardsInHypothetical.push(action.order);
     if (!state.showDrawnCards) {
       state.morphedIdentities[action.order] = {
-        suitIndex: null,
-        rank: null,
+        suitIndex: undefined,
+        rank: undefined,
       };
     }
   }
 
-  const isClueActionThatShouldIgnoreNegative =
-    action.type === "clue"
-    && !state.showDrawnCards
-    && state.startingPlayerIndex === action.target;
-  const newAction = isClueActionThatShouldIgnoreNegative
-    ? { ...action, ignoreNegative: true }
-    : action;
-
   const oldSegment = state.ongoing.turn.segment;
-  const newState = gameReducer(
-    state.ongoing,
-    newAction,
-    true,
-    false,
-    finished,
-    true,
-    metadata,
-  );
+  const newState = gameReducer(state.ongoing, action, "hypothetical", metadata);
   state.ongoing = castDraft(newState);
+
+  if (isHypotheticalOver(state, newState, metadata)) {
+    state.ongoing.turn.currentPlayerIndex = undefined;
+  }
 
   if (oldSegment !== newState.turn.segment) {
     // Save the new segment in case we want to go backwards.
     state.states.push(castDraft(newState));
   }
+}
+
+/**
+ * Whether a real game would end in this state. Cards shown as other identities are played as those
+ * identities, and a hidden card or a stack pretending to be played up could be anything.
+ */
+function isHypotheticalOver(
+  state: Draft<HypotheticalState>,
+  gameState: GameState,
+  metadata: GameMetadata,
+): boolean {
+  const variant = getVariantById(metadata.options.variantId);
+  const stackBaseOrder = getTotalCardsInDeck(variant);
+  const isStackBaseMorphed = variant.suits.some(
+    (_suit, suitIndex) =>
+      state.morphedIdentities[stackBaseOrder + suitIndex] !== undefined,
+  );
+
+  if (isStackBaseMorphed) {
+    return isGameOver(gameState, metadata, () => true);
+  }
+
+  return isGameOver(gameState, metadata, (card) => {
+    const morphedIdentity = state.morphedIdentities[card.order];
+    let shownCard = card;
+    if (morphedIdentity !== undefined) {
+      const { suitIndex, rank } = morphedIdentity;
+      if (suitIndex === undefined || rank === undefined) {
+        return true;
+      }
+      shownCard = {
+        ...card,
+        possibleCards: [[suitIndex, rank]],
+      };
+    }
+
+    return isCardPotentiallyPlayable(
+      shownCard,
+      gameState.deck,
+      gameState.playStacks,
+      gameState.playStackDirections,
+      gameState.playStackStarts,
+      variant,
+    );
+  });
 }

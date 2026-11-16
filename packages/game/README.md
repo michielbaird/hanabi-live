@@ -9,25 +9,26 @@ You can see the full list of things that this library provides in the
 The main export of this library is the `gameReducer` function, which can compute
 the next game state from an existing game state and a game action.
 
-<br>
-
 ## Installation
 
 If you want to use the game logic in a bot or some other Hanab-related program,
 then you can install it from npm:
 
 ```sh
-npm install @hanabi-live/game --save
+bun add @hanabi-live/game
 ```
 
-<br>
+## Publishing
+
+From this directory, use `bun pm pack` to inspect a release archive and
+`bun publish` to publish an intentionally versioned release. The `prepack`
+script builds the library first. Bun replaces `catalog:` dependencies with their
+pinned versions; do not publish the source manifest with another tool.
 
 ## Usage
 
-### TypeScript
-
-Here is an example of a TypeScript program using the `gameReducer` function to
-compute a game state:
+Here is an example of a program using the `gameReducer` function to compute a
+game state:
 
 ```ts
 import {
@@ -44,54 +45,10 @@ const initialGameState = getInitialGameState(metadata);
 console.log(`First player has ${initialGameState.hands[0].length} cards.`); // Should print 0.
 
 const action = draw(0, 0, 0, 1);
-const nextGameState = gameReducer(
-  initialGameState,
-  action,
-  true,
-  false,
-  false,
-  false,
-  metadata,
-);
+const nextGameState = gameReducer(initialGameState, action, "seat", metadata);
 
 console.log(`First player now has ${nextGameState.hands[0].length} cards.`); // Should print 1.
 ```
 
-This library is currently published as CommonJS (CJS) due to technical
-limitations in the monorepo. (We have CJS dependencies.) Thus, the above ESM
-syntax will only work if you are using TypeScript. (We recommend using
-[`tsx`](https://github.com/privatenumber/tsx) to run your TypeScript, which
-skips the compilation step.)
-
-### JavaScript
-
-Using pure JavaScript to consume this library is not recommended. (Use
-TypeScript to save yourself from run-time error pain!) If you are some sort of
-masochist and want to use pure JavaScript, then you have to use the legacy CJS
-import format like so:
-
-```js
-const hanabiLiveGame = require("@hanabi-live/game");
-
-const { draw, gameReducer, getDefaultMetadata, getInitialGameState } =
-  hanabiLiveGame;
-
-const numPlayers = 2;
-const metadata = getDefaultMetadata(numPlayers);
-const initialGameState = getInitialGameState(metadata);
-
-console.log(`First player has ${initialGameState.hands[0].length} cards.`); // Should print 0.
-
-const action = draw(0, 0, 0, 1);
-const nextGameState = gameReducer(
-  initialGameState,
-  action,
-  true,
-  false,
-  false,
-  false,
-  metadata,
-);
-
-console.log(`First player now has ${nextGameState.hands[0].length} cards.`); // Should print 1.
-```
+The package is an ES module, so JavaScript uses the same `import` statement.
+Node.js 20.19, 22.12, and later versions can also load it with `require()`.

@@ -1,0 +1,7 @@
+.chat-emote {
+  height: 1.6em; /* This is derived from how Twitch does it */
+}
+
+#lobby-users-table-tbody a {
+  text-decoration-skip-ink: none;
+}

@@ -1,31 +1,26 @@
 // Speedrun click functions for the HanabiCard object.
 
-import type {
-  CardState,
-  Color,
-  RankClueNumber,
-  Variant,
-} from "@hanabi-live/game";
+import type { ClueRank, Color } from "@hanabi-live/game";
 import {
   START_CARD_RANK,
-  getAdjustedClueTokens,
-  getColorForPrismCard,
+  getClueCost,
   isAtMaxClueTokens,
   isCardInPlayerHand,
-  isCardTouchedByClueColor,
-  isCardTouchedByClueRank,
-  isValidRankClueNumber,
 } from "@hanabi-live/game";
-import * as sounds from "../../sounds";
-import { ActionType } from "../types/ActionType";
-import { SoundType } from "../types/SoundType";
-import { ColorButton } from "./ColorButton";
-import type { HanabiCard } from "./HanabiCard";
-import { RankButton } from "./RankButton";
-import { globals } from "./UIGlobals";
-import { clickRightCheckAddNote } from "./clickNotes";
-import { colorToColorIndex } from "./convert";
-import * as turn from "./turn";
+import * as sounds from "../../sounds.ts";
+import {
+  getColorForSpeedrunClue,
+  getRankForSpeedrunClue,
+} from "../speedrunClue.ts";
+import { SoundType } from "../types/SoundType.ts";
+import { ColorButton } from "./ColorButton.ts";
+import type { HanabiCard } from "./HanabiCard.ts";
+import { RankButton } from "./RankButton.ts";
+import { globals } from "./UiGlobals.ts";
+import { clickRightCheckAddNote } from "./clickNotes.ts";
+import { LEFT_MOUSE_BUTTON, RIGHT_MOUSE_BUTTON } from "./constants.ts";
+import { colorToColorIndex } from "./convert.ts";
+import * as turn from "./turn.ts";
 
 export function mouseDownSpeedrun(card: HanabiCard, event: MouseEvent): void {
   if (
@@ -41,9 +36,9 @@ export function mouseDownSpeedrun(card: HanabiCard, event: MouseEvent): void {
     return;
   }
 
-  if (event.button === 0) {
+  if (event.button === LEFT_MOUSE_BUTTON) {
     clickLeft(card, event);
-  } else if (event.button === 2) {
+  } else if (event.button === RIGHT_MOUSE_BUTTON) {
     clickRight(card, event);
   }
 }
@@ -58,90 +53,62 @@ function clickLeft(card: HanabiCard, event: MouseEvent) {
     && !event.metaKey
   ) {
     turn.end({
-      type: ActionType.Play,
-      target: card.state.order,
+      type: "play",
+      order: card.order,
     });
     return;
   }
 
   // Left-clicking on cards in other people's hands is a color clue action.
   if (
-    card.state.location !== globals.metadata.ourPlayerIndex
-    && isCardInPlayerHand(card.state)
-    // Ensure there is at least 1 clue token available.
-    && globals.state.ongoingGame.clueTokens
-      >= getAdjustedClueTokens(1, globals.variant)
-    && !event.ctrlKey
-    && !event.shiftKey
-    && !event.altKey
-    && !event.metaKey
-    && typeof card.state.location === "number"
+    card.state.location === globals.metadata.ourPlayerIndex
+    || !isCardInPlayerHand(card.state)
+    || event.ctrlKey
+    || event.shiftKey
+    || event.altKey
+    || event.metaKey
+    || typeof card.state.location !== "number"
   ) {
-    const clueColor = getColorForSpeedrunClue(card.state, globals.variant);
-    if (clueColor === undefined) {
-      return;
-    }
-
-    const colorIndex = colorToColorIndex(clueColor, globals.variant);
-    if (colorIndex === undefined) {
-      return;
-    }
-
-    turn.end({
-      type: ActionType.ColorClue,
-      target: card.state.location,
-      value: colorIndex,
-    });
+    return;
   }
+
+  if (!isClueTokenAvailable()) {
+    rejectClueTokenAction();
+    return;
+  }
+
+  const clueColor = getColorForSpeedrunClue(
+    globals.variant,
+    card.state.suitIndex,
+    card.state.rank,
+    getPressedColor(),
+  );
+  if (clueColor === undefined) {
+    return;
+  }
+
+  const colorIndex = colorToColorIndex(clueColor, globals.variant);
+  if (colorIndex === undefined) {
+    return;
+  }
+
+  turn.end({
+    type: "clue",
+    receiverIndex: card.state.location,
+    clue: {
+      type: "color",
+      color: colorIndex,
+    },
+  });
 }
 
-/** A card may be clueable by more than one color, so we need to figure out which color to use. */
-function getColorForSpeedrunClue(
-  cardState: CardState,
-  variant: Variant,
-): Color | undefined {
-  if (cardState.suitIndex === null || cardState.rank === null) {
-    return undefined;
-  }
-
-  const suit = globals.variant.suits[cardState.suitIndex];
-  if (suit === undefined) {
-    return undefined;
-  }
-
-  // If they have clicked on a clue color button, and that color touches the card, assume that they
-  // want to use that color.
+/** The color of the clue button that the player pressed, if any. */
+function getPressedColor(): Color | undefined {
   const clueButton = globals.elements.clueTypeButtonGroup?.getPressed();
-  if (
-    clueButton !== null
-    && clueButton !== undefined
-    && clueButton instanceof ColorButton
+  return clueButton instanceof ColorButton
     && typeof clueButton.clue.value !== "number"
-    && isCardTouchedByClueColor(
-      globals.variant,
-      clueButton.clue.value,
-      suit,
-      cardState.rank,
-    )
-  ) {
-    return clueButton.clue.value;
-  }
-
-  // Otherwise, assume that they want to use the first possible color of the card.
-  const firstClueColor = suit.clueColors[0];
-  if (firstClueColor !== undefined) {
-    return firstClueColor;
-  }
-
-  // Handle the cases where the "suit.clueColors" array is empty.
-  if (suit.allClueColors) {
-    return variant.suits[0];
-  }
-  if (suit.prism) {
-    return getColorForPrismCard(globals.variant, cardState.rank);
-  }
-
-  return undefined;
+    ? clueButton.clue.value
+    : undefined;
 }
 
 function clickRight(card: HanabiCard, event: MouseEvent) {
@@ -157,14 +124,13 @@ function clickRight(card: HanabiCard, event: MouseEvent) {
     if (
       isAtMaxClueTokens(globals.state.ongoingGame.clueTokens, globals.variant)
     ) {
-      sounds.play(SoundType.Error);
-      globals.elements.cluesNumberLabelPulse!.play();
+      rejectClueTokenAction();
       return;
     }
 
     turn.end({
-      type: ActionType.Discard,
-      target: card.state.order,
+      type: "discard",
+      order: card.order,
     });
     return;
   }
@@ -174,26 +140,36 @@ function clickRight(card: HanabiCard, event: MouseEvent) {
     typeof card.state.location === "number"
     && card.state.location !== globals.metadata.ourPlayerIndex
     && isCardInPlayerHand(card.state)
-    && card.state.rank !== null
+    && card.state.rank !== undefined
     // It is not possible to clue a START card with a rank clue.
     && card.state.rank !== START_CARD_RANK
-    // Ensure there is at least 1 clue token available.
-    && globals.state.ongoingGame.clueTokens
-      >= getAdjustedClueTokens(1, globals.variant)
     && !event.ctrlKey
     && !event.shiftKey
     && !event.altKey
     && !event.metaKey
   ) {
-    const clueRank = getRankForSpeedrunClue(card.state);
+    if (!isClueTokenAvailable()) {
+      rejectClueTokenAction();
+      return;
+    }
+
+    const clueRank = getRankForSpeedrunClue(
+      globals.variant,
+      card.state.suitIndex,
+      card.state.rank,
+      getPressedRank(),
+    );
     if (clueRank === undefined) {
       return;
     }
 
     turn.end({
-      type: ActionType.RankClue,
-      target: card.state.location,
-      value: clueRank,
+      type: "clue",
+      receiverIndex: card.state.location,
+      clue: {
+        type: "rank",
+        rank: clueRank,
+      },
     });
     return;
   }
@@ -201,42 +177,21 @@ function clickRight(card: HanabiCard, event: MouseEvent) {
   clickRightCheckAddNote(event, card, true);
 }
 
-/** A card may be clueable by more than one rank, so we need to figure out which rank to use. */
-function getRankForSpeedrunClue(
-  cardState: CardState,
-): RankClueNumber | undefined {
-  if (cardState.suitIndex === null || cardState.rank === null) {
-    return undefined;
-  }
+function isClueTokenAvailable(): boolean {
+  return globals.state.ongoingGame.clueTokens >= getClueCost(globals.variant);
+}
 
-  const suit = globals.variant.suits[cardState.suitIndex];
-  if (suit === undefined) {
-    return undefined;
-  }
+/** Buzz and flash the clue count when the clue tokens do not allow an action. */
+function rejectClueTokenAction() {
+  sounds.play(SoundType.Error);
+  globals.elements.cluesNumberLabelPulse!.play();
+}
 
-  // If they have clicked on a clue rank button, and that rank touches the card, assume that they
-  // want to use that rank.
+/** The rank of the clue button that the player pressed, if any. */
+function getPressedRank(): ClueRank | undefined {
   const clueButton = globals.elements.clueTypeButtonGroup?.getPressed();
-  if (
-    clueButton !== null
-    && clueButton !== undefined
-    && clueButton instanceof RankButton
+  return clueButton instanceof RankButton
     && typeof clueButton.clue.value === "number"
-    && isCardTouchedByClueRank(
-      globals.variant,
-      clueButton.clue.value,
-      cardState.suitIndex,
-      suit,
-      cardState.rank,
-    )
-  ) {
-    return clueButton.clue.value;
-  }
-
-  // Otherwise, assume that they want to use the real rank of the card.
-  if (isValidRankClueNumber(cardState.rank)) {
-    return cardState.rank;
-  }
-
-  return undefined;
+    ? clueButton.clue.value
+    : undefined;
 }

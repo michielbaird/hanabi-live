@@ -1,16 +1,41 @@
 import type { PlayerIndex } from "@hanabi-live/game";
+import { isValidPlayerIndex } from "@hanabi-live/game";
 import { assertDefined } from "complete-common";
 import Konva from "konva";
-import * as modals from "../../modals";
-import * as tooltips from "../../tooltips";
-import { globals } from "./UIGlobals";
-import { backToLobby } from "./backToLobby";
-import { LABEL_COLOR } from "./constants";
-import * as konvaTooltips from "./konvaTooltips";
+import { store } from "../../store.ts";
+import type { GameTooltipName } from "../../tooltips.ts";
+import * as tooltips from "../../tooltips.ts";
+import * as clock from "../clock.ts";
+import { globals } from "./UiGlobals.ts";
+import {
+  FONT_FAMILY,
+  LABEL_COLOR,
+  LEFT_MOUSE_BUTTON,
+  LINE_SHADOW,
+  MIN_FONT_SIZE,
+  RIGHT_MOUSE_BUTTON,
+  STROKE_WIDTH_UNIT,
+  TEXT_SHRINK_FACTOR,
+  WARNING_COLOR,
+} from "./constants.ts";
+import * as konvaTooltips from "./konvaTooltips.ts";
+import { viewAs } from "./viewAs.ts";
+
+const NAME_SHADOW_OPACITY = 0.9;
+const ACTIVE_SHADOW_OPACITY = 0.6;
+
+/** How many times thicker the frame lines are around the name of the player whose turn it is. */
+const ACTIVE_STROKE_WIDTH_MULTIPLIER = 3;
+
+/** The widest a player name can be before it shrinks, as a fraction of the name frame width. */
+const MAX_NAME_WIDTH_FRACTION = 0.65;
+
+/** The gap between the frame lines on either side of a name, as a multiple of the name width. */
+const NAME_LINE_GAP_FACTOR = 1.4;
 
 export class NameFrame extends Konva.Group {
   playerIndex: PlayerIndex;
-  tooltipName: string;
+  tooltipName: GameTooltipName;
 
   playerName: Konva.Text;
   leftLine: Konva.Line;
@@ -37,23 +62,21 @@ export class NameFrame extends Konva.Group {
       y: 0,
       height: config.height,
       align: "center",
-      fontFamily: "Verdana",
+      fontFamily: FONT_FAMILY,
       fontSize: config.height,
       text: config.name,
       fill: LABEL_COLOR,
-      shadowColor: "black",
-      shadowBlur: 5,
-      shadowOffset: {
-        x: 0,
-        y: 3,
-      },
-      shadowOpacity: 0.9,
+      ...LINE_SHADOW,
+      shadowOpacity: NAME_SHADOW_OPACITY,
       listening: true, // Needed so that we can click on a player's name to shadow them
     });
 
     let w = this.playerName.width();
-    while (w > 0.65 * config.width && this.playerName.fontSize() > 5) {
-      this.playerName.fontSize(this.playerName.fontSize() * 0.9);
+    while (
+      w > MAX_NAME_WIDTH_FRACTION * config.width
+      && this.playerName.fontSize() > MIN_FONT_SIZE
+    ) {
+      this.playerName.fontSize(this.playerName.fontSize() * TEXT_SHRINK_FACTOR);
       w = this.playerName.width();
     }
     this.playerName.offsetX(w / 2);
@@ -61,10 +84,10 @@ export class NameFrame extends Konva.Group {
       "click tap",
       (event: Konva.KonvaEventObject<MouseEvent>) => {
         // "event.evt.buttons" is always 0 here.
-        if (event.evt.button === 0) {
+        if (event.evt.button === LEFT_MOUSE_BUTTON) {
           // Left-click
           this.leftClick();
-        } else if (event.evt.button === 2) {
+        } else if (event.evt.button === RIGHT_MOUSE_BUTTON) {
           // Right-click
           this.rightClick();
         }
@@ -72,9 +95,9 @@ export class NameFrame extends Konva.Group {
     );
     this.add(this.playerName);
 
-    w *= 1.4;
+    w *= NAME_LINE_GAP_FACTOR;
 
-    this.defaultStrokeWidth = 0.001_056 * globals.stage.height();
+    this.defaultStrokeWidth = STROKE_WIDTH_UNIT * globals.stage.height();
 
     this.leftLine = new Konva.Line({
       points: [
@@ -88,12 +111,7 @@ export class NameFrame extends Konva.Group {
       stroke: LABEL_COLOR,
       strokeWidth: this.defaultStrokeWidth,
       lineJoin: "round",
-      shadowColor: "black",
-      shadowBlur: 5,
-      shadowOffset: {
-        x: 0,
-        y: 3,
-      },
+      ...LINE_SHADOW,
       shadowOpacity: 0,
       listening: false,
     });
@@ -111,12 +129,7 @@ export class NameFrame extends Konva.Group {
       stroke: LABEL_COLOR,
       strokeWidth: this.defaultStrokeWidth,
       lineJoin: "round",
-      shadowColor: "black",
-      shadowBlur: 5,
-      shadowOffset: {
-        x: 0,
-        y: 3,
-      },
+      ...LINE_SHADOW,
       shadowOpacity: 0,
       listening: false,
     });
@@ -127,11 +140,11 @@ export class NameFrame extends Konva.Group {
     this.on("mouseover touchstart", function mouseOver(this: NameFrame) {
       // Do not do anything if the tooltip is currently disabled.
       if (
-        globals.lobby.settings.speedrunMode
+        store.getState().session.settings.speedrunFeatures
         || globals.options.speedrun
-        || globals.playerTimes[this.playerIndex] === undefined
+        || clock.getPlayerTime(this.playerIndex) === undefined
         || globals.state.finished
-        || globals.editingNote !== null
+        || globals.editingNote !== undefined
       ) {
         return;
       }
@@ -141,26 +154,26 @@ export class NameFrame extends Konva.Group {
     });
     this.on("mouseout touchend", () => {
       konvaTooltips.resetActiveHover(this);
-      tooltips.close(`#tooltip-${this.tooltipName}`);
+      tooltips.close(this.tooltipName);
     });
   }
 
   setActive(active: boolean): void {
     const strokeWidth = active
-      ? 3 * this.defaultStrokeWidth
+      ? ACTIVE_STROKE_WIDTH_MULTIPLIER * this.defaultStrokeWidth
       : this.defaultStrokeWidth;
     this.leftLine.strokeWidth(strokeWidth);
     this.rightLine.strokeWidth(strokeWidth);
 
-    this.playerName.shadowOpacity(active ? 0.6 : 0);
-    this.leftLine.shadowOpacity(active ? 0.6 : 0);
-    this.rightLine.shadowOpacity(active ? 0.6 : 0);
+    this.playerName.shadowOpacity(active ? ACTIVE_SHADOW_OPACITY : 0);
+    this.leftLine.shadowOpacity(active ? ACTIVE_SHADOW_OPACITY : 0);
+    this.rightLine.shadowOpacity(active ? ACTIVE_SHADOW_OPACITY : 0);
 
     this.playerName.fontStyle(active ? "bold" : "normal");
   }
 
   setConnected(connected: boolean): void {
-    const color = connected ? LABEL_COLOR : "#e8233d"; // Red for disconnected players.
+    const color = connected ? LABEL_COLOR : WARNING_COLOR;
 
     this.leftLine.stroke(color);
     this.rightLine.stroke(color);
@@ -173,102 +186,16 @@ export class NameFrame extends Konva.Group {
     globals.elements.fullActionLog!.showPlayerActions(username);
   }
 
-  // Players can right-click on the name frame to assume the perspective of the respective player
-  // This function calls "backToLobby()" inside of a "setTimeout" callback to avoid having the
-  // right-click context menu come up. (The right-click context menu will be enabled as soon as we
-  // execute the "backToLobby()" function.)
+  /** Right-clicking a name frame views the game from that player's seat (see "viewAs.ts"). */
   rightClick(): void {
-    // Find the index corresponding to this player.
     const playerName = this.playerName.text();
-    const shadowingPlayerIndex =
-      globals.metadata.playerNames.indexOf(playerName);
-    if (shadowingPlayerIndex === -1) {
+    const playerIndex = globals.metadata.playerNames.indexOf(playerName);
+    if (!isValidPlayerIndex(playerIndex)) {
       throw new Error(
         `Failed to find the index corresponding to player: ${playerName}`,
       );
     }
 
-    if (!globals.state.playing && !globals.state.finished) {
-      // As a spectator in an ongoing game, right-clicking on a name frame reloads the page,
-      // shifting the seat and hiding the appropriate cards (so that you can spectate from a
-      // specific player's perspective).
-
-      // Validate that we are not shifting to the perspective that we are already at.
-      const ourSpectator = globals.state.spectators.find(
-        (spectator) => spectator.name === globals.metadata.ourUsername,
-      );
-      let oldShadowingPlayerIndex: PlayerIndex | undefined;
-      if (
-        ourSpectator !== undefined
-        && ourSpectator.shadowingPlayerIndex !== undefined
-        && ourSpectator.shadowingPlayerIndex !== -1
-      ) {
-        oldShadowingPlayerIndex = ourSpectator.shadowingPlayerIndex;
-      }
-
-      if (shadowingPlayerIndex === oldShadowingPlayerIndex) {
-        modals.showWarning(
-          "You are already viewing the game from this player's perspective.",
-        );
-        return;
-      }
-
-      setTimeout(() => {
-        backToLobby();
-        globals.lobby.conn!.send("tableSpectate", {
-          tableID: globals.lobby.tableID,
-          shadowingPlayerIndex,
-        });
-      }, 0);
-    } else if (globals.state.finished) {
-      // In a replay, right-clicking on a name frame reloads the page and shifts the seat (so that
-      // you can view the game from a specific player's perspective).
-
-      // Validate that we are not shifting to the perspective that we are already at.
-      if (shadowingPlayerIndex === globals.metadata.ourPlayerIndex) {
-        modals.showWarning(
-          "You are already viewing the game from this player's perspective.",
-        );
-        return;
-      }
-
-      if (globals.state.spectators.length === 1) {
-        if (globals.state.replay.databaseID === null) {
-          setTimeout(() => {
-            const msg =
-              "Due to technical limitations, you cannot shift your perspective if you are the only person in a JSON replay.";
-            modals.showWarning(msg);
-          }, 0);
-          return;
-        }
-
-        // We are the only person in this replay, so going back to the lobby will automatically end
-        // it. So, leave the replay and create a new one (while specifying the player to view the
-        // perspective from).
-        setTimeout(() => {
-          backToLobby();
-          globals.lobby.conn!.send("replayCreate", {
-            source: "id",
-            databaseID: globals.state.replay.databaseID,
-            visibility:
-              globals.state.replay.shared === null ? "solo" : "shared",
-            shadowingPlayerIndex,
-          });
-        }, 0);
-
-        return;
-      }
-
-      // We are not the only person in this replay, so going back to the lobby will not
-      // automatically end it. So, go back to the lobby and re-spectate the current shared replay
-      // (while specifying the player to view the perspective from).
-      setTimeout(() => {
-        backToLobby();
-        globals.lobby.conn!.send("tableSpectate", {
-          tableID: globals.lobby.tableID,
-          shadowingPlayerIndex,
-        });
-      }, 0);
-    }
+    viewAs(playerIndex);
   }
 }

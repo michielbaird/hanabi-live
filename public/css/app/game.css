@@ -1,0 +1,135 @@
+#game {
+  height: 100%;
+}
+
+/* The anchors of the in-game tooltips cover canvas elements, but the canvas still gets the pointer. */
+#game-tooltips > div {
+  pointer-events: none;
+  position: absolute;
+}
+
+/* The deck plays icon sits too far left. */
+.fa-blind {
+  position: relative;
+  left: 0.2em;
+}
+
+/* Lists in tooltips are tighter than the tooltip's prose, so that a long list stays compact. */
+.game-tooltips-ul,
+.game-tooltips-ol {
+  line-height: 1.2;
+}
+
+.game-tooltips-ul {
+  list-style-type: none;
+  margin-top: 0.5em;
+  margin-bottom: 0;
+  text-indent: -0.5em;
+}
+
+.game-tooltips-ul > li {
+  margin-bottom: 0.1em;
+}
+
+.game-tooltips-icon {
+  display: inline-block;
+  width: 0.5em;
+  margin-right: 0.4em;
+  text-align: center;
+}
+
+.game-tooltips-ol {
+  margin-top: 0.5em;
+  margin-bottom: 0;
+  padding-left: 0.9em;
+}
+
+/* prevent unwanted selection when double clicking */
+.konvajs-content canvas {
+  user-select: none;
+}
+
+#game-chat-modal {
+  position: absolute;
+  z-index: 1;
+  /* The modal is automatically positioned in the "chat.js" file */
+  background-color: var(--game-chat-bg);
+  border-radius: 10px;
+  border: 3px solid var(--game-chat-border);
+  touch-action: none;
+}
+
+#game-chat-modal-header {
+  height: 1.25em;
+  text-align: right;
+}
+
+#game-chat-modal-header-close {
+  cursor: pointer;
+  color: var(--text-on-accent);
+  margin-right: 0.3em;
+  padding: 0.25em; /* We want some padding so that the activation range is bigger */
+  position: relative;
+  bottom: 0.3em;
+}
+
+#game-chat-modal-white {
+  display: flex;
+  flex-direction: column;
+  width: calc(100% - 0.3em);
+  height: calc(100% - 1.25em - 0.3em);
+  /* We have to move it further down because of the header */
+  padding: 1em;
+  margin: 0;
+  position: relative;
+  top: 0.05em;
+  left: 0.15em;
+}
+
+.efficiency-description {
+  display: inline-block;
+  width: 12em;
+}
+
+.turns-description {
+  display: inline-block;
+  width: 8em;
+}
+
+/* Cursors styles for game container */
+.game-cursor-default {
+  cursor: auto;
+}
+
+.game-cursor-look {
+  cursor: url("/public/img/cursors/look.png"), auto;
+}
+
+.game-cursor-edit {
+  cursor: url("/public/img/cursors/edit.png"), auto;
+}
+
+.game-cursor-hand {
+  cursor: grab;
+}
+
+.game-cursor-dragging {
+  cursor: grabbing;
+}
+
+/* A title in a note tooltip, drawn over a line, such as "Spectators" */
+div.note-title {
+  width: 100%;
+  height: 0.4em;
+  border-bottom: 1px solid var(--note-title-line);
+  text-align: center;
+  margin-bottom: 0.3em;
+  line-height: 0.4em;
+}
+
+div.note-title span {
+  font-size: 0.6em;
+  background-color: var(--surface);
+  text-align: center;
+  padding: 0 0.65em;
+}

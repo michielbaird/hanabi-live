@@ -1,13 +1,14 @@
 import type { CardIdentity, CardOrder, CardState } from "@hanabi-live/game";
 import { getTotalCardsInDeck } from "@hanabi-live/game";
 import { eRange } from "complete-common";
-import type { State } from "../../../types/State";
-import { HanabiCard } from "../../HanabiCard";
-import { globals } from "../../UIGlobals";
-import { getCardOrStackBase } from "../../getCardOrStackBase";
-import { changeStartingHandVisibility } from "../../hypothetical";
-import type { Listener, Selector, Subscription } from "../observeStore";
-import { observeStore } from "../observeStore";
+import { gameStateSource } from "../../../gameStateSource.ts";
+import type { State } from "../../../types/State.ts";
+import { HanabiCard } from "../../HanabiCard.ts";
+import { globals } from "../../UiGlobals.ts";
+import { getCardOrStackBase } from "../../getCardOrStackBase.ts";
+import { changeStartingHandVisibility } from "../../hypotheticalHands.ts";
+import type { Listener, Selector, Subscription } from "../observeStore.ts";
+import { observeStore, SKIP } from "../observeStore.ts";
 
 export function onCardsPossiblyAdded(length: number): void {
   const totalCardsInDeck = getTotalCardsInDeck(globals.variant);
@@ -17,8 +18,8 @@ export function onCardsPossiblyAdded(length: number): void {
     if (globals.deck.length <= i) {
       const newCard = new HanabiCard(
         i as CardOrder,
-        null,
-        null,
+        undefined,
+        undefined,
         false,
         globals.variant,
         globals.options.numPlayers,
@@ -67,21 +68,15 @@ export function onMorphedIdentitiesChanged(
 ): void {
   changeStartingHandVisibility();
   if (previousData === undefined || !previousData.hypotheticalActive) {
-    // Initializing or entering a hypothetical. Hide the starting player's hand.
+    // Initializing or entering a hypothetical. Hide the starting player's hand. A hypothetical that
+    // we join can already have morphed cards.
+    updateMorphedCardVisuals(data.morphedIdentities);
     return;
   }
 
   if (!data.hypotheticalActive) {
     // Exiting hypothetical, update all morphed.
-    if (previousData.morphedIdentities !== undefined) {
-      for (const i of previousData.morphedIdentities.keys()) {
-        // Since `morphedIdentities` is a sparse array, we need to check for undefined.
-        if (previousData.morphedIdentities[i] !== undefined) {
-          updateCardVisuals(i as CardOrder);
-        }
-      }
-    }
-
+    updateMorphedCardVisuals(previousData.morphedIdentities);
     return;
   }
 
@@ -101,21 +96,30 @@ export function onMorphedIdentitiesChanged(
   }
 }
 
+function updateMorphedCardVisuals(
+  morphedIdentities: readonly CardIdentity[] | undefined,
+) {
+  if (morphedIdentities === undefined) {
+    return;
+  }
+
+  for (const i of morphedIdentities.keys()) {
+    // Since `morphedIdentities` is a sparse array, we need to check for undefined.
+    if (morphedIdentities[i] !== undefined) {
+      updateCardVisuals(i as CardOrder);
+    }
+  }
+}
+
 function subscribeToCardChanges(order: CardOrder) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const subscriptions: Array<Subscription<State, any>> = [];
 
   // Validates that a card exists in the visible state before firing a listener.
   function checkOrderAndSelect<T>(s: Selector<State, T>): Selector<State, T> {
-    return (state) => {
-      if (order >= state.visibleState!.deck.length) {
-        // This card was removed from visible state. Return undefined to prevent firing the
-        // listener.
-        return undefined;
-      }
-
-      return s(state);
-    };
+    return (state) =>
+      // Skip the listener if this card was removed from the visible state.
+      order >= state.visibleState!.deck.length ? SKIP : s(state);
   }
 
   // Subscribes to a set of property changes from cards.
@@ -130,7 +134,10 @@ function subscribeToCardChanges(order: CardOrder) {
 
   // Subscribes to a set of property changes from cards as well as anywhere else in state.
   function subFullState<T>(s: Selector<State, T>, l: Listener<T>) {
-    subscriptions.push({ select: checkOrderAndSelect(s), onChange: l });
+    subscriptions.push({
+      select: checkOrderAndSelect(s),
+      onChange: l,
+    });
   }
 
   // Borders
@@ -151,16 +158,19 @@ function subscribeToCardChanges(order: CardOrder) {
       const morphedIdentity = s.replay.hypothetical?.morphedIdentities[order];
       const identity =
         morphedIdentity
-        ?? (card.suitIndex !== null && card.rank !== null
-          ? { suitIndex: card.suitIndex, rank: card.rank }
-          : s.cardIdentities[order]);
+        ?? (card.suitIndex === undefined || card.rank === undefined
+          ? s.cardIdentities[order]
+          : {
+              suitIndex: card.suitIndex,
+              rank: card.rank,
+            });
 
       const status =
-        identity !== undefined
-        && identity.suitIndex !== null
-        && identity.rank !== null
-          ? s.visibleState!.cardStatus[identity.suitIndex][identity.rank]
-          : null;
+        identity === undefined
+        || identity.suitIndex === undefined
+        || identity.rank === undefined
+          ? undefined
+          : s.visibleState!.cardStatus[identity.suitIndex][identity.rank];
 
       return {
         status,
@@ -176,9 +186,7 @@ function subscribeToCardChanges(order: CardOrder) {
 
   // Notes
   sub(
-    (c) => ({
-      possibleCards: c.possibleCards.length,
-    }),
+    (c) => ({ possibleCards: c.possibleCards.length }),
     () => {
       checkNoteDisproved(order);
     },
@@ -227,7 +235,7 @@ function subscribeToCardChanges(order: CardOrder) {
     },
   );
 
-  return observeStore(globals.store!, subscriptions);
+  return observeStore(gameStateSource, subscriptions);
 }
 
 function updateBorder(order: CardOrder) {

@@ -10,14 +10,18 @@ import type {
 } from "@hanabi-live/game";
 
 export function suitIndexToSuit(
-  suitIndex: SuitIndex | null,
+  suitIndex: SuitIndex | undefined,
   variant: Variant,
 ): Suit | undefined {
-  if (suitIndex === null) {
-    return undefined;
-  }
+  return suitIndex === undefined ? undefined : variant.suits[suitIndex];
+}
 
-  return variant.suits[suitIndex];
+export function suitToSuitIndex(
+  suit: Suit,
+  variant: Variant,
+): SuitIndex | undefined {
+  const suitIndex = variant.suits.indexOf(suit);
+  return suitIndex === -1 ? undefined : (suitIndex as SuitIndex);
 }
 
 export function colorToColorIndex(

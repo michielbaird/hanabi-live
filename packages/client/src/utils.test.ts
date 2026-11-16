@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, jest, test } from "@jest/globals";
-import { setBrowserAddressBarPath } from "./utils";
+import { afterEach, describe, expect, test, vi } from "vitest";
+import { setBrowserAddressBarPath } from "./utils.ts";
 
 describe("setBrowserAddressBarPath", () => {
   const originalLocation = Object.getOwnPropertyDescriptor(
@@ -25,8 +25,8 @@ describe("setBrowserAddressBarPath", () => {
   });
 
   test("pushes a lobby-to-pregame transition", () => {
-    const pushState = jest.fn();
-    const replaceState = jest.fn();
+    const pushState = vi.fn();
+    const replaceState = vi.fn();
     Object.defineProperties(globalThis, {
       location: {
         configurable: true,
@@ -34,7 +34,10 @@ describe("setBrowserAddressBarPath", () => {
       },
       history: {
         configurable: true,
-        value: { pushState, replaceState },
+        value: {
+          pushState,
+          replaceState,
+        },
       },
     });
 
@@ -45,8 +48,8 @@ describe("setBrowserAddressBarPath", () => {
   });
 
   test("replaces an existing URL instead of duplicating a history entry", () => {
-    const pushState = jest.fn();
-    const replaceState = jest.fn();
+    const pushState = vi.fn();
+    const replaceState = vi.fn();
     Object.defineProperties(globalThis, {
       location: {
         configurable: true,
@@ -54,7 +57,10 @@ describe("setBrowserAddressBarPath", () => {
       },
       history: {
         configurable: true,
-        value: { pushState, replaceState },
+        value: {
+          pushState,
+          replaceState,
+        },
       },
     });
 
@@ -65,8 +71,8 @@ describe("setBrowserAddressBarPath", () => {
   });
 
   test("turn-number updates keep replacing the active entry", () => {
-    const pushState = jest.fn();
-    const replaceState = jest.fn();
+    const pushState = vi.fn();
+    const replaceState = vi.fn();
     Object.defineProperties(globalThis, {
       location: {
         configurable: true,
@@ -74,7 +80,10 @@ describe("setBrowserAddressBarPath", () => {
       },
       history: {
         configurable: true,
-        value: { pushState, replaceState },
+        value: {
+          pushState,
+          replaceState,
+        },
       },
     });
 

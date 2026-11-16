@@ -4,29 +4,34 @@
 
   // https://www.typescriptlang.org/docs/handbook/compiler-options.html
   "compilerOptions": {
+    "types": ["bun"],
     "rootDir": ".",
 
-    // Performance optimization; see: https://www.npmjs.com/package/tslib
-    "importHelpers": true,
-
-    // "target" specifies the ECMAScript target version. By default, it is "ES3". This is too
-    // conservative; the project targets browsers / Node.js within a 2 year time-frame.
+    // "target" specifies the ECMAScript target version. Keep it in lockstep with Vite's build
+    // target: the newest version that its oldest browser (now Safari 16.4) fully supports. The
+    // "game" and "data" packages get their built-in types from it, and the client bundles them.
+    // When it reaches ES2024, turn on "regexp/require-unicode-sets-regexp" in ESLint. When it
+    // reaches ES2025, turn on "unicorn/prefer-iterator-to-array" and "unicorn/prefer-set-methods".
+    // When it reaches ES2026, turn on "unicorn/prefer-uint8array-base64".
     "target": "ES2022",
 
     // "resolveJsonModule" is required to import files with ".json" extensions. By default, it is
     // false.
     "resolveJsonModule": true,
 
-    // "node16" supports JSON imports in CommonJS mode (which all packages in this monorepo use)
-    // without requiring import assertion syntax changes.
-    "module": "node16",
-    "moduleResolution": "node16",
+    // Bun executes TypeScript directly; browser entrypoints are bundled.
+    "module": "preserve",
+    "moduleResolution": "bundler",
+
+    // Relative imports in "packages/game" end in ".ts", and its build rewrites them to ".js".
+    "rewriteRelativeImportExtensions": true,
 
     "paths": {
       "@hanabi-live/data": ["./packages/data/src/index.ts"],
       "@hanabi-live/game": ["./packages/game/src/index.ts"],
       // The data files of the game package, for the bot's worker (which needs them as they are).
       "@hanabi-live/game/src/json/*": ["./packages/game/src/json/*"],
+      "@hanabi-live/testing": ["./packages/testing/src/index.ts"],
     },
   },
 }

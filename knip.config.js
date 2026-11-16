@@ -8,11 +8,50 @@ const config = {
   eslint: {},
   prettier: {},
 
+  workspaces: {
+    ".": {
+      ignore: [
+        "misc/file.ts", // An intentionally empty file for the root "tsconfig.json".
+        "public/**", // Vendored libraries and build output.
+      ],
+    },
+    "packages/client": {
+      // The standalone pages are built with esbuild from shell scripts, and the public pages with
+      // "vite build --mode public-pages". Knip finds the client's Vite entry point.
+      entry: [
+        "src/standalone/*.tsx",
+        "src/publicPages/index.tsx",
+        "src/**/*.test.ts",
+      ],
+      ignore: [
+        "test_data/hanabLiveStateToCurrentRepoState.js", // Pasted into the browser console.
+      ],
+    },
+    "packages/scripts": {
+      entry: [
+        "src/buildCss.ts", // Run from shell scripts.
+      ],
+    },
+    "packages/game": {
+      entry: ["src/**/*.test.ts"],
+    },
+    "packages/testing": {
+      entry: [
+        "src/**/*.test.ts",
+        "src/criticalCss.ts", // Run by "runTests.ts".
+        "src/uiScreenshots.ts", // Run by "runTests.ts".
+      ],
+      // Bun reports "ws" as a built-in module, so Knip cannot see that it is used when running
+      // under Bun.
+      ignoreDependencies: "Bun" in globalThis ? ["@types/ws", "ws"] : [],
+    },
+  },
+
   ignoreDependencies: [
+    "complete-cli", // Used in "scripts/lint/check-templates.sh".
     "complete-lint", // This is a linting meta-package.
     "eslint", // Provided by "complete-lint".
     "eslint-config-complete", // Provided by "complete-lint".
-    "prettier", // Provided by "complete-lint".
     "prettier-plugin-organize-imports", // Provided by "complete-lint".
     "prettier-plugin-packagejson", // Provided by "complete-lint".
   ],

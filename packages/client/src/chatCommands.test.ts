@@ -1,15 +1,25 @@
-import { describe, expect, jest, test } from "@jest/globals";
-import {
+import { WEBSITE_CHAT_COMMANDS } from "@hanabi-live/data";
+import { describe, expect, test, vi } from "vitest";
+
+vi.mock("./chat.ts", () => ({
+  SelfChatMessageType: {},
+  sendSelfPmFromServer: vi.fn(),
+  sendChat: vi.fn(),
+}));
+vi.mock("./Globals.ts", () => ({
+  globals: {},
+}));
+vi.mock("./lobby/createGame.ts", () => ({}));
+vi.mock("./modals.ts", () => ({}));
+vi.mock("./lobby/createReplayJson.ts", () => ({
+  createJsonFromReplay: vi.fn(),
+}));
+const {
+  parsePmHistoryCommandArgs,
   getVariantFromArgs,
   getVariantNameFromPartial,
-  parsePMHistoryCommandArgs,
-} from "./chatCommands";
-
-jest.mock("./chat", () => ({}));
-jest.mock("./Globals", () => ({}));
-jest.mock("./lobby/createGame", () => ({}));
-jest.mock("./modals", () => ({}));
-jest.mock("./lobby/createReplayJSON.ts", () => ({}));
+  chatCommands,
+} = await import("./chatCommands.ts");
 
 const brownFives = "Brown-Fives (6 Suits)";
 const brownFivesPrism6Suits = "Brown-Fives & Prism (6 Suits)";
@@ -17,18 +27,18 @@ const brownFivesPrism6Suits = "Brown-Fives & Prism (6 Suits)";
 describe("functions", () => {
   describe("parsing PM history arguments", () => {
     test("uses five messages by default", () => {
-      expect(parsePMHistoryCommandArgs([])).toEqual({ amount: 5 });
-      expect(parsePMHistoryCommandArgs(["Alice"])).toEqual({
-        username: "Alice",
-        amount: 5,
+      expect(parsePmHistoryCommandArgs([])).toEqual({ limit: 5 });
+      expect(parsePmHistoryCommandArgs(["Alice"])).toEqual({
+        recipient: "Alice",
+        limit: 5,
       });
     });
 
     test("accepts an amount with or without a username", () => {
-      expect(parsePMHistoryCommandArgs(["15"])).toEqual({ amount: 15 });
-      expect(parsePMHistoryCommandArgs(["Alice", "15"])).toEqual({
-        username: "Alice",
-        amount: 15,
+      expect(parsePmHistoryCommandArgs(["15"])).toEqual({ limit: 15 });
+      expect(parsePmHistoryCommandArgs(["Alice", "15"])).toEqual({
+        recipient: "Alice",
+        limit: 15,
       });
     });
 
@@ -40,7 +50,7 @@ describe("functions", () => {
       [["Alice", "nope"]],
       [["Alice", "5", "extra"]],
     ])("rejects invalid arguments: %j", (args: readonly string[]) => {
-      expect(parsePMHistoryCommandArgs(args)).toBeUndefined();
+      expect(parsePmHistoryCommandArgs(args)).toBeUndefined();
     });
   });
 
@@ -96,4 +106,10 @@ describe("functions", () => {
       });
     });
   });
+});
+
+test("runs the chat commands that the server lists as website commands", () => {
+  expect([...chatCommands.keys()].toSorted()).toEqual(
+    [...WEBSITE_CHAT_COMMANDS].toSorted(),
+  );
 });

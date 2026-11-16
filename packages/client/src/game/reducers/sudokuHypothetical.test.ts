@@ -6,20 +6,20 @@ import type {
   PlanHypotheticalActionContext,
 } from "@hanabi-live/game";
 import {
-  getVariant,
+  getVariantById,
   hypotheticalStateReducer,
   initializeHypotheticalState,
   planHypotheticalAction,
 } from "@hanabi-live/game";
-import { describe, expect, test } from "@jest/globals";
-import { assertDefined, assertNotNull } from "complete-common";
-import { loadGameJSON } from "../../../test/loadGameJSON";
+import { assertDefined } from "complete-common";
+import { describe, expect, test } from "vitest";
+import { loadGameJson } from "../../../test/loadGameJson.ts";
 import sudokuGame from "../../../test_data/sudoku_hypothetical_1663033.json";
-import { initialState } from "./initialStates/initialState";
+import { initialState } from "./initialStates/initialState.ts";
 
-const replay = loadGameJSON(sudokuGame);
+const replay = loadGameJson(sudokuGame);
 const { metadata } = replay;
-const variant = getVariant(metadata.options.variantName);
+const variant = getVariantById(metadata.options.variantId);
 const notes = initialState(metadata).notes.ourNotes;
 const cardIdentities = sudokuGame.deck as unknown as readonly CardIdentity[];
 
@@ -34,7 +34,7 @@ function expectConsistentCollections(state: GameState) {
 
   for (const [player, hand] of state.hands.entries()) {
     for (const order of hand) {
-      expect(state.deck[order]?.location).toBe(player);
+      expect(state.deck[order]?.location).toBe<unknown>(player);
     }
   }
   for (const stack of state.playStacks) {
@@ -48,69 +48,75 @@ function expectConsistentCollections(state: GameState) {
     }
   }
   for (const order of state.hole) {
-    expect(state.deck[order]?.location).toBe("hole");
+    expect(state.deck[order]?.location).toBe<unknown>("hole");
   }
 }
 
 describe("Sudoku hypothetical from public game 1663033 (issue #3040)", () => {
   test("reconstructs the hand at the reported replay segment", () => {
     const gameState = replay.replay.states[60];
-    assertDefined(gameState, "Missing replay segment 60.");
-    expect(metadata.options.variantName).toBe("Sudoku (5 Suits)");
+    assertDefined(gameState, "Missing replay segment: 60");
+    expect(variant.name).toBe("Sudoku (5 Suits)");
     expect(gameState.turn.currentPlayerIndex).toBe(0);
-    expect(gameState.hands[0]).toEqual([30, 38, 42, 44, 47]);
+    expect(gameState.hands[0]).toEqual<unknown>([30, 38, 42, 44, 47]);
   });
 
   test.each([59, 60, 61])(
     "keeps collections consistent after hypothetical plays and discards at segment %i",
     (segment) => {
       const gameState = replay.replay.states[segment];
-      assertDefined(gameState, `Missing replay segment ${segment}.`);
+      assertDefined(gameState, `Missing replay segment: ${segment}`);
       const playerIndex = gameState.turn.currentPlayerIndex;
-      assertNotNull(
+      assertDefined(
         playerIndex,
-        `Missing current player at segment ${segment}.`,
+        `Missing current player at segment: ${segment}`,
       );
 
       const hand = gameState.hands[playerIndex];
-      assertDefined(hand, `Missing hand at segment ${segment}.`);
+      assertDefined(hand, `Missing hand at segment: ${segment}`);
 
       for (const order of hand) {
         for (const type of ["play", "discard"] as const) {
           const card: CardState | undefined = gameState.deck[order];
-          assertDefined(card, `Missing card ${order}.`);
+          assertDefined(card, `Missing card: ${order}`);
           const context: PlanHypotheticalActionContext = {
             gameState,
             metadata,
             variant,
             cardIdentities,
             morphedIdentities: [],
+            showDrawnCards: true,
+            startingPlayerIndex: undefined,
             notes,
             playing: false,
             cardViews: [
               {
                 state: card,
                 isStackBase: false,
-                visibleSuitIndex: null,
-                visibleRank: null,
+                visibleSuitIndex: undefined,
+                visibleRank: undefined,
               },
             ],
           };
-          const actions = planHypotheticalAction({ type, order }, context);
-          assertNotNull(actions, "Failed to plan a hand action.");
+          const actions = planHypotheticalAction(
+            {
+              type,
+              order,
+            },
+            context,
+          );
+          assertDefined(actions, "Failed to plan a hand action.");
 
           let hypothetical = initializeHypotheticalState(
             gameState,
             false,
             [],
-            true,
             metadata,
           );
           for (const action of actions) {
             hypothetical = hypotheticalStateReducer(
               hypothetical,
               action,
-              true,
               metadata,
             );
             expectConsistentCollections(hypothetical.ongoing);
@@ -124,33 +130,68 @@ describe("Sudoku hypothetical from public game 1663033 (issue #3040)", () => {
   );
   test("rejects a deck card already drawn to the other player's hand", () => {
     const gameState = replay.replay.states[59];
-    assertDefined(gameState, "Missing replay segment 59.");
+    assertDefined(gameState, "Missing replay segment: 59");
     let hypothetical = initializeHypotheticalState(
       gameState,
       false,
       [],
-      true,
       metadata,
     );
 
     const intents = [
-      { type: "colorClue", target: 0, value: 3 },
-      { type: "colorClue", target: 1, value: 1 },
-      { type: "rankClue", target: 0, value: 4 },
-      { type: "colorClue", target: 1, value: 0 },
-      { type: "play", order: 6 as CardOrder },
-      { type: "play", order: 47 as CardOrder },
+      {
+        type: "clue",
+        receiverIndex: 0,
+        clue: {
+          type: "color",
+          color: 3,
+        },
+      },
+      {
+        type: "clue",
+        receiverIndex: 1,
+        clue: {
+          type: "color",
+          color: 1,
+        },
+      },
+      {
+        type: "clue",
+        receiverIndex: 0,
+        clue: {
+          type: "rank",
+          rank: 4,
+        },
+      },
+      {
+        type: "clue",
+        receiverIndex: 1,
+        clue: {
+          type: "color",
+          color: 0,
+        },
+      },
+      {
+        type: "play",
+        order: 6 as CardOrder,
+      },
+      {
+        type: "play",
+        order: 47 as CardOrder,
+      },
     ] as const;
 
     for (const intent of intents) {
       const { ongoing } = hypothetical;
       const orders =
-        intent.type === "play" ? [intent.order] : ongoing.hands[intent.target];
+        intent.type === "play"
+          ? [intent.order]
+          : ongoing.hands[intent.receiverIndex];
       const cardViews = orders.map((order) => {
         const state: CardState | undefined = ongoing.deck[order];
         const identity = cardIdentities[order];
-        assertDefined(state, `Missing card ${order}.`);
-        assertDefined(identity, `Missing identity ${order}.`);
+        assertDefined(state, `Missing card: ${order}`);
+        assertDefined(identity, `Missing identity: ${order}`);
         return {
           state,
           isStackBase: false,
@@ -165,18 +206,15 @@ describe("Sudoku hypothetical from public game 1663033 (issue #3040)", () => {
         variant,
         cardIdentities,
         morphedIdentities: hypothetical.morphedIdentities,
+        showDrawnCards: hypothetical.showDrawnCards,
+        startingPlayerIndex: hypothetical.startingPlayerIndex,
         notes,
         playing: false,
         cardViews,
       });
-      assertNotNull(planned, "Failed to plan a replay action.");
+      assertDefined(planned, "Failed to plan a replay action.");
       for (const action of planned) {
-        hypothetical = hypotheticalStateReducer(
-          hypothetical,
-          action,
-          true,
-          metadata,
-        );
+        hypothetical = hypotheticalStateReducer(hypothetical, action, metadata);
         expectConsistentCollections(hypothetical.ongoing);
       }
     }
@@ -184,34 +222,42 @@ describe("Sudoku hypothetical from public game 1663033 (issue #3040)", () => {
     const after = hypothetical.ongoing;
     expect(after.cardsRemainingInTheDeck).toBe(0);
     expect(after.turn.currentPlayerIndex).toBe(1);
-    expect(after.hands[0]).toContain(49);
-    expect(after.hands[1]).not.toContain(49);
+    expect<readonly number[]>(after.hands[0]).toContain(49);
+    expect<readonly number[]>(after.hands[1]).not.toContain(49);
 
     // Replaying card 49 from another hand would duplicate it in the UI.
     const card = after.deck[49];
     assertDefined(card, "Missing the final card.");
     const morphedIdentities: Array<CardIdentity | undefined> = [];
-    morphedIdentities[49] = { suitIndex: 0, rank: 4 };
+    morphedIdentities[49] = {
+      suitIndex: 0,
+      rank: 4,
+    };
     const invalidPlan = planHypotheticalAction(
-      { type: "play", order: 49 as CardOrder },
+      {
+        type: "play",
+        order: 49 as CardOrder,
+      },
       {
         gameState: after,
         metadata,
         variant,
         cardIdentities,
         morphedIdentities,
+        showDrawnCards: true,
+        startingPlayerIndex: undefined,
         notes,
         playing: false,
         cardViews: [
           {
             state: card,
             isStackBase: false,
-            visibleSuitIndex: null,
-            visibleRank: null,
+            visibleSuitIndex: undefined,
+            visibleRank: undefined,
           },
         ],
       },
     );
-    expect(invalidPlan).toBeNull();
+    expect(invalidPlan).toBeUndefined();
   });
 });

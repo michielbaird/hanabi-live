@@ -1,6 +1,6 @@
 {
   "name": "@hanabi-live/game",
-  "version": "0.0.8",
+  "version": "0.2.1",
   "description": "Functions for computing game states of Hanabi.",
   "keywords": [],
   "homepage": "https://github.com/Hanabi-Live/hanabi-live",
@@ -11,9 +11,17 @@
     "type": "git",
     "url": "git+https://github.com/Hanabi-Live/hanabi-live.git"
   },
-  "license": "GPL-3.0",
+  "license": "GPL-3.0-only",
   "author": "Zamiell",
-  "type": "commonjs",
+  "sideEffects": false,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "bun": "./src/index.ts",
+      "default": "./dist/index.js"
+    }
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "files": [
@@ -25,20 +33,17 @@
   ],
   "scripts": {
     "build": "rm -rf dist && tsc --project ./tsconfig.npm.json",
-    "docs": "npx typedoc ./src/index.ts",
-    "lint": "bash ./lint.sh",
-    "publish": "isaacscript publish"
+    "docs": "typedoc ./src/index.ts",
+    "lint": "bash ../../scripts/lint/check-typescript.sh",
+    "prepack": "bun run build"
   },
   "dependencies": {
-    "complete-common": "2.32.0",
-    "immer": "11.1.21",
-    "tslib": "2.8.1",
-    "zod": "4.6.5"
+    "complete-common": "catalog:",
+    "immer": "catalog:",
+    "zod": "catalog:"
   },
   "devDependencies": {
-    "@jest/globals": "30.5.2",
-    "jsonc-parser": "3.3.1",
-    "ts-jest": "29.4.14",
-    "typedoc": "0.28.20"
+    "@types/bun": "catalog:",
+    "typedoc": "catalog:"
   }
 }

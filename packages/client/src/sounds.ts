@@ -1,7 +1,8 @@
 // In-game sounds.
 
-import { globals } from "./Globals";
-import { SoundType } from "./game/types/SoundType";
+import { defaultSettings, MAX_VOLUME } from "@hanabi-live/data";
+import { SoundType } from "./game/types/SoundType.ts";
+import { store } from "./store.ts";
 
 export const SOUNDS_PATH = "/public/sounds";
 
@@ -34,16 +35,14 @@ export function play(file: SoundType, mute = false): void {
     soundEffect.muted = true;
   }
 
-  const path = `/public/sounds/${file}.mp3`;
+  const path = `${SOUNDS_PATH}/${file}.mp3`;
   soundEffect = new Audio(path);
 
   // HTML5 audio volume is a range between 0.0 to 1.0, but volume is stored in the settings as an
-  // integer from 0 to 100.
-  let { volume } = globals.settings;
-  if (typeof volume !== "number") {
-    volume = 50;
-  }
-  soundEffect.volume = volume / 100;
+  // integer from 0 to MAX_VOLUME.
+  const { volume } = store.getState().session.settings;
+  soundEffect.volume =
+    (typeof volume === "number" ? volume : defaultSettings.volume) / MAX_VOLUME;
 
   soundEffect.play().catch(() => {
     // Do nothing if audio playback fails, since it is most likely due to the user not having

@@ -1,12 +1,9 @@
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  jest,
-  test,
-} from "@jest/globals";
-import { Loader } from "./Loader";
+import type { Clock } from "@sinonjs/fake-timers";
+import { install } from "@sinonjs/fake-timers";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { Loader } from "./Loader.ts";
+
+let clock: Clock;
 
 class FakeImage {
   readonly listeners = new Map<string, () => void>();
@@ -21,26 +18,32 @@ class FakeImage {
   }
 }
 
-const originalImage = globalThis.Image;
-
-function getImage(loader: Loader, fileID: string): FakeImage {
-  return loader.imageMap.get(fileID) as unknown as FakeImage;
+function getImage(loader: Loader, fileId: string): FakeImage {
+  return loader.imageMap.get(fileId) as unknown as FakeImage;
 }
 
 describe("image loader", () => {
   beforeEach(() => {
-    jest.useFakeTimers();
-    globalThis.Image = FakeImage as unknown as typeof Image;
+    clock = install({
+      toFake: [
+        "setTimeout",
+        "clearTimeout",
+        "setInterval",
+        "clearInterval",
+        "Date",
+      ],
+    });
+    vi.stubGlobal("Image", FakeImage);
   });
 
   afterEach(() => {
-    jest.useRealTimers();
-    globalThis.Image = originalImage;
+    clock.uninstall();
+    vi.unstubAllGlobals();
   });
 
   test("finishes after all images load successfully", () => {
     const loader = new Loader();
-    const onFinished = jest.fn();
+    const onFinished = vi.fn();
     loader.finishedCallback = () => {
       onFinished();
     };
@@ -56,9 +59,9 @@ describe("image loader", () => {
 
   test("retries a transient image error without counting it as loaded", () => {
     const loader = new Loader();
-    const fileID = "crown";
-    const firstImage = getImage(loader, fileID);
-    const onFinished = jest.fn();
+    const fileId = "crown";
+    const firstImage = getImage(loader, fileId);
+    const onFinished = vi.fn();
     loader.finishedCallback = () => {
       onFinished();
     };
@@ -67,13 +70,13 @@ describe("image loader", () => {
     expect(loader.numLoaded).toBe(0);
     expect(loader.finished).toBe(false);
 
-    jest.advanceTimersByTime(1000);
-    const retriedImage = getImage(loader, fileID);
+    clock.tick(1000);
+    const retriedImage = getImage(loader, fileId);
     expect(retriedImage).not.toBe(firstImage);
     retriedImage.emit("load");
 
     for (const [id] of loader.filePathMap) {
-      if (id !== fileID) {
+      if (id !== fileId) {
         getImage(loader, id).emit("load");
       }
     }
@@ -85,9 +88,9 @@ describe("image loader", () => {
 
   test("reports a permanent error after bounded retries", () => {
     const loader = new Loader();
-    const fileID = "crown";
-    const onFailed = jest.fn();
-    const onFinished = jest.fn();
+    const fileId = "crown";
+    const onFailed = vi.fn();
+    const onFinished = vi.fn();
     loader.failedCallback = (filePath) => {
       onFailed(filePath);
     };
@@ -95,25 +98,25 @@ describe("image loader", () => {
       onFinished();
     };
 
-    getImage(loader, fileID).emit("error");
-    jest.advanceTimersByTime(1000);
-    getImage(loader, fileID).emit("error");
-    jest.advanceTimersByTime(2000);
-    getImage(loader, fileID).emit("error");
+    getImage(loader, fileId).emit("error");
+    clock.tick(1000);
+    getImage(loader, fileId).emit("error");
+    clock.tick(2000);
+    getImage(loader, fileId).emit("error");
 
     expect(loader.failed).toBe(true);
     expect(loader.numLoaded).toBe(0);
     expect(loader.finished).toBe(false);
     expect(onFailed).toHaveBeenCalledWith("/public/img/crown.png");
     expect(onFinished).not.toHaveBeenCalled();
-    expect(jest.getTimerCount()).toBe(0);
+    expect(clock.countTimers()).toBe(0);
   });
 
   test("reports current progress when a callback is attached late", () => {
     const loader = new Loader();
     getImage(loader, "crown").emit("load");
 
-    const onProgress = jest.fn();
+    const onProgress = vi.fn();
     loader.progressCallback = (numLoaded, size) => {
       onProgress(numLoaded, size);
     };

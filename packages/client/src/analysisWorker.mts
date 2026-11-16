@@ -8,7 +8,7 @@ import init, {
   init_variants,
   is_game_supported,
 } from "hanab-bot-wasm";
-import wasmURL from "hanab-bot-wasm/hanab_bot_wasm_bg.wasm";
+import wasmURL from "hanab-bot-wasm/hanab_bot_wasm_bg.wasm?url";
 // The raw data files are not exported by the game package (it exports what is made from them).
 // eslint-disable-next-line @typescript-eslint/no-restricted-imports
 import suitsJSON from "@hanabi-live/game/src/json/suits.json";
@@ -81,11 +81,18 @@ async function handle(request: Request) {
           request.convention,
           request.endgameTimeoutMs,
           (done: number, total: number) => {
-            scope.postMessage({ type: "progress", done, total });
+            scope.postMessage({
+              type: "progress",
+              done,
+              total,
+            });
           },
         );
         const result: unknown = JSON.parse(text);
-        scope.postMessage({ type: "result", result });
+        scope.postMessage({
+          type: "result",
+          result,
+        });
         break;
       }
     }
@@ -93,8 +100,14 @@ async function handle(request: Request) {
     // A question about support that fails means that the bot can't be used.
     scope.postMessage(
       request.type === "supports"
-        ? { type: "supports", supported: false }
-        : { type: "error", message: String(error) },
+        ? {
+          type: "supports",
+          supported: false,
+        }
+        : {
+          type: "error",
+          message: String(error),
+        },
     );
   }
 }

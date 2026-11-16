@@ -11,18 +11,19 @@ import {
   DISCARD_PERMISSION_NOTES,
   EXCLAMATION_MARK_NOTES,
   FINESSED_NOTES,
+  getVariantById,
   KNOWN_TRASH_NOTES,
   NEEDS_FIX_NOTES,
   QUESTION_MARK_NOTES,
+  SPOOK_NOTES,
   UNCLUED_NOTES,
-  getVariant,
 } from "@hanabi-live/game";
 import { assertDefined } from "complete-common";
 import equal from "fast-deep-equal";
 import type { Draft } from "immer";
 import { castDraft, produce } from "immer";
-import type { NotesState } from "../types/NotesState";
-import * as noteIdentity from "./noteIdentity";
+import type { NotesState } from "../types/NotesState.ts";
+import * as noteIdentity from "./noteIdentity.ts";
 
 export const notesReducer = produce(notesReducerFunction, {} as NotesState);
 
@@ -35,10 +36,10 @@ function notesReducerFunction(
   playing: boolean,
   finished: boolean,
 ) {
-  const variant = getVariant(metadata.options.variantName);
+  const variant = getVariantById(metadata.options.variantId);
   switch (action.type) {
-    case "setEffMod": {
-      notes.efficiencyModifier = action.mod;
+    case "setEfficiencyModifier": {
+      notes.efficiencyModifier = action.efficiencyModifier;
       break;
     }
 
@@ -50,7 +51,7 @@ function notesReducerFunction(
         const spectatorNotes = notes.allNotes[action.order];
         if (spectatorNotes !== undefined) {
           for (const spectatorNote of spectatorNotes) {
-            if (spectatorNote.name === metadata.ourUsername) {
+            if (spectatorNote.username === metadata.ourUsername) {
               spectatorNote.text = action.text;
             }
           }
@@ -69,8 +70,18 @@ function notesReducerFunction(
     }
 
     case "receiveNote": {
-      // Add in the notes received from server.
-      notes.allNotes[action.order] = castDraft(action.notes);
+      // Replace the author's note on the card, or add it if they had none.
+      const cardNotes = notes.allNotes[action.order];
+      const existing = cardNotes?.find(
+        (note) => note.username === action.note.username,
+      );
+      if (existing !== undefined) {
+        existing.text = action.note.text;
+      } else if (cardNotes === undefined) {
+        notes.allNotes[action.order] = [castDraft(action.note)];
+      } else {
+        cardNotes.push(castDraft(action.note));
+      }
       break;
     }
 
@@ -81,19 +92,9 @@ function notesReducerFunction(
       }
 
       // Set the new notes.
-      for (const [i, noteTextList] of action.noteTextLists.entries()) {
+      for (const { notes: noteTextList, spectator, username } of action.notes) {
         // If we are a spectator, copy our notes from combined list.
-        const name = action.names[i];
-        if (name === undefined) {
-          continue;
-        }
-
-        const isSpectator = action.isSpectators[i];
-        if (isSpectator === undefined) {
-          continue;
-        }
-
-        if (name === metadata.ourUsername && !playing && !finished) {
+        if (!playing && !finished && username === metadata.ourUsername) {
           for (const [order, text] of noteTextList.entries()) {
             const newNote = parseNote(variant, text);
             notes.ourNotes[order] = castDraft(newNote);
@@ -104,9 +105,9 @@ function notesReducerFunction(
           const spectatorNotes = notes.allNotes[order];
           if (spectatorNotes !== undefined) {
             spectatorNotes.push({
-              name,
+              username,
               text,
-              isSpectator,
+              spectator,
             });
           }
         }
@@ -123,16 +124,19 @@ function getNoteKeywords(note: string): readonly string[] {
   }
 
   // Consume unterminated brackets too, so repeated opening brackets do not cause backtracking.
-  const regexp = /\[([^\n\r\]\u{2028}\u{2029}]*)(\])?/gu;
+  const regexp = /\[(?<keyword>[^\n\r\]\u{2028}\u{2029}]*)(?<closing>\])?/gu;
   const keywords: string[] = [];
   let lastBracketEnd = 0;
 
   for (const match of note.matchAll(regexp)) {
-    if (match[2] === "]") {
-      assertDefined(match[1], "Failed to get the bracketed note keyword.");
-      keywords.push(match[1].trim());
-      lastBracketEnd = match.index + match[0].length;
+    if (match.groups?.["closing"] !== "]") {
+      continue;
     }
+
+    const { keyword } = match.groups;
+    assertDefined(keyword, "Failed to get the bracketed note keyword.");
+    keywords.push(keyword.trim());
+    lastBracketEnd = match.index + match[0].length;
   }
 
   const lastPipe = note.lastIndexOf("|");
@@ -199,6 +203,7 @@ export function parseNote(variant: Variant, text: string): CardNote {
     EXCLAMATION_MARK_NOTES,
     keywords,
   );
+  const spook = checkNoteKeywordsForMatch(SPOOK_NOTES, keywords);
   const blank = checkNoteKeywordsForMatch(BLANK_NOTES, keywords);
   const unclued = checkNoteKeywordsForMatch(UNCLUED_NOTES, keywords);
   const clued = checkNoteKeywordsForMatch(CLUED_NOTES, keywords);
@@ -212,6 +217,7 @@ export function parseNote(variant: Variant, text: string): CardNote {
     needsFix,
     questionMark,
     exclamationMark,
+    spook,
     blank,
     unclued,
     clued,

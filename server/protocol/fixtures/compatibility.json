@@ -1,0 +1,1670 @@
+[
+  {
+    "name": "a request without data has an empty payload",
+    "direction": "request",
+    "command": "linkList",
+    "input": {},
+    "valid": true
+  },
+  {
+    "name": "a request without data rejects extra fields",
+    "direction": "request",
+    "command": "linkList",
+    "input": {
+      "name": "unused"
+    },
+    "valid": false
+  },
+  {
+    "name": "loading statistics carry no total",
+    "direction": "event",
+    "command": "lobbyStatus",
+    "input": {
+      "type": "loading"
+    },
+    "valid": true
+  },
+  {
+    "name": "failed lobby reads explain the failure",
+    "direction": "event",
+    "command": "lobbyStatus",
+    "input": {
+      "type": "error",
+      "message": "Loading lobby statistics failed",
+      "code": "lobbyQueueFull"
+    },
+    "valid": true
+  },
+  {
+    "name": "notices name only known causes",
+    "direction": "event",
+    "command": "lobbyStatus",
+    "input": {
+      "type": "error",
+      "message": "Loading lobby statistics failed",
+      "code": "lobby_read"
+    },
+    "valid": false
+  },
+  {
+    "name": "failed lobby reads cannot omit their explanation",
+    "direction": "event",
+    "command": "lobbyStatus",
+    "input": {
+      "type": "error"
+    },
+    "valid": false
+  },
+  {
+    "name": "ready statistics can accurately report zero games",
+    "direction": "event",
+    "command": "lobbyStatus",
+    "input": {
+      "type": "ready",
+      "numGames": 0
+    },
+    "valid": true
+  },
+  {
+    "name": "ready statistics cannot omit the real total",
+    "direction": "event",
+    "command": "lobbyStatus",
+    "input": {
+      "type": "ready",
+      "numGames": null
+    },
+    "valid": false
+  },
+  {
+    "name": "chat keeps markup as text",
+    "direction": "request",
+    "command": "chat",
+    "input": {
+      "text": "<hello> &amp;"
+    },
+    "valid": true
+  },
+  {
+    "name": "chat leaves blank messages for the server to answer",
+    "direction": "request",
+    "command": "chat",
+    "input": {
+      "text": ""
+    },
+    "valid": true
+  },
+  {
+    "name": "chat rejects unknown fields",
+    "direction": "request",
+    "command": "chat",
+    "input": {
+      "text": "hello",
+      "admin": true
+    },
+    "valid": false
+  },
+  {
+    "name": "private history requires an amount",
+    "direction": "request",
+    "command": "chatPmHistory",
+    "input": {},
+    "valid": false
+  },
+  {
+    "name": "private history rejects a limit below 1",
+    "direction": "request",
+    "command": "chatPmHistory",
+    "input": {
+      "limit": 0
+    },
+    "valid": false
+  },
+  {
+    "name": "private history rejects a blank recipient",
+    "direction": "request",
+    "command": "chatPmHistory",
+    "input": {
+      "limit": 1,
+      "recipient": ""
+    },
+    "valid": false
+  },
+  {
+    "name": "private history rejects unsafe integers",
+    "direction": "request",
+    "command": "chatPmHistory",
+    "input": {
+      "limit": 9007199254740992
+    },
+    "valid": false
+  },
+  {
+    "name": "private history rejects null filters",
+    "direction": "request",
+    "command": "chatPmHistory",
+    "input": {
+      "limit": 1,
+      "recipient": null
+    },
+    "valid": false
+  },
+  {
+    "name": "native parser retains integral float token rejection",
+    "direction": "request",
+    "command": "chatPmHistory",
+    "input": {
+      "limit": 1.0
+    },
+    "valid": true,
+    "nativeValid": false
+  },
+  {
+    "name": "friend requires a username",
+    "direction": "request",
+    "command": "friendAdd",
+    "input": {},
+    "valid": false
+  },
+  {
+    "name": "join omits an absent password without coercing table ID",
+    "direction": "request",
+    "command": "tableJoin",
+    "input": {
+      "tableId": 1
+    },
+    "valid": true
+  },
+  {
+    "name": "join rejects string table ID",
+    "direction": "request",
+    "command": "tableJoin",
+    "input": {
+      "tableId": "1"
+    },
+    "valid": false
+  },
+  {
+    "name": "join rejects null password instead of defaulting",
+    "direction": "request",
+    "command": "tableJoin",
+    "input": {
+      "tableId": 1,
+      "password": null
+    },
+    "valid": false
+  },
+  {
+    "name": "start requires the intended players",
+    "direction": "request",
+    "command": "tableStart",
+    "input": {
+      "tableId": 1
+    },
+    "valid": false
+  },
+  {
+    "name": "start rejects seven intended players",
+    "direction": "request",
+    "command": "tableStart",
+    "input": {
+      "tableId": 1,
+      "intendedPlayerIds": [1, 2, 3, 4, 5, 6, 7]
+    },
+    "valid": false
+  },
+  {
+    "name": "start rejects an intended player ID of 0",
+    "direction": "request",
+    "command": "tableStart",
+    "input": {
+      "tableId": 1,
+      "intendedPlayerIds": [1, 0]
+    },
+    "valid": false
+  },
+  {
+    "name": "spectate without a shadow seat",
+    "direction": "request",
+    "command": "tableSpectate",
+    "input": {
+      "tableId": 1
+    },
+    "valid": true
+  },
+  {
+    "name": "missing server chat fields stay omitted",
+    "direction": "event",
+    "command": "chat",
+    "input": {
+      "text": "&amp;",
+      "sentAt": "2026-01-01T12:00:00.000Z",
+      "kind": {
+        "type": "public",
+        "author": {
+          "type": "server"
+        }
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "server chat names its author and recipient",
+    "direction": "event",
+    "command": "chat",
+    "input": {
+      "text": "hello",
+      "sentAt": "2026-01-01T12:00:00.000Z",
+      "chatId": 9007199254740991,
+      "kind": {
+        "type": "private",
+        "author": {
+          "type": "user",
+          "username": "Alice"
+        },
+        "recipient": "Bob"
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "server chat rejects an empty author",
+    "direction": "event",
+    "command": "chat",
+    "input": {
+      "text": "hello",
+      "sentAt": "2026-01-01T12:00:00.000Z",
+      "kind": {
+        "type": "public",
+        "author": {
+          "type": "user",
+          "username": ""
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "a user's chat names the user",
+    "direction": "event",
+    "command": "chat",
+    "input": {
+      "text": "hello",
+      "sentAt": "2026-01-01T12:00:00.000Z",
+      "kind": {
+        "type": "public",
+        "author": {
+          "type": "user"
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "a settings suggestion carries the settings that it applies",
+    "direction": "event",
+    "command": "tableSettingsSuggestion",
+    "input": {
+      "tableId": 1,
+      "settings": {
+        "name": "Table",
+        "maxPlayers": 5,
+        "options": {}
+      }
+    },
+    "normalized": {
+      "tableId": 1,
+      "settings": {
+        "name": "Table",
+        "maxPlayers": 5,
+        "options": {
+          "variantId": 0,
+          "speedrun": false,
+          "deckPlays": false,
+          "emptyClues": false,
+          "oneExtraCard": false,
+          "oneLessCard": false,
+          "allOrNothing": false,
+          "detrimentalCharacters": false
+        }
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "server chat rejects null optional fields",
+    "direction": "event",
+    "command": "chat",
+    "input": {
+      "text": "hello",
+      "sentAt": "2026-01-01T12:00:00.000Z",
+      "chatId": null,
+      "kind": {
+        "type": "public",
+        "author": {
+          "type": "server"
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "server chat rejects unknown sources",
+    "direction": "event",
+    "command": "chat",
+    "input": {
+      "text": "hello",
+      "sentAt": "2026-01-01T12:00:00.000Z",
+      "kind": {
+        "type": "public",
+        "author": {
+          "type": "other"
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "a chat list rejects an invalid table",
+    "direction": "event",
+    "command": "chatList",
+    "input": {
+      "messages": [],
+      "table": { "tableId": -1, "numUnread": 0 }
+    },
+    "valid": false
+  },
+  {
+    "name": "color clues name their receiver and color",
+    "direction": "request",
+    "command": "playerAction",
+    "input": {
+      "tableId": 7,
+      "action": {
+        "type": "clue",
+        "receiverIndex": 1,
+        "clue": {
+          "type": "color",
+          "color": 2
+        }
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "rank clues cannot name the start card's rank",
+    "direction": "request",
+    "command": "playerAction",
+    "input": {
+      "tableId": 7,
+      "action": {
+        "type": "clue",
+        "receiverIndex": 1,
+        "clue": {
+          "type": "rank",
+          "rank": 7
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "actions reject unknown action types",
+    "direction": "request",
+    "command": "playerAction",
+    "input": {
+      "tableId": 7,
+      "action": {
+        "type": "pass",
+        "target": 0
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "user presence rejects an unknown activity",
+    "direction": "event",
+    "command": "user",
+    "input": {
+      "userId": 7,
+      "username": "Alice",
+      "activity": {
+        "type": "away",
+        "tableId": 3
+      },
+      "hGroupConventions": false,
+      "bot": false,
+      "inactive": false
+    },
+    "valid": false
+  },
+  {
+    "name": "user list holds presences",
+    "direction": "event",
+    "command": "userList",
+    "input": {
+      "users": [
+        {
+          "userId": 7,
+          "username": "Alice",
+          "activity": {
+            "type": "playing",
+            "tableId": 3
+          },
+          "hGroupConventions": false,
+          "hGroupLevel": 3,
+          "bot": false,
+          "inactive": false
+        }
+      ]
+    },
+    "valid": true
+  },
+  {
+    "name": "a user at a table names it",
+    "direction": "event",
+    "command": "user",
+    "input": {
+      "userId": 7,
+      "username": "Alice",
+      "activity": {
+        "type": "pregame"
+      },
+      "hGroupConventions": false,
+      "bot": false,
+      "inactive": false
+    },
+    "valid": false
+  },
+  {
+    "name": "a user in the lobby names no table",
+    "direction": "event",
+    "command": "user",
+    "input": {
+      "userId": 7,
+      "username": "Alice",
+      "activity": {
+        "type": "lobby",
+        "tableId": 3
+      },
+      "hGroupConventions": false,
+      "bot": false,
+      "inactive": false
+    },
+    "valid": false
+  },
+  {
+    "name": "welcome fills unchanged settings with the same defaults",
+    "direction": "event",
+    "command": "welcome",
+    "input": {
+      "userId": 7,
+      "username": "Alice",
+      "muted": false,
+      "firstTimeUser": false,
+      "friends": [],
+      "blocked": [],
+      "playingAtTables": [3],
+      "spectatingAtTables": [],
+      "settings": {
+        "volume": 70
+      }
+    },
+    "valid": true,
+    "normalized": {
+      "userId": 7,
+      "username": "Alice",
+      "muted": false,
+      "firstTimeUser": false,
+      "friends": [],
+      "blocked": [],
+      "playingAtTables": [3],
+      "spectatingAtTables": [],
+      "settings": {
+        "desktopNotification": false,
+        "soundMove": "all",
+        "soundTimer": true,
+        "darkMode": false,
+        "keldonMode": false,
+        "newUi": false,
+        "colorblindMode": false,
+        "realLifeMode": false,
+        "reverseHands": false,
+        "styleNumbers": false,
+        "showTimerInUntimed": false,
+        "reducedMotion": false,
+        "volume": 70,
+        "preplay": false,
+        "speedrunFeatures": false,
+        "hGroupConventions": false,
+        "createTable": {
+          "maxPlayers": 5,
+          "options": {
+            "variantId": 0,
+            "speedrun": false,
+            "deckPlays": false,
+            "emptyClues": false,
+            "oneExtraCard": false,
+            "oneLessCard": false,
+            "allOrNothing": false,
+            "detrimentalCharacters": false
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "welcome fills a partly stored create-table form with defaults",
+    "direction": "event",
+    "command": "welcome",
+    "input": {
+      "userId": 7,
+      "username": "Alice",
+      "muted": false,
+      "firstTimeUser": false,
+      "friends": [],
+      "blocked": [],
+      "playingAtTables": [3],
+      "spectatingAtTables": [],
+      "settings": {
+        "createTable": {
+          "options": {
+            "deckPlays": true,
+            "timeControl": {
+              "baseSeconds": 300,
+              "perTurnSeconds": 10
+            }
+          }
+        }
+      }
+    },
+    "valid": true,
+    "normalized": {
+      "userId": 7,
+      "username": "Alice",
+      "muted": false,
+      "firstTimeUser": false,
+      "friends": [],
+      "blocked": [],
+      "playingAtTables": [3],
+      "spectatingAtTables": [],
+      "settings": {
+        "desktopNotification": false,
+        "soundMove": "all",
+        "soundTimer": true,
+        "darkMode": false,
+        "keldonMode": false,
+        "newUi": false,
+        "colorblindMode": false,
+        "realLifeMode": false,
+        "reverseHands": false,
+        "styleNumbers": false,
+        "showTimerInUntimed": false,
+        "reducedMotion": false,
+        "volume": 50,
+        "preplay": false,
+        "speedrunFeatures": false,
+        "hGroupConventions": false,
+        "createTable": {
+          "maxPlayers": 5,
+          "options": {
+            "variantId": 0,
+            "speedrun": false,
+            "deckPlays": true,
+            "emptyClues": false,
+            "oneExtraCard": false,
+            "oneLessCard": false,
+            "allOrNothing": false,
+            "detrimentalCharacters": false,
+            "timeControl": {
+              "baseSeconds": 300,
+              "perTurnSeconds": 10
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "welcome settings reject an unsupported player count",
+    "direction": "event",
+    "command": "welcome",
+    "input": {
+      "userId": 7,
+      "username": "Alice",
+      "muted": false,
+      "firstTimeUser": false,
+      "friends": [],
+      "blocked": [],
+      "playingAtTables": [3],
+      "spectatingAtTables": [],
+      "settings": {
+        "createTable": {
+          "maxPlayers": 7
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "table creation fills every default option",
+    "direction": "request",
+    "command": "tableCreate",
+    "input": {
+      "settings": {
+        "name": "Alice's table",
+        "maxPlayers": 5,
+        "options": {}
+      }
+    },
+    "normalized": {
+      "settings": {
+        "name": "Alice's table",
+        "maxPlayers": 5,
+        "options": {
+          "variantId": 0,
+          "speedrun": false,
+          "deckPlays": false,
+          "emptyClues": false,
+          "oneExtraCard": false,
+          "oneLessCard": false,
+          "allOrNothing": false,
+          "detrimentalCharacters": false
+        }
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "table creation needs a player limit and options",
+    "direction": "request",
+    "command": "tableCreate",
+    "input": {
+      "settings": {
+        "name": "Alice's table"
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "table creation rejects a blank password",
+    "direction": "request",
+    "command": "tableCreate",
+    "input": {
+      "settings": {
+        "name": "x",
+        "maxPlayers": 5,
+        "options": {}
+      },
+      "password": ""
+    },
+    "valid": false
+  },
+  {
+    "name": "replay import accepts an exported game",
+    "direction": "request",
+    "command": "replayCreate",
+    "input": {
+      "source": {
+        "type": "imported",
+        "game": {
+          "seed": "p2v0s1",
+          "playerNames": ["Alice", "Bob"],
+          "options": {
+            "variantId": 1
+          }
+        }
+      },
+      "visibility": {
+        "type": "solo"
+      }
+    },
+    "normalized": {
+      "source": {
+        "type": "imported",
+        "game": {
+          "seed": "p2v0s1",
+          "playerNames": ["Alice", "Bob"],
+          "options": {
+            "variantId": 1,
+            "speedrun": false,
+            "deckPlays": false,
+            "emptyClues": false,
+            "oneExtraCard": false,
+            "oneLessCard": false,
+            "allOrNothing": false,
+            "detrimentalCharacters": false
+          }
+        }
+      },
+      "visibility": {
+        "type": "solo"
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "replay import rejects a game ID",
+    "direction": "request",
+    "command": "replayCreate",
+    "input": {
+      "source": {
+        "type": "imported",
+        "game": {
+          "gameId": 7,
+          "seed": "p2v0s1"
+        }
+      },
+      "visibility": {
+        "type": "solo"
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "replay import rejects unknown fields",
+    "direction": "request",
+    "command": "replayCreate",
+    "input": {
+      "source": {
+        "type": "imported",
+        "game": {
+          "seed": "p2v0s1",
+          "source": "another tool"
+        }
+      },
+      "visibility": {
+        "type": "solo"
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "replay import rejects unknown fields in nested objects",
+    "direction": "request",
+    "command": "replayCreate",
+    "input": {
+      "source": {
+        "type": "imported",
+        "game": {
+          "seed": "p2v0s1",
+          "actions": [
+            {
+              "type": 0,
+              "target": 0,
+              "turn": 1
+            }
+          ]
+        }
+      },
+      "visibility": {
+        "type": "solo"
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "replay imports name their actions",
+    "direction": "request",
+    "command": "replayCreate",
+    "input": {
+      "source": {
+        "type": "imported",
+        "game": {
+          "seed": "p2v0s1",
+          "actions": [
+            {
+              "type": "clue",
+              "receiverIndex": 1,
+              "clue": {
+                "type": "rank",
+                "rank": 1
+              }
+            },
+            {
+              "type": "play",
+              "order": 0
+            },
+            {
+              "type": "gameOver",
+              "endCondition": "terminatedByVote"
+            }
+          ]
+        }
+      },
+      "visibility": {
+        "type": "solo"
+      }
+    },
+    "normalized": {
+      "source": {
+        "type": "imported",
+        "game": {
+          "seed": "p2v0s1",
+          "actions": [
+            {
+              "type": "clue",
+              "receiverIndex": 1,
+              "clue": {
+                "type": "rank",
+                "rank": 1
+              }
+            },
+            {
+              "type": "play",
+              "order": 0
+            },
+            {
+              "type": "gameOver",
+              "endCondition": "terminatedByVote"
+            }
+          ]
+        }
+      },
+      "visibility": {
+        "type": "solo"
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "named replay actions carry only their own fields",
+    "direction": "request",
+    "command": "replayCreate",
+    "input": {
+      "source": {
+        "type": "imported",
+        "game": {
+          "seed": "p2v0s1",
+          "actions": [
+            {
+              "type": "play",
+              "order": 0,
+              "value": 0
+            }
+          ]
+        }
+      },
+      "visibility": {
+        "type": "solo"
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "replay import rejects null for an absent field",
+    "direction": "request",
+    "command": "replayCreate",
+    "input": {
+      "source": {
+        "type": "imported",
+        "game": {
+          "seed": "p2v0s1",
+          "options": {
+            "speedrun": null
+          }
+        }
+      },
+      "visibility": {
+        "type": "solo"
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "history pages start at zero or later",
+    "direction": "request",
+    "command": "gameHistory",
+    "input": {
+      "offset": -1,
+      "limit": 10
+    },
+    "valid": false
+  },
+  {
+    "name": "history pages hold at most the largest page",
+    "direction": "request",
+    "command": "gameHistory",
+    "input": {
+      "offset": 0,
+      "limit": 101
+    },
+    "valid": false
+  },
+  {
+    "name": "tables report a pregame roster below the minimum",
+    "direction": "event",
+    "command": "table",
+    "input": {
+      "tableId": 3,
+      "owner": { "userId": 7, "username": "Alice" },
+      "passwordProtected": false,
+      "playerNames": ["Alice"],
+      "phase": { "type": "pregame" },
+      "spectators": [
+        {
+          "userId": 9,
+          "username": "Carol",
+          "shadowingPlayerIndex": 1
+        }
+      ],
+      "settings": {
+        "name": "Alice's game",
+        "maxPlayers": 5,
+        "options": {
+          "variantId": 0,
+          "speedrun": false,
+          "deckPlays": false,
+          "emptyClues": false,
+          "oneExtraCard": false,
+          "oneLessCard": false,
+          "allOrNothing": false,
+          "detrimentalCharacters": false
+        }
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "only a game or a replay reports its progress",
+    "direction": "event",
+    "command": "table",
+    "input": {
+      "tableId": 3,
+      "owner": { "userId": 7, "username": "Alice" },
+      "passwordProtected": false,
+      "playerNames": ["Alice"],
+      "phase": { "type": "pregame", "progress": 0 },
+      "spectators": [],
+      "settings": { "name": "Alice's game", "maxPlayers": 5, "options": {} }
+    },
+    "valid": false
+  },
+  {
+    "name": "spectators without a shadow omit the shadowed name",
+    "direction": "event",
+    "command": "spectators",
+    "input": {
+      "tableId": 3,
+      "spectators": [
+        {
+          "userId": 9,
+          "username": "Carol"
+        }
+      ]
+    },
+    "valid": true
+  },
+  {
+    "name": "history accepts timestamps in UTC with milliseconds",
+    "direction": "event",
+    "command": "gameHistoryAdded",
+    "input": {
+      "gameId": 12,
+      "options": {
+        "variantId": 0,
+        "speedrun": false,
+        "deckPlays": false,
+        "emptyClues": false,
+        "oneExtraCard": false,
+        "oneLessCard": false,
+        "allOrNothing": false,
+        "detrimentalCharacters": false
+      },
+      "seed": "p2v0s1",
+      "score": 25,
+      "numTurns": 40,
+      "endCondition": "normal",
+      "startedAt": "2023-12-29T18:00:00.000Z",
+      "finishedAt": "2023-12-29T18:21:43.812Z",
+      "numGamesOnSeed": 3,
+      "playerNames": ["Alice", "Bob"],
+      "tags": []
+    },
+    "valid": true
+  },
+  {
+    "name": "history rejects a timestamp with an offset",
+    "direction": "event",
+    "command": "gameHistoryAdded",
+    "input": {
+      "gameId": 12,
+      "options": {
+        "variantId": 0,
+        "speedrun": false,
+        "deckPlays": false,
+        "emptyClues": false,
+        "oneExtraCard": false,
+        "oneLessCard": false,
+        "allOrNothing": false,
+        "detrimentalCharacters": false
+      },
+      "seed": "p2v0s1",
+      "score": 25,
+      "numTurns": 40,
+      "endCondition": "normal",
+      "startedAt": "2023-12-29T18:00:00.000+00:00",
+      "finishedAt": "2023-12-29T18:21:43.812Z",
+      "numGamesOnSeed": 3,
+      "playerNames": ["Alice", "Bob"],
+      "tags": []
+    },
+    "valid": false
+  },
+  {
+    "name": "history rejects a timestamp without milliseconds",
+    "direction": "event",
+    "command": "gameHistoryAdded",
+    "input": {
+      "gameId": 12,
+      "options": {
+        "variantId": 0,
+        "speedrun": false,
+        "deckPlays": false,
+        "emptyClues": false,
+        "oneExtraCard": false,
+        "oneLessCard": false,
+        "allOrNothing": false,
+        "detrimentalCharacters": false
+      },
+      "seed": "p2v0s1",
+      "score": 25,
+      "numTurns": 40,
+      "endCondition": "normal",
+      "startedAt": "2023-12-29T18:00:00Z",
+      "finishedAt": "2023-12-29T18:21:43.812Z",
+      "numGamesOnSeed": 3,
+      "playerNames": ["Alice", "Bob"],
+      "tags": []
+    },
+    "valid": false
+  },
+  {
+    "name": "history rejects a timestamp with microseconds",
+    "direction": "event",
+    "command": "gameHistoryAdded",
+    "input": {
+      "gameId": 12,
+      "options": {
+        "variantId": 0,
+        "speedrun": false,
+        "deckPlays": false,
+        "emptyClues": false,
+        "oneExtraCard": false,
+        "oneLessCard": false,
+        "allOrNothing": false,
+        "detrimentalCharacters": false
+      },
+      "seed": "p2v0s1",
+      "score": 25,
+      "numTurns": 40,
+      "endCondition": "normal",
+      "startedAt": "2023-12-29T18:00:00.000000Z",
+      "finishedAt": "2023-12-29T18:21:43.812Z",
+      "numGamesOnSeed": 3,
+      "playerNames": ["Alice", "Bob"],
+      "tags": []
+    },
+    "valid": false
+  },
+  {
+    "name": "history rejects a date that cannot be parsed",
+    "direction": "event",
+    "command": "gameHistoryAdded",
+    "input": {
+      "gameId": 12,
+      "options": {
+        "variantId": 0,
+        "speedrun": false,
+        "deckPlays": false,
+        "emptyClues": false,
+        "oneExtraCard": false,
+        "oneLessCard": false,
+        "allOrNothing": false,
+        "detrimentalCharacters": false
+      },
+      "seed": "p2v0s1",
+      "score": 25,
+      "numTurns": 40,
+      "endCondition": "normal",
+      "startedAt": "yesterday",
+      "finishedAt": "2023-12-29T18:21:43.812Z",
+      "numGamesOnSeed": 3,
+      "playerNames": ["Alice", "Bob"],
+      "tags": []
+    },
+    "valid": false
+  },
+  {
+    "name": "hypothetical actions are typed objects",
+    "direction": "request",
+    "command": "replayAction",
+    "input": {
+      "tableId": 4,
+      "action": {
+        "type": "hypothetical",
+        "control": {
+          "type": "events",
+          "events": [
+            {
+              "type": "morph",
+              "order": 3,
+              "identity": {
+                "suitIndex": 0,
+                "rank": 2
+              }
+            }
+          ]
+        }
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "replay actions take only their own fields",
+    "direction": "request",
+    "command": "replayAction",
+    "input": {
+      "tableId": 4,
+      "action": {
+        "type": "turn",
+        "order": 0,
+        "turn": 2
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "replay actions require their fields",
+    "direction": "request",
+    "command": "replayAction",
+    "input": {
+      "tableId": 4,
+      "action": {
+        "type": "turn"
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "visible clues carry their type and rank",
+    "direction": "event",
+    "command": "gameEvent",
+    "input": {
+      "tableId": 3,
+      "events": [
+        {
+          "type": "clue",
+          "clue": {
+            "type": "rank",
+            "rank": 5
+          },
+          "receiverIndex": 1,
+          "orders": [3, 4],
+          "playerIndex": 0
+        }
+      ]
+    },
+    "valid": true
+  },
+  {
+    "name": "hidden clues omit their type and value",
+    "direction": "event",
+    "command": "gameEvent",
+    "input": {
+      "tableId": 3,
+      "events": [
+        {
+          "type": "clue",
+          "receiverIndex": 1,
+          "orders": [3, 4],
+          "playerIndex": 0
+        }
+      ]
+    },
+    "valid": true
+  },
+  {
+    "name": "clues with a hidden value carry only their type",
+    "direction": "event",
+    "command": "gameEvent",
+    "input": {
+      "tableId": 3,
+      "events": [
+        {
+          "type": "clue",
+          "clue": { "type": "rank" },
+          "receiverIndex": 1,
+          "orders": [3, 4],
+          "playerIndex": 0
+        }
+      ]
+    },
+    "valid": true
+  },
+  {
+    "name": "color clues name the first suit's color",
+    "direction": "event",
+    "command": "gameEvent",
+    "input": {
+      "tableId": 3,
+      "events": [
+        {
+          "type": "clue",
+          "clue": {
+            "type": "color",
+            "color": 0
+          },
+          "receiverIndex": 1,
+          "orders": [3, 4],
+          "playerIndex": 0
+        }
+      ]
+    },
+    "valid": true
+  },
+  {
+    "name": "color clues cannot name a seventh color",
+    "direction": "event",
+    "command": "gameEvent",
+    "input": {
+      "tableId": 3,
+      "events": [
+        {
+          "type": "clue",
+          "clue": {
+            "type": "color",
+            "color": 6
+          },
+          "receiverIndex": 1,
+          "orders": [3, 4],
+          "playerIndex": 0
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "rank clues cannot name rank 0",
+    "direction": "event",
+    "command": "gameEvent",
+    "input": {
+      "tableId": 3,
+      "events": [
+        {
+          "type": "clue",
+          "clue": {
+            "type": "rank",
+            "rank": 0
+          },
+          "receiverIndex": 1,
+          "orders": [3, 4],
+          "playerIndex": 0
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "game over events always list their votes",
+    "direction": "event",
+    "command": "gameEvent",
+    "input": {
+      "tableId": 3,
+      "events": [
+        {
+          "type": "gameOver",
+          "endCondition": "normal",
+          "playerIndex": 0
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "cards can be unknown or a stack's start card",
+    "direction": "event",
+    "command": "gameEvent",
+    "input": {
+      "tableId": 3,
+      "events": [
+        {
+          "type": "draw",
+          "playerIndex": 0,
+          "order": 0,
+          "identity": {
+            "suitIndex": 0,
+            "rank": 7
+          }
+        }
+      ]
+    },
+    "valid": true
+  },
+  {
+    "name": "seats stop at the sixth player",
+    "direction": "event",
+    "command": "gameEvent",
+    "input": {
+      "tableId": 3,
+      "events": [
+        {
+          "type": "draw",
+          "playerIndex": 6,
+          "order": 0,
+          "identity": {
+            "suitIndex": 0,
+            "rank": 1
+          }
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "card orders stop after the stack bases of the largest deck",
+    "direction": "event",
+    "command": "gameEvent",
+    "input": {
+      "tableId": 3,
+      "events": [
+        {
+          "type": "draw",
+          "playerIndex": 0,
+          "order": 66,
+          "identity": {
+            "suitIndex": 0,
+            "rank": 1
+          }
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "suits stop at the sixth suit",
+    "direction": "event",
+    "command": "gameEvent",
+    "input": {
+      "tableId": 3,
+      "events": [
+        {
+          "type": "draw",
+          "playerIndex": 0,
+          "order": 0,
+          "identity": {
+            "suitIndex": 6,
+            "rank": 1
+          }
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "ranks skip 6",
+    "direction": "event",
+    "command": "gameEvent",
+    "input": {
+      "tableId": 3,
+      "events": [
+        {
+          "type": "draw",
+          "playerIndex": 0,
+          "order": 0,
+          "identity": {
+            "suitIndex": 0,
+            "rank": 6
+          }
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "game over voters are seats",
+    "direction": "event",
+    "command": "gameEvent",
+    "input": {
+      "tableId": 3,
+      "events": [
+        {
+          "type": "gameOver",
+          "endCondition": "terminatedByPlayer",
+          "voters": [0, 6]
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "game over events name a known end condition",
+    "direction": "event",
+    "command": "gameEvent",
+    "input": {
+      "tableId": 3,
+      "events": [
+        {
+          "type": "gameOver",
+          "endCondition": "victory",
+          "playerIndex": 0
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "player times have one entry per player",
+    "direction": "event",
+    "command": "gameEvent",
+    "input": {
+      "tableId": 3,
+      "events": [
+        {
+          "type": "playerTimes",
+          "playerTimesMs": [1000],
+          "durationMs": 1000
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "hypothetical actions use the game's bounds",
+    "direction": "request",
+    "command": "replayAction",
+    "input": {
+      "tableId": 4,
+      "action": {
+        "type": "hypothetical",
+        "control": {
+          "type": "events",
+          "events": [
+            {
+              "type": "morph",
+              "order": 66,
+              "suitIndex": 0,
+              "rank": 2
+            }
+          ]
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "replay arrows point at a card or a named part of the board",
+    "direction": "request",
+    "command": "replayAction",
+    "input": {
+      "tableId": 4,
+      "action": {
+        "type": "arrow",
+        "target": {
+          "type": "board",
+          "element": "minEfficiency"
+        }
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "replay arrows point at cards by order",
+    "direction": "request",
+    "command": "replayAction",
+    "input": {
+      "tableId": 4,
+      "action": {
+        "type": "arrow",
+        "target": {
+          "type": "card",
+          "order": 12
+        }
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "a replay arrow without a target clears the arrow",
+    "direction": "request",
+    "command": "replayAction",
+    "input": {
+      "tableId": 4,
+      "action": {
+        "type": "arrow"
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "replay arrows cannot point at an unnamed part of the board",
+    "direction": "request",
+    "command": "replayAction",
+    "input": {
+      "tableId": 4,
+      "action": {
+        "type": "arrow",
+        "target": {
+          "type": "board",
+          "element": "nothing"
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "replay arrows cannot point past the cards",
+    "direction": "event",
+    "command": "replayAction",
+    "input": {
+      "tableId": 4,
+      "action": {
+        "type": "arrow",
+        "target": {
+          "type": "card",
+          "order": 66
+        }
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "clocks carry their table beside every player's time",
+    "direction": "event",
+    "command": "clock",
+    "input": {
+      "tableId": 3,
+      "playerTimesMs": [1000, -2000],
+      "currentPlayerIndex": 1,
+      "turnElapsedMs": 500
+    },
+    "valid": true
+  },
+  {
+    "name": "clocks reject unknown fields",
+    "direction": "event",
+    "command": "clock",
+    "input": {
+      "tableId": 3,
+      "playerTimesMs": [1000, -2000],
+      "turnElapsedMs": 500,
+      "timeTakenMs": 500
+    },
+    "valid": false
+  },
+  {
+    "name": "a replay's game state has a deck and no clocks or votes",
+    "direction": "event",
+    "command": "gameState",
+    "input": {
+      "tableId": 3,
+      "events": [
+        {
+          "type": "draw",
+          "playerIndex": 0,
+          "order": 0,
+          "identity": { "suitIndex": 0, "rank": 1 }
+        }
+      ],
+      "notes": [],
+      "spectators": [{ "userId": 9, "username": "Carol" }],
+      "phase": { "type": "replay", "deck": [{ "suitIndex": 0, "rank": 1 }] }
+    },
+    "valid": true
+  },
+  {
+    "name": "a game in progress has a clock",
+    "direction": "event",
+    "command": "gameState",
+    "input": {
+      "tableId": 3,
+      "events": [],
+      "notes": [],
+      "spectators": [],
+      "phase": {
+        "type": "playing",
+        "pause": { "queued": false },
+        "connections": [true, false]
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "turn numbers are never negative",
+    "direction": "event",
+    "command": "gameEvent",
+    "input": {
+      "tableId": 3,
+      "events": [
+        {
+          "type": "turn",
+          "turn": -1
+        }
+      ]
+    },
+    "valid": false
+  },
+  {
+    "name": "unread counts are never negative",
+    "direction": "event",
+    "command": "chatList",
+    "input": {
+      "messages": [],
+      "table": { "tableId": 1, "numUnread": -1 }
+    },
+    "valid": false
+  },
+  {
+    "name": "a game page counts its games",
+    "direction": "reply",
+    "command": "gameHistory",
+    "input": { "games": [], "total": 0 },
+    "valid": true
+  },
+  {
+    "name": "a game page has no offset, which only the request names",
+    "direction": "reply",
+    "command": "gameHistory",
+    "input": { "games": [], "total": 0, "offset": 0 },
+    "valid": false
+  }
+]

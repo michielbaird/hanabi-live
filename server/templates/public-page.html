@@ -1,0 +1,121 @@
+{% extends "layout.html" %}{% block body %}
+<div id="page-wrapper">
+  <header id="header">
+    <h1>{% include "logo.html" %}</h1>
+    <nav id="nav"></nav>
+  </header>
+  <section id="main" class="container max history-page">
+    <header>
+      <h2><img src="/public/img/logos/header.svg" width="259" /></h2>
+    </header>
+    <div class="row uniform 100%">
+      <div class="col-12">
+        <section class="box">
+          <h2 class="align-center">
+            {% if namesTitle %}{{ namesTitle }}{% elif name %}{{ name|possessive
+            }} Profile{% else %}{{ title }}{% endif %}
+          </h2>
+          {% include "profile-buttons.html" %} {% if page == "password-reset" %}
+          <p>
+            Since Hanabi Live does not ask for or store your email address, the
+            only way to reset the password for an account is for an
+            administrator to manually reset it. This process necessarily
+            involves revealing personal information about yourself to the Hanabi
+            Live administrators, so this is <em>not recommended</em>. Instead,
+            feel free to create as many extra free accounts as you need.
+          </p>
+          <p>
+            If you absolutely must recover the password to your old account,
+            then enter a new password and provide the generated hash to a
+            website administrator via a private message on
+            <a href="https://discord.gg/FADvkJp">the Discord server</a>.
+          </p>
+          <div id="password-reset"></div>
+          {% else %} {% if page == "scores" %}
+          <div class="history-bullets">
+            <ul>
+              {% if stats.dateJoined %}
+              <li>
+                <span class="stat-description">Date joined:</span> {{
+                stats.dateJoined }}
+              </li>
+              {% endif %}
+              <li>
+                <span class="stat-description"
+                  >Games played (in non-speedruns):</span
+                >
+                {{ stats.numGamesTotal }} ({{ stats.numGamesNormal }} normally
+                finished)
+              </li>
+              <li>
+                <span class="stat-description"
+                  >Time spent playing (in non-speedruns):</span
+                >
+                {{ stats.timePlayed }}
+              </li>
+              <li>
+                <span class="stat-description"
+                  >Games played (in speedruns):</span
+                >
+                {{ stats.numGamesSpeedrun }}
+              </li>
+              <li>
+                <span class="stat-description"
+                  >Time spent playing (in speedruns):</span
+                >
+                {{ stats.timePlayedSpeedrun }}
+              </li>
+              <li>
+                <span class="stat-description">Time spent reviewing:</span>
+                {{ stats.timeReviewed }}
+              </li>
+              <li>
+                <span class="stat-description">Total time spent:</span> {{
+                stats.timeTotal }}
+              </li>
+            </ul>
+          </div>
+          {% endif %} {% if page == "seed" and stats.numGames %}
+          <div class="history-bullets">
+            <ul>
+              <li>
+                <span class="stat-description">Perfect scores:</span> {{
+                stats.numMaxScores }} / {{ stats.numGames }} &nbsp;({{
+                stats.maxScoreRate }}%)
+              </li>
+              <li>
+                <span class="stat-description">Average score:</span> {{
+                stats.averageScore }} / {{ stats.maxScore }}
+              </li>
+              {% if stats.difficulty %}
+              <li>
+                <span class="stat-description">Difficulty:</span> harder than {{
+                stats.difficulty.percentile }}% of the {{
+                stats.difficulty.numSeeds }} other {{
+                stats.difficulty.numPlayers }}-player seeds of {{
+                stats.difficulty.variantName }} (by average score)
+              </li>
+              {% endif %}
+            </ul>
+          </div>
+          {% endif %} {% if page in ["tags", "tag"] %}
+          <h3 class="align-center">
+            {% if total == 0 %}{% if page == "tags" %}No tagged games.{% else
+            %}No games played.{% endif %}{% else %}Total games:
+            <span id="total-number-of-games">{{ total }}</span>{% endif %}
+          </h3>
+          {% if total == 0 and page == "tags" %}
+          <h4 class="align-center">
+            Get them to tag some games with the <code>/tag</code> command. (e.g.
+            <code>/tag Layered Finesse</code>)
+          </h4>
+          {% endif %} {% endif %} {% if table %}
+          <div id="public-page-table" data-table="{{ table }}"></div>
+          {% endif %}{% endif %}
+        </section>
+      </div>
+    </div>
+  </section>
+</div>
+{% if table or page == "password-reset" %}{% include "public-page-scripts.html"
+%}{% endif %} {% endblock %}

@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT datetime_sent FROM chat_log_pm",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "datetime_sent",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "chat_log_pm",
+            "name": "datetime_sent"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "3e6ab6d4832ce1abf903f14d5b3922bee47ba51329c79336767a2f0289795fc9"
+}

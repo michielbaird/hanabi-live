@@ -26,8 +26,8 @@ export default defineConfig(
        * Documentation:
        * https://typescript-eslint.io/rules/no-deprecated/
        *
-       * We use a lot of deprecated jQuery methods. If they are removed from the latest version of
-       * jQuery, then we will stick with using an older version.
+       * The hotkeys compare the deprecated `which` key codes, and copying to the clipboard uses the
+       * deprecated `execCommand`.
        */
       "@typescript-eslint/no-deprecated": "off",
 
@@ -61,9 +61,8 @@ export default defineConfig(
        * Documentation:
        * https://github.com/sindresorhus/eslint-plugin-unicorn/blob/main/docs/rules/no-null.md
        *
-       * The codebase uses many cases of null. In the long term, this should be refactored to
-       * undefined where possible. (We want to wait until the server is rewritten in TypeScript
-       * first to avoid having to make changes to Golang code.)
+       * The client uses undefined for missing values. The remaining uses of null are for browser,
+       * React, and Konva APIs that require it.
        */
       "unicorn/no-null": "off",
 
@@ -72,8 +71,27 @@ export default defineConfig(
 
       // Keep HTML serialization compatible with browsers without Element.getHTML.
       "unicorn/prefer-dom-node-html-methods": "off",
+
+      // The HTML "title" attribute shows the browser's plain tooltip, which does not match the
+      // site's tooltips.
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector: "JSXAttribute[name.name='title']",
+          message:
+            'Use the site\'s tooltip ("tooltipRef" from "src/tooltipRef.ts") instead of the "title" attribute.',
+        },
+      ],
     },
   },
 
-  { ignores: ["**/lib/*.js", "**/test_data/*.js"] },
+  // The standalone pages are bundled as classic scripts, which cannot use top-level await.
+  {
+    files: ["src/standalone/**"],
+    rules: {
+      "unicorn/prefer-top-level-await": "off",
+    },
+  },
+
+  { ignores: ["**/test_data/*.js"] },
 );

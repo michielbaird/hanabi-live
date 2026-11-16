@@ -1,23 +1,52 @@
-// Communication with the server is done through the WebSocket protocol. The client uses a slightly
-// modified version of the Golem WebSocket library.
+// Communication with the server is done through the WebSocket protocol. `Connection` sends the
+// requests and passes on the server's messages and replies.
 
-import { commands } from "./commands";
-import { Connection } from "./Connection";
-import { gameCommands } from "./game/ui/gameCommands";
-import { globals } from "./Globals";
-import { lobbyCommands } from "./lobby/lobbyCommands";
-import { Screen } from "./lobby/types/Screen";
-import * as modals from "./modals";
-import { ReconnectBackoff } from "./reconnect";
+import type { ServerEvent, ServerEventData } from "@hanabi-live/data";
+import {
+  VERSION,
+  errorDetails,
+  httpError,
+  withTabAccount,
+} from "@hanabi-live/data";
+import { SECOND_IN_MILLISECONDS } from "complete-common";
+import { commands } from "./commands.ts";
+import { Connection } from "./Connection.ts";
+import { HTTP_STATUS } from "./constants.ts";
+import { gameCommands } from "./game/gameCommands.ts";
+import * as gameSession from "./game/gameSession.ts";
+import * as gameMain from "./game/main.ts";
+import { SoundType } from "./game/types/SoundType.ts";
+import { globals } from "./Globals.ts";
+import { fetchCookieOnce } from "./lobby/cookieProbe.ts";
+import { lobbyCommands } from "./lobby/lobbyCommands.ts";
+import { tablesCleared } from "./lobby/tables/tablesSlice.ts";
+import { Screen } from "./lobby/types/Screen.ts";
+import { usersCleared } from "./lobby/users/usersSlice.ts";
+import * as modals from "./modals.ts";
+import { reloadOutdatedClient } from "./outdatedClient.ts";
+import { ReconnectBackoff } from "./reconnect.ts";
+import {
+  blockedChanged,
+  friendsChanged,
+  reconnectingChanged,
+  settingsChanged,
+} from "./sessionSlice.ts";
+import * as sounds from "./sounds.ts";
+import { store } from "./store.ts";
+import * as theme from "./theme.ts";
+import { escapeHtml, textToHtml } from "./utils.ts";
 
 const reconnectBackoff = new ReconnectBackoff();
+const CONNECT_TIMEOUT_MS = 15 * SECOND_IN_MILLISECONDS;
+const WELCOME_TIMEOUT_MS = 15 * SECOND_IN_MILLISECONDS;
 let activeConnection: Connection | undefined;
-let websocketURL = "";
+let websocketUrl = "";
 let recovering = false;
 let stopped = false;
 let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 let wakeListenersRegistered = false;
 let welcomeTimer: ReturnType<typeof setTimeout> | undefined;
+let connectTimer: ReturnType<typeof setTimeout> | undefined;
 let cookieProbeInFlight = false;
 
 function isRecoveryCurrent(connection: Connection | undefined) {
@@ -25,20 +54,52 @@ function isRecoveryCurrent(connection: Connection | undefined) {
 }
 
 function clearWelcomeTimer() {
-  if (welcomeTimer !== undefined) {
-    clearTimeout(welcomeTimer);
-    welcomeTimer = undefined;
+  if (welcomeTimer === undefined) {
+    return;
   }
+
+  clearTimeout(welcomeTimer);
+  welcomeTimer = undefined;
+}
+
+function clearConnectTimer() {
+  if (connectTimer === undefined) {
+    return;
+  }
+
+  clearTimeout(connectTimer);
+  connectTimer = undefined;
+}
+
+/**
+ * The connection dropped, and the client is getting it back. The game screen shows this until the
+ * new connection is ready (see `finishReconnecting`), because the server receives nothing that the
+ * player sends until then.
+ */
+function setRecovering(value: boolean) {
+  recovering = value;
+  if (value) {
+    store.dispatch(reconnectingChanged(true));
+  }
+}
+
+/** The new connection is ready, so what the player sends reaches the server again. */
+function finishReconnecting(conn: Connection) {
+  conn.setReady(true);
+  store.dispatch(reconnectingChanged(false));
 }
 
 function stopRecovery() {
   stopped = true;
+  clearConnectTimer();
   recovering = false;
   clearWelcomeTimer();
-  if (reconnectTimer !== undefined) {
-    clearTimeout(reconnectTimer);
-    reconnectTimer = undefined;
+  if (reconnectTimer === undefined) {
+    return;
   }
+
+  clearTimeout(reconnectTimer);
+  reconnectTimer = undefined;
 }
 
 function canRetryNow() {
@@ -67,21 +128,21 @@ function scheduleReconnect(immediate = false) {
 }
 
 async function attemptReconnect() {
-  if (!recovering || stopped || !canRetryNow() || cookieProbeInFlight) {
+  if (!recovering || stopped || cookieProbeInFlight || !canRetryNow()) {
     return;
   }
   cookieProbeInFlight = true;
   const oldConnection = activeConnection;
   let shouldRetry = false;
   try {
-    const response = await fetch("/test-cookie", { cache: "no-store" });
+    const response = await fetchCookieOnce();
     if (!isRecoveryCurrent(oldConnection)) {
       return;
     }
     if (
-      response.status === 204
-      || response.status === 401
-      || response.status === 403
+      response.status === HTTP_STATUS.NO_CONTENT
+      || response.status === HTTP_STATUS.UNAUTHORIZED
+      || response.status === HTTP_STATUS.FORBIDDEN
     ) {
       // The cookie is gone: loading the page afresh restores normal sign-in.
       stopRecovery();
@@ -89,8 +150,10 @@ async function attemptReconnect() {
       return;
     }
     if (!response.ok) {
-      shouldRetry = true;
-      return;
+      throw await httpError(
+        response,
+        "Checking the live session before reconnecting",
+      );
     }
     if (canRetryNow()) {
       openConnection(true);
@@ -134,56 +197,165 @@ function registerReconnectWakeListeners() {
   globalThis.addEventListener("pageshow", wakeReconnect);
 }
 
+function reconnectAfterTimeout(conn: Connection, timeoutMs: number) {
+  if (activeConnection !== conn || stopped) {
+    return;
+  }
+
+  clearConnectTimer();
+  clearWelcomeTimer();
+  console.warn(
+    `WebSocket handshake exceeded its ${timeoutMs / SECOND_IN_MILLISECONDS}-second deadline; attempting to reconnect.`,
+  );
+  // Do not depend on a browser emitting close for a stalled CONNECTING socket.
+  activeConnection = undefined;
+  setRecovering(true);
+  conn.close();
+  scheduleReconnect();
+}
+
 function openConnection(isReconnect: boolean) {
-  const url = isReconnect ? `${websocketURL}?reconnect=1` : websocketURL;
-  const conn = new Connection(url, true, !isReconnect);
+  const url = withTabAccount(
+    `${websocketUrl}?version=${encodeURIComponent(VERSION)}`,
+  );
+  const conn = new Connection(url, true);
+  conn.setReady(!isReconnect);
+  clearConnectTimer();
   activeConnection = conn;
-  globals.conn = conn;
+  if (!isReconnect) {
+    globals.conn = conn;
+  }
+
+  connectTimer = setTimeout(() => {
+    if (conn.ws.readyState === WebSocket.CONNECTING) {
+      reconnectAfterTimeout(conn, CONNECT_TIMEOUT_MS);
+    }
+  }, CONNECT_TIMEOUT_MS);
 
   conn.on("open", () => {
     if (activeConnection !== conn || stopped) {
       return;
     }
+    clearConnectTimer();
     console.log("WebSocket connection established.");
-    if (isReconnect) {
-      // Close an authenticated probe that stalls before the welcome message.
-      clearWelcomeTimer();
-      welcomeTimer = setTimeout(() => {
-        if (isRecoveryCurrent(conn)) {
-          conn.close();
-        }
-      }, 15_000);
-    }
+    // Even an open socket can be stuck before the server sends "welcome".
+    clearWelcomeTimer();
+    welcomeTimer = setTimeout(() => {
+      reconnectAfterTimeout(conn, WELCOME_TIMEOUT_MS);
+    }, WELCOME_TIMEOUT_MS);
   });
   conn.on("close", () => {
     if (activeConnection !== conn || stopped) {
       return;
     }
+    clearConnectTimer();
     clearWelcomeTimer();
     console.log("WebSocket closed unexpectedly; attempting to reconnect.");
-    recovering = true;
+    conn.setReady(false);
+    setRecovering(true);
     scheduleReconnect();
   });
   conn.on("socketError", (error: unknown) => {
     console.error("WebSocket error:", error);
   });
+  conn.invalidMessage = (command, error) => {
+    if (activeConnection !== conn || stopped) {
+      return;
+    }
+    modals.showError(
+      escapeHtml(
+        errorDetails(error, `Processing the server's "${command}" message`),
+      ),
+    );
+  };
+  conn.on("serverShutdown", ({ message }) => {
+    if (activeConnection !== conn) {
+      return;
+    }
+
+    conn.setReady(false);
+    reconnectBackoff.reset();
+    sounds.play(SoundType.Shutdown);
+    // An administrator's reason for the downtime stays open through the reconnect.
+    if (message !== undefined) {
+      modals.showDowntime(textToHtml(message));
+    }
+  });
 
   if (isReconnect) {
-    // Resume probes never apply snapshots to the old game UI.
-    conn.on("welcome", () => {
+    initCommands(conn);
+    conn.on("welcome", (data) => {
       if (activeConnection !== conn || stopped) {
         return;
       }
-      stopRecovery();
-      globalThis.location.reload();
-    });
-    conn.on("error", (data: unknown) => {
-      if (activeConnection !== conn || stopped) {
-        return;
+      clearWelcomeTimer();
+      reconnectBackoff.reset();
+      setRecovering(false);
+      globals.conn = conn;
+      store.dispatch(usersCleared());
+      store.dispatch(tablesCleared());
+      if (
+        store.getState().session.screen === Screen.Game
+        && gameSession.isOpen()
+        && data.userId === store.getState().session.userId
+      ) {
+        globals.muted = data.muted;
+        store.dispatch(settingsChanged(data.settings));
+        store.dispatch(friendsChanged(data.friends));
+        store.dispatch(blockedChanged(data.blocked));
+        theme.setDarkMode(store.getState().session.settings.darkMode);
+        const retained = globals.joinedTableId;
+        conn.on("tableJoined", (table) => {
+          if (!isCurrentConnection(conn)) {
+            return;
+          }
+          if (table.stage === "pregame") {
+            lobbyCommands.get("tableJoined")?.(table);
+          } else if (
+            table.tableId === retained
+            && table.stage !== "replay"
+            && gameSession.isOpen()
+            && store.getState().game.current?.finished === false
+          ) {
+            conn.send("gameStateLoad", { tableId: retained });
+          } else {
+            gameMain.closeGame();
+            lobbyCommands.get("tableJoined")?.(table);
+          }
+        });
+        conn.on("gameState", (state) => {
+          if (!isCurrentConnection(conn) || !gameSession.isOpen()) {
+            return;
+          }
+          const rebuilding = gameSession.isLoading();
+          gameCommands.get("gameState")?.(state);
+          finishReconnecting(conn);
+          if (!rebuilding) {
+            conn.send("gameLoaded", { tableId: globals.joinedTableId });
+          }
+          initCommands(conn);
+        });
+        conn.send(
+          data.playingAtTables.includes(retained)
+            ? "tableReattend"
+            : "tableSpectate",
+          {
+            tableId: retained,
+            ...(!data.playingAtTables.includes(retained) && {
+              shadowingPlayerIndex:
+                store.getState().game.current?.shadowing === true
+                  ? store.getState().game.current?.metadata.ourPlayerIndex
+                  : undefined,
+            }),
+          },
+        );
+      } else {
+        gameMain.closeGame();
+        finishReconnecting(conn);
+        lobbyCommands.get("welcome")?.(data);
       }
-      stopRecovery();
-      commands.get("error")?.(data);
     });
+    conn.on("error", errorCallback(conn));
     return;
   }
 
@@ -201,7 +373,7 @@ export function websocketInit(): void {
   }
 
   // Ensure that we are connecting to the right URL.
-  const domain = $("#domain").html();
+  const domain = document.querySelector("#domain")?.textContent;
   if (globalThis.location.hostname !== domain) {
     modals.showError(`You are supposed to connect using the URL of: ${domain}`);
     return;
@@ -213,7 +385,7 @@ export function websocketInit(): void {
   if (globalThis.location.port !== "") {
     websocketHost += `:${globalThis.location.port}`;
   }
-  websocketURL = `${websocketProtocol}://${websocketHost}/ws`;
+  websocketUrl = `${websocketProtocol}://${websocketHost}/ws`;
 
   stopped = false;
   recovering = false;
@@ -223,7 +395,7 @@ export function websocketInit(): void {
     reconnectTimer = undefined;
   }
   registerReconnectWakeListeners();
-  console.log("Connecting to websocket URL:", websocketURL);
+  console.log("Connecting to websocket URL:", websocketUrl);
   openConnection(false);
 }
 
@@ -232,57 +404,66 @@ function isCurrentConnection(conn: Connection) {
   return activeConnection === conn && !stopped;
 }
 
-function commonCallback(
-  conn: Connection,
-  commandName: string,
-  commandFunction: (data: unknown) => void,
-) {
-  return (data: unknown) => {
+/** Handles an error, after which the server closes the connection. */
+function errorCallback(conn: Connection) {
+  return (data: ServerEventData["error"]) => {
     if (!isCurrentConnection(conn)) {
       return;
     }
-    if (commandName === "error") {
-      // Application errors are deliberate disconnects, not transport outages.
-      stopRecovery();
+    // Application errors are deliberate disconnects, not transport outages.
+    stopRecovery();
+    // A reload that served the same client again shows the error, which explains how to update.
+    if (data.code === "outdatedClient" && reloadOutdatedClient()) {
+      return;
+    }
+    commands.get("error")?.(data);
+  };
+}
+
+function commonCallback<Command extends ServerEvent>(
+  conn: Connection,
+  commandFunction: (data: ServerEventData[Command]) => void,
+) {
+  return (data: ServerEventData[Command]) => {
+    if (!isCurrentConnection(conn)) {
+      return;
     }
     commandFunction(data);
   };
 }
 
-function lobbyCallback(
+function lobbyCallback<Command extends ServerEvent>(
   conn: Connection,
-  commandName: string,
-  commandFunction: (data: unknown) => void,
+  commandName: Command,
+  commandFunction: (data: ServerEventData[Command]) => void,
 ) {
-  return (data: unknown) => {
+  return (data: ServerEventData[Command]) => {
     if (!isCurrentConnection(conn)) {
       return;
     }
     if (commandName === "welcome") {
+      clearWelcomeTimer();
       reconnectBackoff.reset();
     }
     commandFunction(data);
   };
 }
 
-function gameCallback(
+function gameCallback<Command extends ServerEvent>(
   conn: Connection,
-  commandName: string,
-  commandFunction: (data: unknown) => void,
+  commandName: Command,
+  commandFunction: (data: ServerEventData[Command]) => void,
 ) {
-  return (data: unknown) => {
-    if (!isCurrentConnection(conn)) {
-      return;
-    }
+  return (data: ServerEventData[Command]) => {
     // Ignore game events outside a loaded game, or while the UI is loading.
-    if (globals.currentScreen !== Screen.Game || globals.ui === null) {
+    if (
+      !isCurrentConnection(conn)
+      || store.getState().session.screen !== Screen.Game
+      || !gameSession.isOpen()
+    ) {
       return;
     }
-    if (
-      globals.ui.globals.loading
-      && commandName !== "init"
-      && commandName !== "gameActionList"
-    ) {
+    if (commandName !== "gameState" && gameSession.isLoading()) {
       return;
     }
     commandFunction(data);
@@ -291,13 +472,14 @@ function gameCallback(
 
 // Install the ordinary initial-connection protocol handlers.
 function initCommands(conn: Connection) {
-  for (const [commandName, commandFunction] of commands) {
-    conn.on(commandName, commonCallback(conn, commandName, commandFunction));
+  for (const [commandName, commandFunction] of commands.entries()) {
+    conn.on(commandName, commonCallback(conn, commandFunction));
   }
-  for (const [commandName, commandFunction] of lobbyCommands) {
+  for (const [commandName, commandFunction] of lobbyCommands.entries()) {
     conn.on(commandName, lobbyCallback(conn, commandName, commandFunction));
   }
-  for (const [commandName, commandFunction] of gameCommands) {
+  for (const [commandName, commandFunction] of gameCommands.entries()) {
     conn.on(commandName, gameCallback(conn, commandName, commandFunction));
   }
+  conn.on("error", errorCallback(conn));
 }

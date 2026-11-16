@@ -2,23 +2,22 @@
 // action.
 
 /* eslint-disable no-param-reassign */
-/* eslint-disable unicorn/no-null */
 
 import { sumArray } from "complete-common";
 import type { Draft } from "immer";
 import { produce } from "immer";
-import { getVariant } from "../gameData";
-import type { CardNote } from "../interfaces/CardNote";
-import type { GameMetadata } from "../interfaces/GameMetadata";
-import type { GameState } from "../interfaces/GameState";
-import type { StatsState } from "../interfaces/StatsState";
-import type { Variant } from "../interfaces/Variant";
-import { isCardClued } from "../rules/cardState";
+import { getVariantById } from "../gameData.ts";
+import type { CardNote } from "../interfaces/CardNote.ts";
+import type { GameMetadata } from "../interfaces/GameMetadata.ts";
+import type { GameState } from "../interfaces/GameState.ts";
+import type { StatsState } from "../interfaces/StatsState.ts";
+import type { Variant } from "../interfaces/Variant.ts";
+import { isCardClued } from "../rules/cardState.ts";
 import {
   getDiscardClueTokenValue,
   getSuitCompleteClueTokenValue,
   getUnadjustedClueTokens,
-} from "../rules/clueTokens";
+} from "../rules/clueTokens.ts";
 import {
   getCardsGotten,
   getCardsGottenByNotes,
@@ -28,23 +27,43 @@ import {
   getMaxScorePerStack,
   getPace,
   getPaceRisk,
-} from "../rules/stats";
-import { getEndGameLength } from "../rules/turn";
-import type { GameAction } from "../types/gameActions";
+} from "../rules/stats.ts";
+import { getEndGameLength } from "../rules/turn.ts";
+import type { GameAction } from "../types/gameActions.ts";
+import type { Perspective } from "../types/Perspective.ts";
 
-export const statsReducer = produce(statsReducerFunction, {} as StatsState);
+export function statsReducer(
+  statsState: StatsState,
+  action: GameAction,
+  previousGameState: GameState,
+  gameState: GameState,
+  perspective: Perspective,
+  metadata: GameMetadata,
+  ourNotes: readonly CardNote[] | undefined,
+): StatsState {
+  return produce(statsState, (draft) => {
+    statsReducerFunction(
+      draft,
+      action,
+      previousGameState,
+      gameState,
+      perspective,
+      metadata,
+      ourNotes,
+    );
+  });
+}
 
 function statsReducerFunction(
   statsState: Draft<StatsState>,
   action: GameAction,
   previousGameState: GameState,
   gameState: GameState,
-  playing: boolean,
-  shadowing: boolean,
+  perspective: Perspective,
   metadata: GameMetadata,
-  ourNotes: readonly CardNote[] | null,
+  ourNotes: readonly CardNote[] | undefined,
 ) {
-  const variant = getVariant(metadata.options.variantName);
+  const variant = getVariantById(metadata.options.variantId);
 
   switch (action.type) {
     case "clue": {
@@ -54,10 +73,10 @@ function statsReducerFunction(
       break;
     }
 
-    case "strike": {
+    case "misplay": {
       // A strike is equivalent to losing a clue. But do not reveal that a strike has happened to
       // players in an ongoing "Throw It in a Hole" game.
-      if (!variant.throwItInAHole || (!playing && !shadowing)) {
+      if (perspective !== "seat" || !variant.throwItInAHole) {
         statsState.potentialCluesLost += getDiscardClueTokenValue(variant);
       }
 
@@ -65,8 +84,8 @@ function statsReducerFunction(
     }
 
     case "play": {
-      if (action.suitIndex !== -1) {
-        const playStack = gameState.playStacks[action.suitIndex];
+      if (action.identity !== undefined) {
+        const playStack = gameState.playStacks[action.identity.suitIndex];
 
         if (
           playStack !== undefined
@@ -94,7 +113,11 @@ function statsReducerFunction(
   );
 
   // Handle max score calculation.
-  if (action.type === "play" || action.type === "discard") {
+  if (
+    action.type === "play"
+    || action.type === "discard"
+    || action.type === "misplay"
+  ) {
     statsState.maxScorePerStack = getMaxScorePerStack(
       gameState.deck,
       gameState.playStackDirections,
@@ -106,13 +129,13 @@ function statsReducerFunction(
   }
 
   // Handle "numAttemptedCardsPlayed". (This needs to be before the pace calculation.)
-  if ((action.type === "discard" && action.failed) || action.type === "play") {
+  if (action.type === "misplay" || action.type === "play") {
     statsState.numAttemptedCardsPlayed++;
   }
 
   // Handle pace calculation.
   const score =
-    variant.throwItInAHole && (playing || shadowing)
+    perspective === "seat" && variant.throwItInAHole
       ? statsState.numAttemptedCardsPlayed
       : gameState.score;
   statsState.pace = getPace(
@@ -120,8 +143,8 @@ function statsReducerFunction(
     gameState.cardsRemainingInTheDeck,
     statsState.maxScore,
     numEndGameTurns,
-    // `currentPlayerIndex` will be null if the game is over.
-    gameState.turn.currentPlayerIndex === null,
+    // `currentPlayerIndex` will be undefined if the game is over.
+    gameState.turn.currentPlayerIndex === undefined,
   );
   statsState.paceRisk = getPaceRisk(
     statsState.pace,
@@ -134,14 +157,13 @@ function statsReducerFunction(
     gameState.playStacks,
     gameState.playStackDirections,
     gameState.playStackStarts,
-    playing,
-    shadowing,
+    perspective,
     statsState.maxScore,
     variant,
   );
   statsState.cardsGottenByNotes =
-    ourNotes === null
-      ? null
+    ourNotes === undefined
+      ? undefined
       : getCardsGottenByNotes(
           gameState.deck,
           gameState.playStacks,
@@ -188,18 +210,18 @@ function statsReducerFunction(
   // number of turns.
   statsState.finalRoundEffectivelyStarted =
     gameState.cardsRemainingInTheDeck <= 0
-    || statsState.cluesStillUsable === null
+    || statsState.cluesStillUsable === undefined
     || statsState.cluesStillUsable < 1;
 
   // Handle double discard calculation.
-  if (action.type === "discard") {
+  if (action.type === "discard" || action.type === "misplay") {
     statsState.doubleDiscardCard = getDoubleDiscardCard(
       action.order,
       gameState,
       variant,
     );
   } else if (action.type === "play" || action.type === "clue") {
-    statsState.doubleDiscardCard = null;
+    statsState.doubleDiscardCard = undefined;
   }
 
   // Handle `numSubsequentBlindPlays`.
@@ -210,7 +232,7 @@ function statsReducerFunction(
   }
 
   // Handle `numSubsequentMisplays`.
-  if (action.type === "discard" && action.failed) {
+  if (action.type === "misplay") {
     statsState.numSubsequentMisplays++;
   } else if (isOneOfThreeMainActions(action)) {
     statsState.numSubsequentMisplays = 0;
@@ -225,7 +247,7 @@ function isBlindPlay(
   // In "Throw it in a Hole" variants, bombs should appear as successful plays.
   const possiblePlay =
     action.type === "play"
-    || (variant.throwItInAHole && action.type === "discard" && action.failed);
+    || (variant.throwItInAHole && action.type === "misplay");
 
   if (!possiblePlay) {
     return false;
@@ -237,11 +259,12 @@ function isBlindPlay(
   return !cardClued;
 }
 
-/** Whether the action was a clue, a discard, or a play. */
+/** Whether the action was a clue, a discard, or a play (including a misplay). */
 function isOneOfThreeMainActions(action: GameAction) {
   return (
     action.type === "clue"
     || action.type === "discard"
+    || action.type === "misplay"
     || action.type === "play"
   );
 }

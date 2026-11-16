@@ -1,0 +1,1478 @@
+import type {
+  CardOrder,
+  Rank,
+  Suit,
+  SuitIndex,
+  Variant,
+} from "@hanabi-live/game";
+import { getTotalCardsInDeck, MAX_STRIKES } from "@hanabi-live/game";
+import { eRange } from "complete-common";
+import { tooltipRef, tooltipRefHtml } from "../../tooltipRef.ts";
+import { escapeHtml } from "../../utils.ts";
+import { getSuitDescriptionHtml } from "../suitDescription.ts";
+import { PACE_HIGH_RISK_COLOR } from "../ui/paceRiskColor.ts";
+import {
+  CARD_BACK_STYLE,
+  CARD_CORNER_PER_WIDTH,
+  CARD_HEIGHT_PER_WIDTH,
+  CardFace,
+  describeCard,
+  RANK_BOTTOM_PER_WIDTH,
+} from "./Card.tsx";
+import {
+  DISCARD_PLACE_PREFIX,
+  HOLE_PLACE,
+  STACK_PLACE_PREFIX,
+} from "./cardMotion.ts";
+import type { CardNotes } from "./CardNote.tsx";
+import { CardNote } from "./CardNote.tsx";
+import { DROP_ZONE_FADE_MILLISECONDS } from "./DropZones.tsx";
+import { FitText } from "./FitText.tsx";
+import { Pip } from "./Pip.tsx";
+import { WELL_CLASS } from "./surfaces.ts";
+
+/** How far each discarded card covers the one before it in its row, as a fraction of its width. */
+const DISCARD_OVERLAP_PER_WIDTH = 0.4;
+
+/**
+ * The space between the bottom of a discarded card's rank and the row below it, as a fraction of
+ * the card's width.
+ */
+const DISCARD_ROW_GAP_PER_WIDTH = 0.04;
+
+/** The padding inside the play stacks' box, in CSS pixels. */
+export const PLAY_STACKS_PADDING = 8;
+
+/** The space between two play stacks, in CSS pixels. */
+export const PLAY_STACK_GAP = 6;
+
+/** The space between the play stacks, the deck, and the tokens, in CSS pixels. */
+export const PLAY_AREA_GAP = 8;
+
+/**
+ * The width of the label to the left of each play stack that names its suit, in CSS pixels. When
+ * the columns stack, the label is under the stack instead, as tall as this.
+ */
+const SUIT_LABEL_SIZE = 14;
+
+/** The space between a suit label and its play stack, in CSS pixels. */
+const SUIT_LABEL_GAP = 4;
+
+/** The variables that place the suit labels (see "SuitLabel"). */
+const SUIT_LABEL_VARIABLES = {
+  "--suit-label-size": `${SUIT_LABEL_SIZE}px`,
+  "--suit-label-gap": `${SUIT_LABEL_GAP}px`,
+  "--suit-label-space": `${SUIT_LABEL_SIZE + SUIT_LABEL_GAP}px`,
+} as React.CSSProperties;
+
+/** The size of each clue color's swatch in a suit label, in CSS pixels. */
+const SUIT_LABEL_SWATCH_SIZE = {
+  normal: 12,
+
+  /** It is larger in colorblind mode to hold the color's letter. */
+  colorblind: SUIT_LABEL_SIZE,
+} as const;
+
+/**
+ * Whether the play stacks have labels that name their suits, as on the classic screen. They show
+ * when the suits are hard to tell apart at a glance, such as suits of two colors. The "Up or Down"
+ * and "Sudoku" variants have none, as on the classic screen.
+ */
+function hasSuitLabels(variant: Variant): boolean {
+  return variant.showSuitNames && !variant.upOrDown && !variant.sudoku;
+}
+
+/** Joins color names into a list, such as "Green and Blue". */
+const COLOR_LIST_FORMAT = new Intl.ListFormat("en", { type: "conjunction" });
+
+/** The text of a play stack's suit label: the suit, the colors that touch it, and its note. */
+function getSuitLabelText(suit: Suit, abbreviation: string): string {
+  let text = suit.displayName;
+  if (suit.allClueColors) {
+    text += ": every color clue touches it.";
+  } else if (suit.clueColors.length >= 2) {
+    const colors = COLOR_LIST_FORMAT.format(
+      suit.clueColors.map((color) => color.name),
+    );
+    text += `: ${colors} clues touch it.`;
+  } else {
+    text += ".";
+  }
+  return `${text} In notes, write "${abbreviation.toLowerCase()}".`;
+}
+
+/**
+ * The label to the left of a play stack: the letter of the suit in notes and, below it for a suit
+ * that two or more colors touch, a swatch of each color. Its tooltip names the suit. When the
+ * columns stack, the stacks are a row with no room beside them, so the label is under its stack,
+ * with the swatches beside the letter.
+ */
+function SuitLabel({
+  suit,
+  abbreviation,
+  descriptionHtml,
+  colorblindMode,
+  showTooltip,
+}: {
+  readonly suit: Suit;
+  readonly abbreviation: string;
+
+  /** The description of the suit, as its play stack's tooltip shows it. */
+  readonly descriptionHtml: string;
+  readonly colorblindMode: boolean;
+  readonly showTooltip: boolean;
+}): React.JSX.Element {
+  const swatchSize = colorblindMode
+    ? SUIT_LABEL_SWATCH_SIZE.colorblind
+    : SUIT_LABEL_SWATCH_SIZE.normal;
+
+  return (
+    <div
+      aria-label={getSuitLabelText(suit, abbreviation)}
+      className="tw:absolute tw:top-1/2 tw:left-0 tw:flex tw:w-(--suit-label-size) tw:-translate-y-1/2 tw:flex-col tw:items-center tw:justify-center tw:gap-[3px] tw:narrow-980:static tw:narrow-980:mt-(--suit-label-gap) tw:narrow-980:h-(--suit-label-size) tw:narrow-980:w-auto tw:narrow-980:translate-y-0 tw:narrow-980:flex-row"
+      data-suit-label
+      ref={tooltipRefHtml(
+        showTooltip
+          ? `${descriptionHtml}<div class="small-tooltip-text">In notes, write "${escapeHtml(abbreviation.toLowerCase())}".</div>`
+          : undefined,
+      )}
+      role="note"
+    >
+      <span className="tw:text-[13px] tw:leading-none tw:font-bold tw:text-game-text">
+        {abbreviation}
+      </span>
+      {suit.clueColors.length >= 2
+        && suit.clueColors.map((color) => (
+          <span
+            className="tw:box-border tw:flex tw:items-center tw:justify-center tw:rounded-[3px] tw:border tw:border-solid tw:border-white/70 tw:text-[9px] tw:leading-none tw:font-extrabold tw:text-white tw:[text-shadow:0_0_2px_black]"
+            key={color.name}
+            style={{
+              width: swatchSize,
+              height: swatchSize,
+              backgroundColor: colorblindMode
+                ? color.fillColorblind
+                : color.fill,
+            }}
+          >
+            {colorblindMode && color.abbreviation}
+          </span>
+        ))}
+    </div>
+  );
+}
+
+/** How much of the suit's color tints an empty play stack, in percent. */
+const EMPTY_STACK_TINT_PERCENT = 20;
+
+/**
+ * The look of an empty play stack: a soft fill and an edge in its suit's color, so that the
+ * fireworks are in color before anyone plays them.
+ */
+function getEmptyStackStyle(
+  suit: Suit,
+  colorblindMode: boolean,
+): React.CSSProperties {
+  const colors = suit.fillColors ?? [
+    colorblindMode ? suit.fillColorblind : suit.fill,
+  ];
+  const tints = colors.map(
+    (color) =>
+      `color-mix(in srgb, ${color} ${EMPTY_STACK_TINT_PERCENT}%, transparent)`,
+  );
+  return {
+    background:
+      tints.length === 1
+        ? tints[0]
+        : `linear-gradient(135deg, ${tints.join(", ")})`,
+    borderColor: colors.length === 1 ? colors[0] : "white",
+  };
+}
+
+export interface StackView {
+  readonly suitIndex: SuitIndex;
+
+  /** The rank on top of the stack, or `undefined` before the stack starts. */
+  readonly topRank: Rank | undefined;
+
+  /** The card on top of the stack, so that a card can move between a hand and the stack. */
+  readonly topOrder: CardOrder | undefined;
+
+  /**
+   * The rank of the card under the top card, or `undefined` when the top card is the first. It
+   * shows while a newly played card moves onto the stack.
+   */
+  readonly belowRank: Rank | undefined;
+
+  /**
+   * The label on the stack, or an empty string: which way it goes in "Up or Down" variants and for
+   * a reversed suit, or which ranks it can start with in "Sudoku" variants (see "stackLabels.ts").
+   */
+  readonly label: string;
+}
+
+/** The hole of a "Throw It in a Hole" variant, where the players' played cards go. */
+export interface HoleView {
+  /**
+   * The cards that the viewer has seen go into the hole, for a player, who cannot see the score.
+   * Spectators do not see it.
+   */
+  readonly count: number | undefined;
+
+  /** The card that went into the hole last, and what the viewer knows of it. */
+  readonly topOrder: CardOrder | undefined;
+  readonly topSuitIndex: SuitIndex | undefined;
+  readonly topRank: Rank | undefined;
+}
+
+/** The suits and ranks that the cards left in the deck can still be. */
+export interface DeckEmpathy {
+  readonly possibleSuitIndexes: readonly SuitIndex[];
+  readonly possibleRanks: readonly Rank[];
+}
+
+export interface DiscardView {
+  readonly order: CardOrder;
+  readonly suitIndex: SuitIndex | undefined;
+  readonly rank: Rank | undefined;
+}
+
+/**
+ * The look of a drop target, which changes while the player drags a card. A target that cannot take
+ * the card is "unavailable", and "blocked" while the card is over it.
+ */
+export type ZoneState =
+  "idle" | "available" | "hovered" | "unavailable" | "blocked";
+
+function isRefusing(state: ZoneState): boolean {
+  return state === "unavailable" || state === "blocked";
+}
+
+function ZoneLabel({
+  state,
+  text,
+  unavailableText,
+}: {
+  readonly state: ZoneState;
+  readonly text: string;
+  readonly unavailableText: string;
+}): React.JSX.Element | undefined {
+  if (state === "idle") {
+    return undefined;
+  }
+
+  return (
+    <span
+      className={`tw:pointer-events-none tw:absolute tw:top-1/2 tw:left-1/2 tw:z-20 tw:-translate-1/2 tw:rounded-full tw:border-2 tw:border-black tw:px-3.5 tw:py-1.5 tw:text-center tw:font-bold tw:whitespace-nowrap tw:shadow-lg ${
+        state === "hovered" || state === "blocked"
+          ? "tw:bg-clue tw:text-card-ink"
+          : "tw:bg-game-text tw:text-card-ink"
+      }`}
+    >
+      {isRefusing(state) ? unavailableText : text}
+    </span>
+  );
+}
+
+/**
+ * The size of the label on a play stack (see `StackLabel`), as a fraction of the card's width. It
+ * shrinks to fit a long label, such as the ranks of a "Sudoku" stack.
+ */
+const STACK_LABEL_SIZE_PER_WIDTH = 0.22;
+
+/**
+ * The label on a play stack that says which way it goes, or which ranks it can start with. It is a
+ * dark tag across the bottom of the card, so that it reads on any suit's color, and the stacks keep
+ * their size.
+ */
+function StackLabel({
+  text,
+  cardWidth,
+}: {
+  readonly text: string;
+  readonly cardWidth: number;
+}): React.JSX.Element {
+  return (
+    <span
+      className="tw:pointer-events-none tw:absolute tw:inset-x-[5%] tw:bottom-[5%] tw:z-10 tw:flex tw:justify-center"
+      data-stack-label
+    >
+      <span
+        className="tw:flex tw:min-w-0 tw:max-w-full tw:rounded-game-control tw:bg-card-ink/90 tw:px-[0.45em] tw:py-[0.2em] tw:leading-none tw:font-bold tw:text-game-text tw:ring-1 tw:ring-white/30"
+        style={{ fontSize: cardWidth * STACK_LABEL_SIZE_PER_WIDTH }}
+      >
+        <FitText text={text} />
+      </span>
+    </span>
+  );
+}
+
+/** The size of the hole, as a fraction of the width of a card on the table. */
+const HOLE_SIZE_PER_WIDTH = 1.8;
+
+/** The size of the card in the hole, as a fraction of the width of a card on the table. */
+const HOLE_CARD_SIZE_PER_WIDTH = 0.6;
+
+/**
+ * The size of the count of cards in the hole, as a fraction of the width of a card on the table.
+ */
+const HOLE_COUNT_SIZE_PER_WIDTH = 0.45;
+
+/** The size of the caption under the count, as a fraction of the width of a card on the table. */
+const HOLE_CAPTION_SIZE_PER_WIDTH = 0.18;
+
+/**
+ * The hole of a "Throw It in a Hole" variant: a dark pit over the middle of the play stacks, as on
+ * the classic screen. A played card falls into it and sinks out of sight. For a player, who cannot
+ * see the score, the pit shows how many cards went into it.
+ */
+function Hole({
+  hole,
+  variant,
+  colorblindMode,
+  cardWidth,
+}: {
+  readonly hole: HoleView;
+  readonly variant: Variant;
+  readonly colorblindMode: boolean;
+  readonly cardWidth: number;
+}): React.JSX.Element {
+  const size = cardWidth * HOLE_SIZE_PER_WIDTH;
+  const { count, topOrder } = hole;
+  const description =
+    count === undefined
+      ? "The hole. Played cards go into it."
+      : `${count} ${count === 1 ? "card" : "cards"} in the hole, as far as you know. In this variant, the players cannot see the score or the strikes.`;
+  return (
+    <div className="tw:pointer-events-none tw:absolute tw:inset-0 tw:z-10 tw:flex tw:items-center tw:justify-center">
+      <div
+        aria-label={description}
+        className="tw:pointer-events-auto tw:relative tw:flex tw:shrink-0 tw:items-center tw:justify-center tw:rounded-full"
+        data-hole
+        ref={tooltipRef(description)}
+        role="img"
+        style={{
+          width: size,
+          height: size,
+          background:
+            "radial-gradient(circle, rgb(0 0 0 / 95%) 0 40%, rgb(0 0 0 / 75%) 58%, rgb(0 0 0 / 0%) 71%)",
+        }}
+      >
+        {topOrder !== undefined && (
+          <div
+            className="tw:absolute"
+            data-card-order={topOrder}
+            data-card-place={HOLE_PLACE}
+            data-play-stack
+          >
+            <div className="tw:-rotate-12 tw:opacity-60">
+              <CardFace
+                colorblindMode={colorblindMode}
+                rank={hole.topRank}
+                suitIndex={hole.topSuitIndex}
+                variant={variant}
+                width={cardWidth * HOLE_CARD_SIZE_PER_WIDTH}
+              />
+            </div>
+          </div>
+        )}
+        {/* The rim of the pit darkens the card in it, so that the card sinks out of sight. */}
+        <div
+          aria-hidden="true"
+          className="tw:absolute tw:inset-0 tw:rounded-full tw:shadow-[inset_0_0_0_1px_rgb(255_255_255/12%)]"
+          style={{
+            background:
+              "radial-gradient(circle, rgb(0 0 0 / 35%) 0 35%, rgb(0 0 0 / 80%) 55%, rgb(0 0 0 / 0%) 71%)",
+          }}
+        />
+        {count !== undefined && (
+          <span className="tw:relative tw:flex tw:flex-col tw:items-center tw:leading-none tw:font-extrabold tw:text-game-text">
+            <span style={{ fontSize: cardWidth * HOLE_COUNT_SIZE_PER_WIDTH }}>
+              {count}
+            </span>
+            <span
+              className="tw:mt-[0.3em] tw:font-bold tw:text-game-muted"
+              style={{ fontSize: cardWidth * HOLE_CAPTION_SIZE_PER_WIDTH }}
+            >
+              in the hole
+            </span>
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The play stacks, where the player drops a card to play it, with the deck and the table's tokens
+ * below them. Players look to the bottom left for the clue count, as on the classic screen.
+ */
+export function PlayArea({
+  stacks,
+  hole,
+  variant,
+  colorblindMode,
+  cardWidth,
+  deck,
+  zoneState,
+  notes,
+  tokens,
+}: {
+  readonly stacks: readonly StackView[];
+
+  /** The hole of a "Throw It in a Hole" variant, if it shows. */
+  readonly hole: HoleView | undefined;
+  readonly variant: Variant;
+  readonly colorblindMode: boolean;
+  readonly cardWidth: number;
+  readonly deck: DeckProps;
+  readonly zoneState: ZoneState;
+  readonly notes: CardNotes;
+
+  /** The clue tokens and the strikes (see `TableTokens`). */
+  readonly tokens: React.ReactNode;
+}): React.JSX.Element {
+  const height = cardWidth * CARD_HEIGHT_PER_WIDTH;
+  const suitLabels = hasSuitLabels(variant);
+  const dragging = zoneState !== "idle";
+
+  return (
+    // One column: the stacks, the deck, and the tokens. The boxes are as wide as the widest, and
+    // the tokens are at the bottom, level with the bottom of the controls below the hands. When the
+    // columns stack, the stacks and the deck are one row, with the tokens below it.
+    <div
+      className="tw:flex tw:shrink-0 tw:flex-col tw:items-center"
+      style={{ gap: PLAY_AREA_GAP }}
+    >
+      <div
+        className="tw:contents tw:narrow-980:flex tw:narrow-980:items-start"
+        style={{ gap: PLAY_AREA_GAP }}
+      >
+        <section
+          aria-label="Play stacks"
+          className="tw:relative tw:flex tw:flex-col tw:items-center tw:self-stretch"
+          // The clue rail runs halfway between this box and the hands (see "Hands.tsx").
+          data-play-stacks
+          ref={tooltipRef(dragging ? undefined : "Play stacks")}
+          style={{ padding: PLAY_STACKS_PADDING }}
+        >
+          <div
+            className="tw:relative tw:flex tw:flex-col tw:narrow-980:flex-row tw:narrow-980:flex-wrap"
+            style={{ gap: PLAY_STACK_GAP }}
+          >
+            {stacks.map((stack) => {
+              const suit = variant.suits[stack.suitIndex];
+              const name = suit?.displayName ?? "";
+              // As on the classic screen, a play stack describes its suit: its name, and the rules
+              // that make it special.
+              const descriptionHtml =
+                getSuitDescriptionHtml(variant, stack.suitIndex) ?? "";
+
+              // What lies under the top card: the card below it, or else the empty stack. It stays
+              // in place while a newly played card moves on top of it.
+              const below =
+                stack.belowRank === undefined ? (
+                  <div
+                    className="tw:box-border tw:flex tw:items-center tw:justify-center tw:border-2 tw:border-solid tw:border-game-line"
+                    style={{
+                      width: cardWidth,
+                      height,
+                      borderRadius: cardWidth * CARD_CORNER_PER_WIDTH,
+                      ...(suit !== undefined
+                        && getEmptyStackStyle(suit, colorblindMode)),
+                    }}
+                  >
+                    {suit !== undefined && (
+                      <Pip
+                        shadow
+                        size={cardWidth * 0.6}
+                        suit={suit}
+                        variant={variant}
+                      />
+                    )}
+                  </div>
+                ) : (
+                  <CardFace
+                    colorblindMode={colorblindMode}
+                    rank={stack.belowRank}
+                    suitIndex={stack.suitIndex}
+                    variant={variant}
+                    width={cardWidth}
+                  />
+                );
+
+              const abbreviation = variant.suitAbbreviations[stack.suitIndex];
+              const topNotesHtml =
+                stack.topOrder === undefined
+                  ? undefined
+                  : notes.notesHtml.get(stack.topOrder);
+              const stackBaseOrder = getNotedStackBase(
+                variant,
+                stack.suitIndex,
+              );
+
+              return (
+                <div
+                  // In a column, the labels have the same space on the right, so that the stacks
+                  // stay in line with the deck below them.
+                  className={
+                    suitLabels
+                      ? "tw:relative tw:px-(--suit-label-space) tw:narrow-980:px-0"
+                      : undefined
+                  }
+                  key={stack.suitIndex}
+                  style={suitLabels ? SUIT_LABEL_VARIABLES : undefined}
+                >
+                  <div
+                    aria-label={
+                      stack.topRank === undefined
+                        ? `${name}: nothing played`
+                        : describeCard(variant, stack.suitIndex, stack.topRank)
+                    }
+                    className="tw:relative"
+                    // A right-click on an empty stack draws an arrow on its stack base, as on the
+                    // classic screen (see "arrowAnchor.ts").
+                    data-stack-base-arrow={getStackBase(
+                      variant,
+                      stack.suitIndex,
+                    )}
+                    // A misplayed card launches over its stack (see "playMotion.ts").
+                    data-stack-slot={stack.suitIndex}
+                    ref={tooltipRefHtml(dragging ? undefined : descriptionHtml)}
+                    role="img"
+                  >
+                    {stackBaseOrder === undefined ? (
+                      below
+                    ) : (
+                      <CardNote notes={notes} order={stackBaseOrder}>
+                        <div data-stack-base={stackBaseOrder}>{below}</div>
+                      </CardNote>
+                    )}
+                    {stack.topRank !== undefined && (
+                      <div
+                        // A click on the card shows the turn on which it was played (see
+                        // "cardClicks.ts").
+                        className="tw:absolute tw:inset-0 tw:cursor-pointer"
+                        data-card-order={stack.topOrder}
+                        data-card-place={`${STACK_PLACE_PREFIX}${stack.suitIndex}`}
+                        data-play-stack
+                      >
+                        {stack.topOrder === undefined ? undefined : (
+                          <CardNote
+                            // The note of the top card comes first, and then the description of its
+                            // suit, as on the classic screen. The notes are a block, so one line
+                            // break leaves a blank line after them.
+                            notes={
+                              topNotesHtml === undefined
+                                ? notes
+                                : {
+                                    ...notes,
+                                    notesHtml: new Map(notes.notesHtml).set(
+                                      stack.topOrder,
+                                      `${topNotesHtml}<br>${descriptionHtml}`,
+                                    ),
+                                  }
+                            }
+                            order={stack.topOrder}
+                          >
+                            <CardFace
+                              colorblindMode={colorblindMode}
+                              note={topNotesHtml !== undefined}
+                              noteUnread={notes.unreadNotes.has(stack.topOrder)}
+                              rank={stack.topRank}
+                              suitIndex={stack.suitIndex}
+                              variant={variant}
+                              width={cardWidth}
+                            />
+                          </CardNote>
+                        )}
+                      </div>
+                    )}
+                    {stack.label !== "" && (
+                      <StackLabel cardWidth={cardWidth} text={stack.label} />
+                    )}
+                  </div>
+                  {suitLabels
+                    && suit !== undefined
+                    && abbreviation !== undefined && (
+                      <SuitLabel
+                        abbreviation={abbreviation}
+                        colorblindMode={colorblindMode}
+                        descriptionHtml={descriptionHtml}
+                        showTooltip={!dragging}
+                        suit={suit}
+                      />
+                    )}
+                </div>
+              );
+            })}
+            {hole !== undefined && (
+              <Hole
+                cardWidth={cardWidth}
+                colorblindMode={colorblindMode}
+                hole={hole}
+                variant={variant}
+              />
+            )}
+          </div>
+          <ZoneLabel state={zoneState} text="Play" unavailableText="Play" />
+        </section>
+        <Deck {...deck} cardWidth={cardWidth} />
+      </div>
+      {tokens}
+    </div>
+  );
+}
+
+/**
+ * The order of the stack base of a suit. Stack bases use the orders after the final card in the
+ * deck.
+ */
+function getStackBase(variant: Variant, suitIndex: SuitIndex): CardOrder {
+  return (getTotalCardsInDeck(variant) + suitIndex) as CardOrder;
+}
+
+/**
+ * The order of the stack base of a suit, when it takes notes: only in "Throw It in a Hole"
+ * variants, as on the classic screen.
+ */
+export function getNotedStackBase(
+  variant: Variant,
+  suitIndex: SuitIndex,
+): CardOrder | undefined {
+  return variant.throwItInAHole ? getStackBase(variant, suitIndex) : undefined;
+}
+
+/**
+ * How far each card under the top of the deck shows below and to the right of the card above it, in
+ * CSS pixels.
+ */
+const DECK_EDGE_OFFSET = 2;
+
+/**
+ * How many card edges show under the top of the deck, by the cards left: the most at the start,
+ * fewer as it runs low, and none for the last card. Each entry is the fewest cards for its edges.
+ */
+const DECK_EDGES = [
+  {
+    minCards: 20,
+    edges: 3,
+  },
+  {
+    minCards: 8,
+    edges: 2,
+  },
+  {
+    minCards: 2,
+    edges: 1,
+  },
+] as const;
+
+/** The most room that the edges under the top of the deck take, below and to the right of it. */
+export const DECK_PILE_DEPTH = DECK_EDGES[0].edges * DECK_EDGE_OFFSET;
+
+function getDeckEdges(cardsInDeck: number): number {
+  return DECK_EDGES.find((entry) => cardsInDeck >= entry.minCards)?.edges ?? 0;
+}
+
+/** The back of one card, such as the last card of the deck while the player holds it. */
+export function CardBack({
+  width,
+}: {
+  readonly width: number;
+}): React.JSX.Element {
+  return (
+    <div
+      className="tw:box-border tw:shadow-[inset_0_0_0_3px_var(--card-ink),inset_0_0_0_4px_rgb(255_255_255/18%)] tw:ring-1 tw:ring-game-text/80"
+      style={{
+        ...CARD_BACK_STYLE,
+        width,
+        height: width * CARD_HEIGHT_PER_WIDTH,
+        borderRadius: width * CARD_CORNER_PER_WIDTH,
+      }}
+    />
+  );
+}
+
+/** The size of the count of cards in the deck, in card widths. */
+const CARDS_LEFT_SIZE = 0.5;
+
+/** The size of the turns left on the empty deck, and of its caption, in card widths. */
+const TURNS_LEFT_SIZE = 0.4;
+const TURNS_LEFT_CAPTION_SIZE = 0.17;
+
+/**
+ * How the player plays the last card of the deck, when the "Bottom-Deck Blind Plays" option allows
+ * it on their turn.
+ */
+interface DeckPlay {
+  /** Whether the player holds the card, so that it is not on the deck. */
+  readonly held: boolean;
+
+  /** Whether the player taps the deck for a menu, instead of dragging the card. */
+  readonly tapToMove: boolean;
+
+  /** Whether the menu that plays the card is open. */
+  readonly menuOpen: boolean;
+
+  /**
+   * Whether the card can be discarded now, or `undefined` when it cannot be discarded at all. Only
+   * an inverted suit, which plays when it is discarded, can be.
+   */
+  readonly canDiscard: boolean | undefined;
+
+  readonly onPointerDown: (event: React.PointerEvent<HTMLElement>) => void;
+  readonly onTap: () => void;
+  readonly onPlay: () => void;
+  readonly onDiscard: () => void;
+}
+
+export interface DeckProps {
+  readonly cardsInDeck: number;
+
+  /**
+   * The turns left in the game once the deck is empty, or `undefined` if the game has no final
+   * round (as in "All or Nothing").
+   */
+  readonly turnsLeft: number | undefined;
+
+  /** Whether the game has the "Bottom-Deck Blind Plays" option. */
+  readonly deckPlays: boolean;
+
+  /** How the player plays the last card of the deck, when they can. */
+  readonly play: DeckPlay | undefined;
+
+  /**
+   * Which cards can still be in the deck, while the deck shows them, or `undefined` while it shows
+   * its back.
+   */
+  readonly empathy: DeckEmpathy | undefined;
+
+  /**
+   * The viewer holds the pointer down on the deck to see which cards can still be in it, or lets
+   * go.
+   */
+  readonly onHoldEmpathy: (held: boolean) => void;
+  readonly colorblindMode: boolean;
+  readonly variant: Variant;
+  readonly reducedMotion: boolean;
+}
+
+/**
+ * The tooltip of the deck, as HTML: the cards or turns left, and what the player can do with it.
+ */
+function getDeckTooltip(
+  cardsInDeck: number,
+  turnsLeft: number | undefined,
+  deckPlays: boolean,
+  play: DeckPlay | undefined,
+): string {
+  const lines: string[] = [];
+  if (cardsInDeck > 0) {
+    lines.push(
+      `<strong>${cardsInDeck}</strong> ${cardsInDeck === 1 ? "card" : "cards"} left in the deck.`,
+    );
+  } else if (turnsLeft === undefined) {
+    lines.push("The deck is empty.");
+  } else {
+    lines.push(
+      `The deck is empty. <strong>${turnsLeft}</strong> ${turnsLeft === 1 ? "turn" : "turns"} left, then the game ends.`,
+    );
+  }
+
+  if (deckPlays) {
+    lines.push(
+      "Bottom-Deck Blind Plays: the player who would draw the last card can play it from the deck instead.",
+    );
+  }
+  if (play !== undefined) {
+    lines.push(
+      play.tapToMove
+        ? "Tap the deck to play its last card."
+        : "Drag the deck to the play stacks to play its last card.",
+    );
+  } else if (cardsInDeck > 0) {
+    lines.push(
+      "Hold the mouse button down on the deck to see which cards can still be in it.",
+    );
+  }
+
+  // The tooltip is narrow, so that its lines wrap as in a paragraph.
+  return `<div class="tw:max-w-80">${lines.join("<br>")}</div>`;
+}
+
+/**
+ * The deck: a pile of face-down cards with the number left on top, which gets thinner as it runs
+ * low. Once it is empty, it is an empty slot, like an empty play stack, that shows the turns left
+ * in the game, as on the classic screen. New cards are drawn from it (see "cardMotion.ts").
+ *
+ * Held down, it shows which cards can still be in it. When the player can play its last card, it
+ * glows in the color of the player's turn, and the player drags it to the play stacks.
+ */
+function Deck({
+  cardsInDeck,
+  turnsLeft,
+  deckPlays,
+  play,
+  empathy,
+  onHoldEmpathy,
+  colorblindMode,
+  variant,
+  reducedMotion,
+  cardWidth,
+}: DeckProps & { readonly cardWidth: number }): React.JSX.Element {
+  const height = cardWidth * CARD_HEIGHT_PER_WIDTH;
+  const edges = getDeckEdges(cardsInDeck);
+  const empty = cardsInDeck === 0;
+  // Whoever draws the last card starts the final round, so its count stands out.
+  const lastCard = cardsInDeck === 1;
+  const finalRound = empty && turnsLeft !== undefined;
+  const turns = turnsLeft === 1 ? "turn" : "turns";
+  const showEmpathy = empathy !== undefined && !empty;
+  const held = play?.held === true;
+  // In the final round, only the border of the empty slot is faint, so that the turns left stand
+  // out.
+  let emptyStyle = "";
+  if (finalRound) {
+    emptyStyle = "tw:border-game-line/60";
+  } else if (empty) {
+    emptyStyle = "tw:border-game-line tw:opacity-60";
+  }
+
+  function stopEmpathy() {
+    onHoldEmpathy(false);
+  }
+
+  let face: React.ReactNode;
+  if (showEmpathy) {
+    face = (
+      <CardFace
+        colorblindMode={colorblindMode}
+        pips={{
+          suits: empathy.possibleSuitIndexes.map((suitIndex) => ({
+            suitIndex,
+            eliminated: false,
+            positive: false,
+          })),
+          ranks: empathy.possibleRanks.map((rank) => ({
+            rank,
+            eliminated: false,
+            positive: false,
+          })),
+          bubble: undefined,
+        }}
+        rank={undefined}
+        suitIndex={undefined}
+        variant={variant}
+        width={cardWidth}
+      />
+    );
+  } else if (finalRound) {
+    // Smaller than the count of cards, and always with its caption, so that it does not read as
+    // cards left.
+    face = (
+      <span
+        className="tw:flex tw:flex-col tw:items-center tw:leading-none tw:font-extrabold"
+        data-deck-count
+        style={{ color: PACE_HIGH_RISK_COLOR }}
+      >
+        <span style={{ fontSize: cardWidth * TURNS_LEFT_SIZE }}>
+          {turnsLeft}
+        </span>
+        <span
+          className="tw:mt-[0.3em] tw:text-center tw:font-bold tw:text-white tw:uppercase"
+          style={{ fontSize: cardWidth * TURNS_LEFT_CAPTION_SIZE }}
+        >
+          {turns}
+          <br />
+          left
+        </span>
+      </span>
+    );
+  } else {
+    face = (
+      <span
+        className={`tw:font-extrabold ${empty ? "tw:text-game-muted" : "tw:text-white"}`}
+        data-deck-count
+        style={{
+          fontSize: cardWidth * CARDS_LEFT_SIZE,
+          color: lastCard ? PACE_HIGH_RISK_COLOR : undefined,
+        }}
+      >
+        {cardsInDeck}
+      </span>
+    );
+  }
+
+  const topClass = `tw:absolute tw:top-0 tw:left-0 tw:box-border tw:flex tw:items-center tw:justify-center tw:border-0 tw:p-0 ${
+    empty
+      ? "tw:border-2 tw:border-dashed"
+      : "tw:shadow-[inset_0_0_0_3px_var(--card-ink),inset_0_0_0_4px_rgb(255_255_255/18%)] tw:ring-1 tw:ring-game-text/80"
+  } ${emptyStyle} ${held ? "tw:opacity-30" : ""}`;
+  const topStyle = {
+    ...(!empty && !showEmpathy && CARD_BACK_STYLE),
+    width: cardWidth,
+    borderRadius: cardWidth * CARD_CORNER_PER_WIDTH,
+    height,
+  };
+
+  return (
+    <div
+      aria-label={
+        finalRound
+          ? `${turnsLeft} ${turns} left. Then the game ends.`
+          : `${cardsInDeck} cards in the deck`
+      }
+      className="tw:flex tw:flex-col tw:items-center tw:gap-1.5"
+      ref={tooltipRefHtml(
+        showEmpathy
+          ? undefined
+          : getDeckTooltip(cardsInDeck, turnsLeft, deckPlays, play),
+      )}
+      // The tooltip would cover the cards that the deck shows while it is held down.
+      role={play === undefined ? "img" : "group"}
+    >
+      <div
+        className="tw:relative"
+        style={{
+          width: cardWidth + DECK_PILE_DEPTH,
+          height: height + DECK_PILE_DEPTH,
+        }}
+      >
+        {Array.from({ length: edges }, (_, i) => {
+          const offset = (edges - i) * DECK_EDGE_OFFSET;
+          return (
+            <div
+              className="tw:absolute tw:ring-1 tw:ring-game-text/80"
+              // The cards under the top one only show their edges, so they keep their order.
+              key={offset}
+              style={{
+                ...CARD_BACK_STYLE,
+                width: cardWidth,
+                borderRadius: cardWidth * CARD_CORNER_PER_WIDTH,
+                height,
+                left: offset,
+                top: offset,
+              }}
+            />
+          );
+        })}
+        {play !== undefined && !held && (
+          // The glow around the last card says that the player can play it. It pulses, except with
+          // "Reduced motion".
+          <div
+            aria-hidden="true"
+            className={`tw:pointer-events-none tw:absolute tw:top-0 tw:left-0 tw:outline-3 tw:outline-offset-2 tw:outline-game-turn tw:outline-solid tw:shadow-[0_0_14px_4px_var(--game-screen-turn)] ${
+              reducedMotion ? "" : "tw:animate-pulse"
+            }`}
+            style={{
+              width: cardWidth,
+              height,
+              borderRadius: cardWidth * CARD_CORNER_PER_WIDTH,
+            }}
+          />
+        )}
+        {play === undefined ? (
+          <div
+            className={topClass}
+            data-deck
+            // Held down, the deck shows which cards can still be in it, as on the classic screen.
+            onPointerCancel={stopEmpathy}
+            onPointerDown={(event) => {
+              if (
+                event.button === 0
+                && !event.shiftKey
+                && !event.altKey
+                && !event.metaKey
+              ) {
+                onHoldEmpathy(true);
+              }
+            }}
+            onPointerLeave={stopEmpathy}
+            onPointerUp={stopEmpathy}
+            style={topStyle}
+          >
+            {face}
+          </div>
+        ) : (
+          <button
+            aria-expanded={play.tapToMove ? play.menuOpen : undefined}
+            aria-label={
+              play.tapToMove
+                ? "Play the last card of the deck"
+                : "Drag the last card of the deck to the play stacks to play it"
+            }
+            className={`${topClass} ${
+              play.tapToMove
+                ? "tw:cursor-pointer"
+                : "tw:cursor-grab tw:touch-none"
+            }`}
+            data-deck
+            onClick={play.tapToMove ? play.onTap : undefined}
+            onPointerDown={play.tapToMove ? undefined : play.onPointerDown}
+            style={topStyle}
+            type="button"
+          >
+            {face}
+          </button>
+        )}
+        {play?.menuOpen === true && (
+          <div className="tw:absolute tw:top-full tw:left-1/2 tw:z-20 tw:mt-2 tw:flex tw:-translate-x-1/2 tw:gap-1.5 tw:rounded-game-panel tw:bg-game-text tw:p-1.5 tw:shadow-lg">
+            <button
+              className="tw:cursor-pointer tw:rounded-game-control tw:border-0 tw:bg-card-ink tw:px-3 tw:py-1.5 tw:font-bold tw:text-game-text"
+              onClick={play.onPlay}
+              type="button"
+            >
+              Play
+            </button>
+            {play.canDiscard !== undefined && (
+              <button
+                className="tw:cursor-pointer tw:rounded-game-control tw:border-0 tw:bg-clue tw:px-3 tw:py-1.5 tw:font-bold tw:text-card-ink tw:disabled:cursor-default tw:disabled:opacity-50"
+                disabled={!play.canDiscard}
+                onClick={play.onDiscard}
+                type="button"
+              >
+                Discard
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The discarded cards, one row for each suit, where the player drops a card to discard it. Each
+ * card is a button that shows the turn on which it was discarded. The pile keeps room for a row of
+ * every suit, so that it stays the same size as cards are discarded.
+ */
+export function DiscardPile({
+  rows,
+  variant,
+  colorblindMode,
+  cardWidth,
+  zoneState,
+  atMaxClues,
+  doubleDiscard,
+  realLifeMode,
+  onShowDiscard,
+  notes,
+  reducedMotion,
+}: {
+  readonly rows: ReadonlyArray<readonly DiscardView[]>;
+  readonly variant: Variant;
+  readonly colorblindMode: boolean;
+  readonly cardWidth: number;
+  readonly zoneState: ZoneState;
+
+  /** Whether the team has every clue token, so that no one can discard. */
+  readonly atMaxClues: boolean;
+
+  /**
+   * Whether the last discard makes a "Double Discard" situation, which the pile shows with the
+   * "H-Group Conventions" setting, as on the classic screen.
+   */
+  readonly doubleDiscard: boolean;
+
+  /** Whether the "Real life mode" setting is on, which leaves out the borders of the pile. */
+  readonly realLifeMode: boolean;
+  readonly onShowDiscard: (order: CardOrder) => void;
+  readonly notes: CardNotes;
+  readonly reducedMotion: boolean;
+}): React.JSX.Element {
+  const height = cardWidth * CARD_HEIGHT_PER_WIDTH;
+  const showNoDiscard = atMaxClues && !realLifeMode;
+  const showDoubleDiscard = doubleDiscard && !atMaxClues && !realLifeMode;
+
+  // As on the classic screen, each row covers all of the row above but its ranks.
+  const rowStep =
+    cardWidth * (RANK_BOTTOM_PER_WIDTH + DISCARD_ROW_GAP_PER_WIDTH);
+  const rowsHeight = height + (variant.suits.length - 1) * rowStep;
+
+  return (
+    <section
+      aria-label="Discards"
+      className="tw:relative tw:box-border tw:flex tw:flex-col tw:gap-3 tw:rounded-game-panel tw:px-4.5 tw:py-4"
+      ref={tooltipRef(getDiscardPileTooltip(zoneState, showDoubleDiscard))}
+    >
+      {/* While the player drags a card, the well of the pile fades out, so that the pile is part of
+          the dark box of the discard column behind it (see "DropZones.tsx"). */}
+      <div
+        aria-hidden="true"
+        className={`tw:pointer-events-none tw:absolute tw:inset-0 tw:rounded-[inherit] ${WELL_CLASS} ${
+          reducedMotion ? "" : "tw:transition-opacity tw:ease-out"
+        } ${zoneState === "idle" ? "" : "tw:opacity-0"}`}
+        style={{ transitionDuration: `${DROP_ZONE_FADE_MILLISECONDS}ms` }}
+      />
+      {/* A faint trash can behind the cards names the pile without a heading. */}
+      <i
+        aria-hidden="true"
+        className={`fas fa-trash-alt tw:pointer-events-none tw:absolute tw:top-1/2 tw:left-1/2 tw:-translate-1/2 tw:text-game-text ${
+          isRefusing(zoneState) ? "tw:opacity-10" : "tw:opacity-20"
+        }`}
+        style={{ fontSize: cardWidth * 1.125 }}
+      />
+      <div
+        className={`tw:relative tw:flex tw:flex-col ${
+          isRefusing(zoneState) ? "tw:opacity-60" : ""
+        }`}
+        style={{ height: rowsHeight }}
+      >
+        {rows.map((row, rowIndex) => (
+          <div
+            className="tw:flex"
+            key={row[0]?.order}
+            style={{
+              marginTop: rowIndex === 0 ? 0 : rowStep - height,
+            }}
+          >
+            {row.map((card, i) => (
+              <CardNote
+                className="tw:shrink-0"
+                key={card.order}
+                notes={notes}
+                order={card.order}
+                style={{
+                  marginLeft:
+                    i === 0 ? 0 : -cardWidth * DISCARD_OVERLAP_PER_WIDTH,
+                }}
+              >
+                <button
+                  aria-label={`${describeCard(variant, card.suitIndex, card.rank)}. Show the turn it was discarded`}
+                  className="tw:relative tw:block tw:cursor-pointer tw:border-0 tw:bg-transparent tw:p-0 tw:transition-transform tw:hover:z-10 tw:hover:-translate-y-1.5 tw:focus-visible:z-10 tw:focus-visible:-translate-y-1.5"
+                  data-card-order={card.order}
+                  data-card-place={`${DISCARD_PLACE_PREFIX}${rowIndex}-${i}`}
+                  onClick={() => {
+                    onShowDiscard(card.order);
+                  }}
+                  style={{
+                    borderRadius: cardWidth * CARD_CORNER_PER_WIDTH,
+                  }}
+                  type="button"
+                >
+                  <CardFace
+                    colorblindMode={colorblindMode}
+                    note={notes.notesHtml.has(card.order)}
+                    noteUnread={notes.unreadNotes.has(card.order)}
+                    rank={card.rank}
+                    suitIndex={card.suitIndex}
+                    variant={variant}
+                    width={cardWidth}
+                  />
+                </button>
+              </CardNote>
+            ))}
+          </div>
+        ))}
+      </div>
+      {zoneState === "blocked" && <NoEntrySign />}
+      <ZoneLabel
+        state={zoneState}
+        text="Discard"
+        unavailableText="No discarding at max clues"
+      />
+      {/* At max clues, a white dashed border shows that no one can discard, before anyone picks up
+          a card and while they drag one. The clue tokens have the same border with no clues. It is
+          last, so that the well does not darken it. "Real life mode" leaves it out. */}
+      {showNoDiscard && (
+        <div
+          aria-hidden="true"
+          className="tw:pointer-events-none tw:absolute tw:inset-0 tw:rounded-[inherit] tw:outline-2 tw:-outline-offset-2 tw:outline-game-text tw:outline-dashed"
+        />
+      )}
+      {/* In a "Double Discard" situation, a yellow border warns the next player before they
+          discard. */}
+      {showDoubleDiscard && (
+        <div
+          aria-hidden="true"
+          className="tw:pointer-events-none tw:absolute tw:inset-0 tw:rounded-[inherit] tw:outline-2 tw:-outline-offset-2 tw:outline-game-caution/80 tw:outline-solid"
+          data-double-discard
+        />
+      )}
+    </section>
+  );
+}
+
+/** The tooltip of the discard pile. It has none while the player drags a card. */
+function getDiscardPileTooltip(
+  zoneState: ZoneState,
+  doubleDiscard: boolean,
+): string | undefined {
+  if (zoneState !== "idle") {
+    return undefined;
+  }
+  return doubleDiscard
+    ? "Discard pile. Double Discard: the card just discarded is still needed, so the chop of the player whose turn it is could be its last copy."
+    : "Discard pile";
+}
+
+/**
+ * The sign over the discard pile while the player holds a card over it and the team cannot discard.
+ * It is a circle with a slash, not an X, because an X on this screen is a strike. It is in the
+ * color of clues, because the team has too many clues to discard. It is larger than the held card,
+ * so that the card does not cover it. It is in the middle of the pile, around the label.
+ */
+function NoEntrySign(): React.JSX.Element {
+  return (
+    <div className="tw:pointer-events-none tw:absolute tw:inset-3 tw:z-10">
+      <svg
+        aria-hidden="true"
+        className="tw:size-full tw:text-clue tw:drop-shadow-[0_2px_6px_rgb(0_0_0/60%)]"
+        viewBox="0 0 100 100"
+      >
+        <circle
+          cx={50}
+          cy={50}
+          fill="none"
+          r={45}
+          stroke="currentColor"
+          strokeWidth={8}
+        />
+        <path d="M18.2 18.2 81.8 81.8" stroke="currentColor" strokeWidth={8} />
+      </svg>
+    </div>
+  );
+}
+
+/**
+ * The box of the clue tokens and the strikes. Under the deck, the clue count is above the strikes,
+ * so that the column stays narrow and short. When the columns stack, they are side by side.
+ */
+const TOKENS_BOX_CLASS = `tw:relative tw:flex tw:flex-col tw:items-center tw:gap-[8px] tw:rounded-game-panel tw:px-1.5 tw:py-[8px] tw:narrow-980:flex-row tw:narrow-980:justify-center tw:narrow-980:gap-8 tw:narrow-980:px-4 tw:narrow-980:py-4 ${WELL_CLASS}`;
+
+/**
+ * The height of the tokens under the deck, with the gap above them. It is the sum of the box's
+ * classes, which are in pixels, not "rem", so that this sum stays right: 8 pixels of padding above
+ * and below, the clue count (34 pixels), a gap of 8 pixels, and the strike boxes (28 pixels).
+ */
+export const TABLE_TOKENS_HEIGHT = PLAY_AREA_GAP + 8 + 34 + 8 + 28 + 8;
+
+/**
+ * A clue token, drawn as a disc in the color of clues with a ring inside it: the physical game
+ * counts clues with tokens.
+ */
+function ClueTokenIcon(): React.JSX.Element {
+  return (
+    <svg
+      aria-hidden="true"
+      className="tw:size-[24px] tw:text-clue"
+      viewBox="0 0 24 24"
+    >
+      <circle cx={12} cy={12} fill="currentColor" r={11} />
+      <circle
+        cx={12}
+        cy={12}
+        fill="none"
+        r={6.5}
+        stroke="var(--card-ink)"
+        strokeOpacity={0.45}
+        strokeWidth={2}
+      />
+    </svg>
+  );
+}
+
+/**
+ * The color of the clue count: it stands out only at the limits, and with one clue left, as on the
+ * classic screen. "Real life mode" leaves the colors out.
+ */
+function getClueCountClass(
+  atMaxClues: boolean,
+  outOfClues: boolean,
+  oneClueLeft: boolean,
+  realLifeMode: boolean,
+): string {
+  if (realLifeMode) {
+    return "tw:text-game-text";
+  }
+  if (atMaxClues) {
+    return "tw:text-clue";
+  }
+  if (outOfClues) {
+    return "tw:text-game-muted";
+  }
+  if (oneClueLeft) {
+    return "tw:text-game-caution";
+  }
+  return "tw:text-game-text";
+}
+
+/** The tooltip of the clue tokens, which explains the color of the count. */
+function getClueTokensTooltip(
+  atMaxClues: boolean,
+  outOfClues: boolean,
+  oneClueLeft: boolean,
+): string {
+  if (outOfClues) {
+    return "Clue tokens: the team has none, so no one can give a clue.";
+  }
+  if (oneClueLeft) {
+    return "Clue tokens: the team has one clue left.";
+  }
+  if (atMaxClues) {
+    return "Clue tokens: the team has all of them, so no one can discard.";
+  }
+  return "Clue tokens";
+}
+
+/**
+ * The X drawn inside a box for each strike. A shape, not only a color, so that players who cannot
+ * tell red apart still see the strikes.
+ */
+function StrikeMark({
+  upcoming = false,
+}: {
+  /** A strike that happens later in the game, which shows faded. */
+  readonly upcoming?: boolean;
+}): React.JSX.Element {
+  return (
+    <svg
+      aria-hidden="true"
+      className={`tw:size-[21px] tw:narrow-980:size-[22px] ${upcoming ? "tw:text-game-muted tw:opacity-35" : "tw:text-critical"}`}
+      viewBox="0 0 24 24"
+    >
+      <path
+        d="M6 6 18 18M18 6 6 18"
+        fill="none"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeWidth={3.4}
+      />
+    </svg>
+  );
+}
+
+/**
+ * The clue tokens and the strikes, below the deck. They are real tokens in the physical game, so
+ * they sit on the table instead of with the numbers along the bottom.
+ */
+export function TableTokens({
+  clues,
+  atMaxClues,
+  outOfClues,
+  oneClueLeft,
+  realLifeMode,
+  strikes,
+  strikeSegments,
+  onShowStrike,
+}: {
+  readonly clues: number;
+
+  /** Whether the team has every clue token, so that no one can discard. */
+  readonly atMaxClues: boolean;
+
+  /** Whether the team has too few clue tokens to give a clue. */
+  readonly outOfClues: boolean;
+
+  /** Whether the team has the clue tokens for exactly one clue. */
+  readonly oneClueLeft: boolean;
+
+  /**
+   * Whether the "Real life mode" setting is on, which leaves out the warnings of the clue count.
+   */
+  readonly realLifeMode: boolean;
+  readonly strikes: number;
+
+  /**
+   * For each strike box, the segment of the strike that it stands for, or `undefined` when it does
+   * not stand for one that the viewer may see. Clicking a box with a strike shows its turn.
+   */
+  readonly strikeSegments: ReadonlyArray<number | undefined>;
+  readonly onShowStrike: (segment: number) => void;
+}): React.JSX.Element {
+  return (
+    <div
+      className={`tw:mt-auto tw:shrink-0 tw:self-stretch ${TOKENS_BOX_CLASS}`}
+    >
+      <section
+        aria-label="Clue tokens"
+        className="tw:flex tw:h-[34px] tw:items-center tw:gap-1.5 tw:narrow-980:gap-2"
+        ref={tooltipRef(
+          realLifeMode
+            ? "Clue tokens"
+            : getClueTokensTooltip(atMaxClues, outOfClues, oneClueLeft),
+        )}
+      >
+        {/* One large number: the count that players check most. It stands out only at the
+            limits, where the rules change what the team can do: in the color of clues at the
+            maximum, when someone must clue, and gray with none, when no one can. It is yellow
+            with one clue left, as a warning before the limit. */}
+        <ClueTokenIcon />
+        <span
+          className={`tw:text-[34px] tw:leading-none tw:font-extrabold ${getClueCountClass(atMaxClues, outOfClues, oneClueLeft, realLifeMode)}`}
+          // A spark flies to the count when a completed stack gives a clue back (see
+          // "scoreMotion.ts").
+          data-clue-count
+        >
+          {clues}
+        </span>
+      </section>
+      <section aria-label="Strikes">
+        <div
+          aria-label={`${strikes} of ${MAX_STRIKES} strikes`}
+          className="tw:flex tw:h-[28px] tw:items-center tw:gap-1.5 tw:narrow-980:h-[32px]"
+          role="group"
+        >
+          {[...eRange(MAX_STRIKES)].map((i) => {
+            const segment = strikeSegments[i];
+            const struck = i < strikes;
+            // In a replay, a strike that happens later in the game shows faded, as on the classic
+            // screen. Clicking it goes to its turn.
+            const upcoming = !struck && segment !== undefined;
+            const className = `tw:box-border tw:flex tw:size-[28px] tw:items-center tw:justify-center tw:rounded-game-control tw:narrow-980:size-[32px] tw:border-2 tw:border-solid tw:p-0 ${
+              struck
+                ? "tw:border-critical tw:bg-critical/15"
+                : "tw:border-game-line tw:bg-transparent"
+            }`;
+            let mark: React.ReactNode;
+            if (struck) {
+              mark = <StrikeMark />;
+            } else if (upcoming) {
+              mark = <StrikeMark upcoming />;
+            }
+            return segment === undefined ? (
+              // A box without a strike to show says what the boxes are. A box with one has its own
+              // tooltip.
+              <span
+                className={className}
+                data-strike-box={i}
+                key={i}
+                ref={tooltipRef("Strikes")}
+              >
+                {mark}
+              </span>
+            ) : (
+              <button
+                aria-label={`Show the turn of strike ${i + 1}`}
+                className={`${className} tw:cursor-pointer tw:hover:brightness-125`}
+                data-strike-box={i}
+                key={i}
+                onClick={() => {
+                  onShowStrike(segment);
+                }}
+                ref={tooltipRef(
+                  // A turn is one more than its segment, as in the clue log.
+                  upcoming
+                    ? `A strike happens later in the game, on turn ${segment + 1}. Click to go to it.`
+                    : `This strike happened on turn ${segment + 1}. Click to go to it.`,
+                )}
+                type="button"
+              >
+                {mark}
+              </button>
+            );
+          })}
+        </div>
+      </section>
+      {/* With no clues, a white dashed border around the box shows that no one can give a clue, as
+          the discard pile has one at the maximum to show that no one can discard. It is last, so
+          that the well does not darken it. "Real life mode" leaves it out. */}
+      {outOfClues && !realLifeMode && (
+        <div
+          aria-hidden="true"
+          className="tw:pointer-events-none tw:absolute tw:inset-0 tw:rounded-[inherit] tw:outline-2 tw:-outline-offset-2 tw:outline-game-text tw:outline-dashed"
+        />
+      )}
+    </div>
+  );
+}

@@ -3,16 +3,20 @@
 
 import type { Tuple } from "complete-common";
 import { iRange, newArray } from "complete-common";
-import { START_CARD_RANK } from "../../constants";
-import { StackDirection } from "../../enums/StackDirection";
-import type { CardState } from "../../interfaces/CardState";
-import type { GameState } from "../../interfaces/GameState";
-import type { Variant } from "../../interfaces/Variant";
-import type { NumSuits } from "../../types/NumSuits";
-import type { Rank } from "../../types/Rank";
-import type { SuitIndex } from "../../types/SuitIndex";
-import { getAllDiscardedSetForSuit, getDiscardHelpers } from "../deck";
-import { getLastPlayedRank } from "../playStacks";
+import { StackDirection } from "../../enums/StackDirection.ts";
+import {
+  MAX_RANK,
+  MIN_RANK,
+  START_CARD_RANK,
+} from "../../generated/protocol.ts";
+import type { CardState } from "../../interfaces/CardState.ts";
+import type { GameState } from "../../interfaces/GameState.ts";
+import type { Variant } from "../../interfaces/Variant.ts";
+import type { NumSuits } from "../../types/NumSuits.ts";
+import type { Rank } from "../../types/Rank.ts";
+import type { SuitIndex } from "../../types/SuitIndex.ts";
+import { getAllDiscardedSetForSuit, getDiscardHelpers } from "../deck.ts";
+import { getLastPlayedRank } from "../playStacks.ts";
 
 /**
  * Returns true if this card still needs to be played in order to get the maximum score (taking the
@@ -45,7 +49,7 @@ export function reversibleIsCardNeededForMaxScore(
 }
 
 export function reversibleGetRanksUsefulForMaxScore(
-  lastPlayed: Rank | null,
+  lastPlayed: Rank | undefined,
   allDiscardedSet: ReadonlySet<Rank>,
   direction: StackDirection | undefined,
   upOrDown: boolean,
@@ -72,14 +76,14 @@ export function reversibleGetRanksUsefulForMaxScore(
   if (direction === StackDirection.Up) {
     // We first deal with S and 1, if both are discarded then no other cards can be played:
     if (
-      allDiscardedSet.has(1)
+      allDiscardedSet.has(MIN_RANK)
       && (!upOrDown || allDiscardedSet.has(START_CARD_RANK))
     ) {
       return ranksSet;
     }
-    let nextToPlay = 2;
-    if (lastPlayed === null) {
-      ranksSet.add(1);
+    let nextToPlay = MIN_RANK + 1;
+    if (lastPlayed === undefined) {
+      ranksSet.add(MIN_RANK);
       if (upOrDown) {
         ranksSet.add(START_CARD_RANK);
       }
@@ -87,7 +91,7 @@ export function reversibleGetRanksUsefulForMaxScore(
       nextToPlay = lastPlayed + 1;
     }
     // Then we walk up from `nextToPlay` (at least 2 as we dealt with S and 1 already):
-    for (let rank = nextToPlay; rank <= 5; rank++) {
+    for (let rank = nextToPlay; rank <= MAX_RANK; rank++) {
       if (allDiscardedSet.has(rank as Rank)) {
         break;
       }
@@ -98,21 +102,21 @@ export function reversibleGetRanksUsefulForMaxScore(
   // Same logic than Up, but reversed.
   if (direction === StackDirection.Down) {
     if (
-      allDiscardedSet.has(5)
+      allDiscardedSet.has(MAX_RANK)
       && (!upOrDown || allDiscardedSet.has(START_CARD_RANK))
     ) {
       return ranksSet;
     }
-    let nextToPlay = 4;
-    if (lastPlayed === null) {
-      ranksSet.add(5);
+    let nextToPlay = MAX_RANK - 1;
+    if (lastPlayed === undefined) {
+      ranksSet.add(MAX_RANK);
       if (upOrDown) {
         ranksSet.add(START_CARD_RANK);
       }
     } else if (lastPlayed !== START_CARD_RANK) {
       nextToPlay = lastPlayed - 1;
     }
-    for (let rank = nextToPlay; rank >= 1; rank--) {
+    for (let rank = nextToPlay; rank >= MIN_RANK; rank--) {
       if (allDiscardedSet.has(rank as Rank)) {
         break;
       }
@@ -189,17 +193,17 @@ function walkUp(allDiscardedSet: ReadonlySet<Rank>, variant: Variant): number {
   // First, check to see if the stack can still be started.
   if (variant.upOrDown) {
     // In "Up or Down" variants, you can start with 1 or START when going up.
-    if (allDiscardedSet.has(1) && allDiscardedSet.has(START_CARD_RANK)) {
+    if (allDiscardedSet.has(MIN_RANK) && allDiscardedSet.has(START_CARD_RANK)) {
       return 0;
     }
-  } else if (allDiscardedSet.has(1)) {
+  } else if (allDiscardedSet.has(MIN_RANK)) {
     // Otherwise, only 1.
     return 0;
   }
   cardsThatCanStillBePlayed++;
 
   // Second, walk upwards.
-  for (const rank of iRange(2, 5)) {
+  for (const rank of iRange(MIN_RANK + 1, MAX_RANK)) {
     if (allDiscardedSet.has(rank as Rank)) {
       break;
     }
@@ -215,18 +219,18 @@ function walkDown(allDiscardedSet: ReadonlySet<Rank>, variant: Variant) {
 
   // First, check to see if the stack can still be started.
   if (variant.upOrDown) {
-    if (allDiscardedSet.has(5) && allDiscardedSet.has(START_CARD_RANK)) {
+    if (allDiscardedSet.has(MAX_RANK) && allDiscardedSet.has(START_CARD_RANK)) {
       // In "Up or Down" variants, you can start with 5 or START when going down.
       return 0;
     }
-  } else if (allDiscardedSet.has(5)) {
+  } else if (allDiscardedSet.has(MAX_RANK)) {
     // Otherwise, only 5.
     return 0;
   }
   cardsThatCanStillBePlayed++;
 
   // Second, walk downwards.
-  for (let rank = 4; rank >= 1; rank--) {
+  for (let rank = MAX_RANK - 1; rank >= MIN_RANK; rank--) {
     if (allDiscardedSet.has(rank as Rank)) {
       break;
     }
@@ -261,22 +265,22 @@ export function reversibleIsCardCritical(
   // The START, 1's and 5's are critical if all copies of either of the other two cards are
   // discarded in an Undecided direction.
   if (
-    (rank === 1 || rank === 5 || rank === START_CARD_RANK)
+    (rank === MIN_RANK || rank === MAX_RANK || rank === START_CARD_RANK)
     && direction === StackDirection.Undecided
   ) {
     return (
       isAllDiscarded(suitIndex, START_CARD_RANK)
-      || isAllDiscarded(suitIndex, 1)
-      || isAllDiscarded(suitIndex, 5)
+      || isAllDiscarded(suitIndex, MIN_RANK)
+      || isAllDiscarded(suitIndex, MAX_RANK)
     );
   }
 
   // 1's and 5's are critical to end if the direction requires them in the end.
-  if (rank === 1) {
+  if (rank === MIN_RANK) {
     return direction === StackDirection.Down;
   }
 
-  if (rank === 5) {
+  if (rank === MAX_RANK) {
     return direction === StackDirection.Up;
   }
 

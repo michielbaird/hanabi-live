@@ -1,22 +1,32 @@
 import type { Tuple } from "complete-common";
-import { SECOND_IN_MILLISECONDS, assertDefined } from "complete-common";
-import { ClueType } from "../enums/ClueType";
-import { EndCondition } from "../enums/EndCondition";
-import { getVariant } from "../gameData";
-import type { GameMetadata } from "../interfaces/GameMetadata";
-import type { Variant } from "../interfaces/Variant";
-import { getCharacterNameForPlayer } from "../reducers/reducerHelpers";
-import type { MsgClue } from "../types/MsgClue";
-import type { NumPlayers } from "../types/NumPlayers";
-import type { PlayerIndex } from "../types/PlayerIndex";
+import {
+  HOUR_IN_MILLISECONDS,
+  MINUTE_IN_MILLISECONDS,
+  SECOND_IN_MILLISECONDS,
+  assertDefined,
+} from "complete-common";
+import { getVariantById } from "../gameData.ts";
+import type { GameMetadata } from "../interfaces/GameMetadata.ts";
+import type { Variant } from "../interfaces/Variant.ts";
+import { getCharacterNameForPlayer } from "../reducers/reducerHelpers.ts";
+import type { EndCondition } from "../types/EndCondition.ts";
+import type { HiddenClue } from "../types/HiddenClue.ts";
+import type { MsgClue } from "../types/MsgClue.ts";
+import type { NumPlayers } from "../types/NumPlayers.ts";
+import type { Perspective } from "../types/Perspective.ts";
+import type { PlayerIndex } from "../types/PlayerIndex.ts";
 import type {
   ActionClue,
   ActionDiscard,
+  ActionMisplay,
   ActionPlay,
-} from "../types/gameActions";
-import { getCardName } from "./card";
-import { getClueName } from "./clues";
-import { getCardSlot } from "./hand";
+} from "../types/gameActions.ts";
+import { getCardName } from "./card.ts";
+import { getClueName, getVisibleClueType, isPassTurnClue } from "./clues.ts";
+import { getCardSlot } from "./hand.ts";
+
+const SECONDS_PER_MINUTE = MINUTE_IN_MILLISECONDS / SECOND_IN_MILLISECONDS;
+const SECONDS_PER_HOUR = HOUR_IN_MILLISECONDS / SECOND_IN_MILLISECONDS;
 
 const HYPO_PREFIX = "[Hypo] ";
 const NUMBER_WORDS = [
@@ -29,12 +39,17 @@ const NUMBER_WORDS = [
   "six",
 ] as const;
 
+/** Returns a small number as a word, such as "three", or "unknown" when it has no word. */
+export function getNumberWord(number: number): string {
+  return NUMBER_WORDS[number] ?? "unknown";
+}
+
 export function getGoesFirstText(
-  playerIndex: PlayerIndex | null,
+  playerIndex: PlayerIndex | undefined,
   playerNames: Readonly<Tuple<string, NumPlayers>>,
 ): string {
   const playerName =
-    playerIndex === null
+    playerIndex === undefined
       ? "[unknown]"
       : (playerNames[playerIndex] ?? "[unknown]");
 
@@ -44,27 +59,36 @@ export function getGoesFirstText(
 export function getClueText(
   action: ActionClue,
   targetHand: readonly number[],
-  hypothetical: boolean,
+  perspective: Perspective,
   metadata: GameMetadata,
 ): string {
-  const giver = metadata.playerNames[action.giver] ?? "unknown";
-  const target = metadata.playerNames[action.target] ?? "unknown";
-  const word = NUMBER_WORDS[action.list.length] ?? "unknown";
-  const variant = getVariant(metadata.options.variantName);
-  const hypoPrefix = hypothetical ? HYPO_PREFIX : "";
+  const giver = metadata.playerNames[action.playerIndex] ?? "unknown";
+  const target = metadata.playerNames[action.receiverIndex] ?? "unknown";
+  const word = getNumberWord(action.orders.length);
+  const variant = getVariantById(metadata.options.variantId);
+  const hypoPrefix = perspective === "hypothetical" ? HYPO_PREFIX : "";
+
+  if (isPassTurnClue(action)) {
+    return `${hypoPrefix}${giver} passes the turn`;
+  }
 
   // First, handle the case of clue text in some special variants.
   const characterName = getCharacterNameForPlayer(
-    action.giver,
+    action.playerIndex,
     metadata.characterAssignments,
   );
-  if (variant.cowAndPig || variant.duck || characterName === "Quacker") {
+  if (
+    characterName === "Quacker"
+    || action.clue.type === undefined
+    || variant.cowAndPig
+    || variant.duck
+  ) {
     const actionName = getClueActionName(action.clue, variant, characterName);
     const targetSuffix = target.endsWith("s") ? "'" : "'s";
 
     // Create a list of slot numbers that correspond to the cards touched.
     const slots: number[] = [];
-    for (const order of action.list) {
+    for (const order of action.orders) {
       const slot = getCardSlot(order, targetHand);
       assertDefined(slot, `Failed to get the slot for card: ${order}`);
 
@@ -79,13 +103,8 @@ export function getClueText(
   }
 
   // Handle the default case of a normal clue.
-  let clueName = getClueName(
-    action.clue.type,
-    action.clue.value,
-    variant,
-    characterName,
-  );
-  if (action.list.length !== 1) {
+  let clueName = getClueName(action.clue, variant, characterName);
+  if (action.orders.length !== 1) {
     clueName += "s";
   }
 
@@ -93,78 +112,77 @@ export function getClueText(
 }
 
 function getClueActionName(
-  msgClue: MsgClue,
+  msgClue: MsgClue | HiddenClue,
   variant: Variant,
   characterName: string,
 ): string {
+  const visibleType = getVisibleClueType(msgClue);
+  if (visibleType === undefined) {
+    return "quacks";
+  }
   if (variant.cowAndPig) {
-    switch (msgClue.type) {
-      case ClueType.Color: {
+    switch (visibleType) {
+      case "color": {
         return "moos";
       }
 
-      case ClueType.Rank: {
+      case "rank": {
         return "oinks";
       }
     }
   }
 
-  if (variant.duck || characterName === "Quacker") {
-    return "quacks";
-  }
-
-  return "clues";
+  return characterName === "Quacker" || variant.duck ? "quacks" : "clues";
 }
 
 export function getGameOverText(
   endCondition: EndCondition,
-  playerIndex: PlayerIndex,
+  playerIndex: PlayerIndex | undefined,
   score: number,
   metadata: GameMetadata,
-  votes: readonly PlayerIndex[] | null,
+  votes: readonly PlayerIndex[],
 ): string {
   const playerName = getPlayerName(playerIndex, metadata);
 
   switch (endCondition) {
-    case EndCondition.InProgress:
-    case EndCondition.Normal: {
+    case "normal": {
       return `Players score ${score} points.`;
     }
 
-    case EndCondition.Strikeout: {
+    case "strikeout": {
       break;
     }
 
-    case EndCondition.Timeout: {
+    case "timeout": {
       return `${playerName} ran out of time!`;
     }
 
-    case EndCondition.TerminatedByPlayer: {
+    case "terminatedByPlayer": {
       return `${playerName} terminated the game!`;
     }
 
-    case EndCondition.TerminatedByVote: {
+    case "terminatedByVote": {
       const playerNames = getPlayerNames(votes, metadata);
       return `${playerNames} voted to terminate the game!`;
     }
 
-    case EndCondition.SpeedrunFail: {
+    case "speedrunFail": {
       break;
     }
 
-    case EndCondition.IdleTimeout: {
+    case "idleTimeout": {
       return "Players were idle for too long.";
     }
 
-    case EndCondition.CharacterSoftlock: {
+    case "characterSoftlock": {
       return `${playerName} was left with 0 clues!`;
     }
 
-    case EndCondition.AllOrNothingFail: {
+    case "allOrNothingFail": {
       break;
     }
 
-    case EndCondition.AllOrNothingSoftlock: {
+    case "allOrNothingSoftlock": {
       return `${playerName} was left with 0 clues and 0 cards!`;
     }
   }
@@ -172,11 +190,13 @@ export function getGameOverText(
   return "Players lose!";
 }
 
-function getPlayerNames(
-  playerIndices: readonly PlayerIndex[] | null,
+/** Returns the names of the players in order, such as "Alice, Bob, and Carol". */
+export function getPlayerNames(
+  playerIndices: readonly PlayerIndex[],
   metadata: GameMetadata,
 ): string {
-  if (playerIndices === null) {
+  // A replay does not know who voted.
+  if (playerIndices.length === 0) {
     return "The players";
   }
 
@@ -192,74 +212,54 @@ function getPlayerNames(
 }
 
 export function getPlayText(
-  action: ActionPlay | ActionDiscard,
-  slot: number | null,
+  action: ActionPlay | ActionMisplay,
+  slot: number | undefined,
   touched: boolean,
-  playing: boolean,
-  shadowing: boolean,
-  hypothetical: boolean,
+  perspective: Perspective,
   metadata: GameMetadata,
 ): string {
-  const variant = getVariant(metadata.options.variantName);
+  const variant = getVariantById(metadata.options.variantId);
   const playerName = getPlayerName(action.playerIndex, metadata);
 
   const cardIsHidden =
-    action.suitIndex === -1
-    || action.rank === -1
-    || (variant.throwItInAHole && (playing || shadowing));
+    action.identity === undefined
+    || (variant.throwItInAHole && perspective === "seat");
 
   const cardName = cardIsHidden
     ? "a card"
-    : getCardName(action.suitIndex, action.rank, variant);
+    : getCardName(action.identity.suitIndex, action.identity.rank, variant);
 
-  const location = slot === null ? "the deck" : `slot #${slot}`;
+  const location = slot === undefined ? "the deck" : `slot #${slot}`;
   const suffix = touched ? "" : " (blind)";
-  const hypoPrefix = hypothetical ? HYPO_PREFIX : "";
+  const hypoPrefix = perspective === "hypothetical" ? HYPO_PREFIX : "";
   const playText =
-    action.type === "discard" && action.failed && !cardIsHidden
-      ? "fails to play"
-      : "plays";
+    !cardIsHidden && action.type === "misplay" ? "fails to play" : "plays";
 
   return `${hypoPrefix}${playerName} ${playText} ${cardName} from ${location}${suffix}`;
 }
 
 export function getDiscardText(
   action: ActionDiscard,
-  slot: number | null,
+  slot: number | undefined,
   touched: boolean,
   critical: boolean,
-  playing: boolean,
-  shadowing: boolean,
-  hypothetical: boolean,
+  perspective: Perspective,
   metadata: GameMetadata,
 ): string {
-  if (action.failed) {
-    return getPlayText(
-      action,
-      slot,
-      touched,
-      playing,
-      shadowing,
-      hypothetical,
-      metadata,
-    );
-  }
-
-  const variant = getVariant(metadata.options.variantName);
+  const variant = getVariantById(metadata.options.variantId);
   const playerName = getPlayerName(action.playerIndex, metadata);
 
   const cardIsHidden =
-    action.suitIndex === -1
-    || action.rank === -1
-    || (variant.throwItInAHole && (playing || shadowing));
+    action.identity === undefined
+    || (variant.throwItInAHole && perspective === "seat");
 
   const cardName = cardIsHidden
     ? "a card"
-    : getCardName(action.suitIndex, action.rank, variant);
+    : getCardName(action.identity.suitIndex, action.identity.rank, variant);
 
-  const location = slot === null ? "the deck" : `slot #${slot}`;
+  const location = slot === undefined ? "the deck" : `slot #${slot}`;
   const suffix = getDiscardTextSuffix(touched, critical);
-  const hypoPrefix = hypothetical ? HYPO_PREFIX : "";
+  const hypoPrefix = perspective === "hypothetical" ? HYPO_PREFIX : "";
 
   return `${hypoPrefix}${playerName} discards ${cardName} from ${location}${suffix}`;
 }
@@ -278,25 +278,33 @@ function getDiscardTextSuffix(touched: boolean, critical: boolean): string {
 }
 
 export function getPlayerName(
-  playerIndex: PlayerIndex,
+  playerIndex: PlayerIndex | undefined,
   metadata: GameMetadata,
 ): string {
-  return metadata.playerNames[playerIndex] ?? "[unknown]";
+  return playerIndex === undefined
+    ? "[unknown]"
+    : (metadata.playerNames[playerIndex] ?? "[unknown]");
 }
 
+/** Formats a duration in milliseconds as `secondsToClockString` does. A negative one is 0. */
 export function millisecondsToClockString(milliseconds: number): string {
-  // Non timed games measure time in negative values.
-  const time = Math.abs(milliseconds);
-  const seconds = Math.ceil(time / SECOND_IN_MILLISECONDS);
-  const minutes = Math.floor(seconds / 60);
-  const paddedSeconds = pad2(seconds % 60);
-
-  return `${minutes}:${paddedSeconds}`;
+  const time = Math.max(milliseconds, 0);
+  return secondsToClockString(Math.ceil(time / SECOND_IN_MILLISECONDS));
 }
 
-function pad2(num: number) {
-  if (num < 10) {
-    return `0${num}`;
-  }
-  return num.toString();
+/** Formats a duration as "m:ss", or as "h:mm:ss" when it is at least an hour long. */
+export function secondsToClockString(totalSeconds: number): string {
+  const hours = Math.floor(totalSeconds / SECONDS_PER_HOUR);
+  const minutes = Math.floor(
+    (totalSeconds % SECONDS_PER_HOUR) / SECONDS_PER_MINUTE,
+  );
+  const seconds = padTwoDigits(totalSeconds % SECONDS_PER_MINUTE);
+
+  return hours > 0
+    ? `${hours}:${padTwoDigits(minutes)}:${seconds}`
+    : `${minutes}:${seconds}`;
+}
+
+function padTwoDigits(value: number): string {
+  return value.toString().padStart(2, "0");
 }

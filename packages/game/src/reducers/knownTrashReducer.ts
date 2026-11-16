@@ -1,7 +1,7 @@
-import type { CardState } from "../interfaces/CardState";
-import type { GameState } from "../interfaces/GameState";
-import type { Variant } from "../interfaces/Variant";
-import { isAllCardPossibilitiesTrash } from "../rules/card";
+import type { CardState } from "../interfaces/CardState.ts";
+import type { GameState } from "../interfaces/GameState.ts";
+import type { Variant } from "../interfaces/Variant.ts";
+import { isAllCardPossibilitiesTrash } from "../rules/card.ts";
 
 export function knownTrashReducer(
   deck: readonly CardState[],

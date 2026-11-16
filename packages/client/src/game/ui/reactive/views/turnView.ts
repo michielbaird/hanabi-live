@@ -1,15 +1,17 @@
-import { ClueType, getAdjustedClueTokens } from "@hanabi-live/game";
-import type { State } from "../../../types/State";
-import { globals } from "../../UIGlobals";
-import { isOurTurn } from "../../isOurTurn";
-import * as ourHand from "../../ourHand";
-import * as turn from "../../turn";
+import type { ClueType } from "@hanabi-live/game";
+import { getClueCost } from "@hanabi-live/game";
+import { controlsHypothetical } from "../../../controlsHypothetical.ts";
+import { isOurSeat } from "../../../ourSeat.ts";
+import type { State } from "../../../types/State.ts";
+import { globals } from "../../UiGlobals.ts";
+import { DISABLED_OPACITY } from "../../constants.ts";
+import { isOurTurn } from "../../isOurTurn.ts";
+import * as turn from "../../turn.ts";
 
 export function shouldShowYourTurnIndicator(state: State): boolean {
   return (
     state.playing
-    && state.ongoingGame.turn.currentPlayerIndex
-      === globals.metadata.ourPlayerIndex
+    && isOurSeat(state.ongoingGame.turn.currentPlayerIndex, state.metadata)
   );
 }
 
@@ -18,18 +20,16 @@ export function shouldShowYourTurnIndicatorChanged(shouldShow: boolean): void {
   globals.layers.UI.batchDraw();
 }
 
-export function shouldShowTurnUI(state: State): boolean {
+export function shouldShowTurnUi(state: State): boolean {
   return (
-    (state.replay.hypothetical !== null
-      && (state.replay.shared === null || state.replay.shared.amLeader))
+    controlsHypothetical(state)
     || (state.playing
-      && !state.replay.active
-      && state.ongoingGame.turn.currentPlayerIndex
-        === state.metadata.ourPlayerIndex)
+      && state.replay.segment === undefined
+      && isOurSeat(state.ongoingGame.turn.currentPlayerIndex, state.metadata))
   );
 }
 
-export function shouldShowTurnUIChanged(shouldShow: boolean): void {
+export function shouldShowTurnUiChanged(shouldShow: boolean): void {
   globals.elements.clueArea?.visible(shouldShow);
 
   globals.elements.waitingOnServer?.hide();
@@ -41,15 +41,14 @@ export function shouldShowTurnUIChanged(shouldShow: boolean): void {
 /** Fade the clue UI if there is not a clue available. */
 export function shouldIndicateNoClues(state: State): boolean {
   return (
-    shouldShowTurnUI(state)
-    && state.visibleState!.clueTokens
-      < getAdjustedClueTokens(1, globals.variant)
+    shouldShowTurnUi(state)
+    && state.visibleState!.clueTokens < getClueCost(globals.variant)
   );
 }
 
 export function shouldIndicateNoCluesChanged(shouldIndicate: boolean): void {
   globals.elements.clueAreaDisabled!.visible(shouldIndicate);
-  const opacity = shouldIndicate ? 0.2 : 1;
+  const opacity = shouldIndicate ? DISABLED_OPACITY : 1;
   globals.elements.clueArea!.opacity(opacity);
   globals.layers.UI.batchDraw();
 }
@@ -57,7 +56,7 @@ export function shouldIndicateNoCluesChanged(shouldIndicate: boolean): void {
 export function shouldEnableBottomDeckBlindPlay(state: State): boolean {
   return (
     state.metadata.options.deckPlays
-    && shouldShowTurnUI(state)
+    && shouldShowTurnUi(state)
     && state.visibleState!.cardsRemainingInTheDeck === 1
   );
 }
@@ -74,7 +73,9 @@ export function shouldEnableBottomDeckBlindPlayChanged(
   }
 }
 
-export function onLastClueTypeChanged(lastClueType: ClueType | null): void {
+export function onLastClueTypeChanged(
+  lastClueType: ClueType | undefined,
+): void {
   function setColorClueButtonsVisible(visible: boolean) {
     for (const button of globals.elements.colorClueButtons) {
       button.visible(visible);
@@ -90,19 +91,19 @@ export function onLastClueTypeChanged(lastClueType: ClueType | null): void {
   // Hide some specific clue buttons in certain variants with clue restrictions.
   if (globals.variant.alternatingClues) {
     switch (lastClueType) {
-      case null: {
+      case undefined: {
         setColorClueButtonsVisible(true);
         setRankClueButtonsVisible(true);
         break;
       }
 
-      case ClueType.Color: {
+      case "color": {
         setColorClueButtonsVisible(false);
         setRankClueButtonsVisible(true);
         break;
       }
 
-      case ClueType.Rank: {
+      case "rank": {
         setColorClueButtonsVisible(true);
         setRankClueButtonsVisible(false);
         break;
@@ -112,10 +113,11 @@ export function onLastClueTypeChanged(lastClueType: ClueType | null): void {
   globals.layers.UI.batchDraw();
 }
 
+/**
+ * On our turn, the clue buttons start again from nothing. ("../../../ourTurn.ts" sends a premove.)
+ */
 export function onOngoingTurnChanged(): void {
-  ourHand.checkSetDraggableAll();
-
   if (isOurTurn()) {
-    turn.begin();
+    turn.resetSelectedClue();
   }
 }

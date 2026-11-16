@@ -1,9 +1,18 @@
 import { assertDefined, eRange } from "complete-common";
 import Konva from "konva";
-import type { LayoutChild } from "./LayoutChild";
-import { globals } from "./UIGlobals";
-import { CARD_ANIMATION_LENGTH_SECONDS } from "./constants";
-import { animate } from "./konvaHelpers";
+import type { HitCanvas, SceneCanvas } from "konva/lib/Canvas";
+import { store } from "../../store.ts";
+import type { LayoutChild } from "./LayoutChild.ts";
+import { globals } from "./UiGlobals.ts";
+import { CARD_ANIMATION_LENGTH_SECONDS } from "./constants.ts";
+import { animate, degreesToRadians } from "./konvaHelpers.ts";
+import { startMisplayAnimation } from "./misplayAnimation.ts";
+
+/** The largest gap between adjacent cards in a hand, as a fraction of the total card width. */
+const MAX_CARD_SPACING = 0.04;
+
+/** The largest gap between adjacent cards in Keldon mode, as a fraction of the total card width. */
+const MAX_CARD_SPACING_KELDON = 0.025;
 
 /** Represents a player's hand (or a discard pile). It is composed of `LayoutChild` objects. */
 export class CardLayout extends Konva.Group {
@@ -25,20 +34,6 @@ export class CardLayout extends Konva.Group {
 
     assertDefined(config.width, "A width was not defined for a CardLayout.");
     assertDefined(config.height, "A height was not defined for a CardLayout.");
-
-    // Debug rectangle (uncomment to show the size of the hand).
-    /*
-    const debugRect = new Konva.Rect({
-      x: config.x,
-      y: config.y,
-      width: config.width,
-      height: config.height,
-      fill: 'black',
-      rotation: config.rotation,
-      listening: false,
-    });
-    globals.layers.UI.add(debugRect);
-    */
   }
 
   // The card has a relative position relating to its location
@@ -46,7 +41,7 @@ export class CardLayout extends Konva.Group {
   // one location to another without having to worry about the relative position.
   addChild(child: LayoutChild): void {
     const pos = child.getAbsolutePosition();
-    this.add(child as unknown as Konva.Group);
+    this.add(child);
     child.setAbsolutePosition(pos);
     if (this.empathy) {
       child.card.setEmpathy(true);
@@ -57,6 +52,29 @@ export class CardLayout extends Konva.Group {
   override _setChildrenIndices(): void {
     Konva.Group.prototype._setChildrenIndices.call(this);
     this.doLayout();
+  }
+
+  // A held card must be drawn above the other cards in the hand. It cannot be moved to the top of
+  // the children, because the order of the children is the order of the cards in the hand. Thus,
+  // draw it last instead. (Hit detection uses this method too, so the held card also gets clicks.)
+  override _drawChildNodes(
+    drawMethod: "drawScene" | "drawHit",
+    canvas: SceneCanvas,
+    top?: Konva.Node,
+  ): void {
+    const children = this.children as unknown as readonly LayoutChild[];
+    const held = children.filter((layoutChild) => layoutChild.card.dragging);
+    const resting = children.filter(
+      (layoutChild) => !held.includes(layoutChild),
+    );
+    for (const layoutChild of [...resting, ...held]) {
+      if (drawMethod === "drawScene") {
+        layoutChild.drawScene(canvas, top);
+      } else {
+        // Konva declares a scene canvas here, but it passes a hit canvas for hit detection.
+        layoutChild.drawHit(canvas as unknown as HitCanvas, top);
+      }
+    }
   }
 
   doLayout(): void {
@@ -80,10 +98,10 @@ export class CardLayout extends Konva.Group {
     if (numCards > 1) {
       spacingBetweenCards = (handWidth - uw) / (numCards - 1);
     }
-    let maxSpacingBetweenCards = 0.04 * uw;
-    if (globals.lobby.settings.keldonMode) {
-      maxSpacingBetweenCards = 0.025 * uw;
-    }
+    const maxSpacingBetweenCards =
+      (store.getState().session.settings.keldonMode
+        ? MAX_CARD_SPACING_KELDON
+        : MAX_CARD_SPACING) * uw;
     if (spacingBetweenCards > maxSpacingBetweenCards) {
       spacingBetweenCards = maxSpacingBetweenCards;
     }
@@ -113,10 +131,11 @@ export class CardLayout extends Konva.Group {
         layoutChild.doMisplayAnimation = false;
       }
 
-      if (layoutChild.tween !== null) {
+      if (layoutChild.tween !== undefined) {
         layoutChild.tween.destroy();
-        layoutChild.tween = null;
+        layoutChild.tween = undefined;
       }
+      layoutChild.stopAnimations();
 
       // Animate the card going:
       // - from the deck to a player's hand (or vice versa)
@@ -151,29 +170,18 @@ export class CardLayout extends Konva.Group {
       if (layoutChild.doMisplayAnimation) {
         // If this card just misplayed, do a special animation.
         layoutChild.doMisplayAnimation = false;
-
-        const suit = globals.variant.suits[layoutChild.card.state.suitIndex!]!;
-        const playStack = globals.elements.playStacks.get(suit)!;
-        const pos = this.getAbsolutePosition();
-        const playStackPos = playStack.getAbsolutePosition();
-
-        animate(
+        layoutChild.misplayAnimation = startMisplayAnimation(
           layoutChild,
           {
-            duration: CARD_ANIMATION_LENGTH_SECONDS,
-            x: playStackPos.x - pos.x,
-            y: playStackPos.y - pos.y,
-            scale: (playStack.height() * scale) / handHeight,
-            rotation: 0,
-            opacity: 1,
-            // eslint-disable-next-line @typescript-eslint/unbound-method
-            easing: Konva.Easings.EaseOut,
-            onFinish: () => {
-              layoutChild.rotation(360);
-              animateToLayout();
-            },
+            x: newX,
+            y: 0,
+            scale,
           },
-          !globals.options.speedrun,
+          () => {
+            layoutChild.misplayAnimation = undefined;
+            layoutChild.card.finishedTweening();
+            layoutChild.checkSetDraggable();
+          },
         );
       } else {
         animateToLayout();
@@ -186,9 +194,9 @@ export class CardLayout extends Konva.Group {
   }
 
   checkSetDraggableAll(): void {
-    this.children.each((layoutChild) => {
+    for (const layoutChild of this.children) {
       (layoutChild as unknown as LayoutChild).checkSetDraggable();
-    });
+    }
   }
 
   getAbsoluteCenterPos(): { x: number; y: number } {
@@ -199,7 +207,7 @@ export class CardLayout extends Konva.Group {
 
     // The rotation comes from Konva in clockwise degrees but we need to convert it to
     // counter-clockwise radians.
-    const rot = (-this.origRotation / 180) * Math.PI;
+    const rot = degreesToRadians(-this.origRotation);
 
     pos.x += (w / 2) * Math.cos(rot);
     pos.y -= (w / 2) * Math.sin(rot);
@@ -216,9 +224,9 @@ export class CardLayout extends Konva.Group {
     }
 
     this.empathy = enabled;
-    this.children.each((layoutChild) => {
+    for (const layoutChild of this.children) {
       // The first Konva child is not guaranteed to be the card itself.
       (layoutChild as unknown as LayoutChild).card.setEmpathy(enabled);
-    });
+    }
   }
 }

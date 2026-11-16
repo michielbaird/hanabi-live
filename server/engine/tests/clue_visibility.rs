@@ -1,0 +1,131 @@
+use hanabi_engine::*;
+use serde_json::json;
+
+fn clues(events: &[EngineEvent]) -> Vec<EngineEvent> {
+    events
+        .iter()
+        .filter(|event| matches!(event, EngineEvent::Clue { .. }))
+        .cloned()
+        .collect()
+}
+
+/// What a player or shadow may see of a clue.
+#[derive(Clone, Copy, Debug)]
+enum Visible {
+    All,
+    Type,
+    Nothing,
+}
+
+#[test]
+fn projection_hides_what_players_and_shadows_may_not_see_of_a_clue() -> Result<()> {
+    for (variant_name, quacker, visible) in [
+        ("No Variant", false, Visible::All),
+        ("Duck (5 Suits)", false, Visible::Nothing),
+        ("Cow & Pig (5 Suits)", false, Visible::Type),
+        ("No Variant", true, Visible::Nothing),
+    ] {
+        let mut state = create_game(GameSetup {
+            player_names: vec!["Alice".into(), "Bob".into(), "Carol".into()],
+            options: Options {
+                num_players: 3,
+                variant_name: variant_name.into(),
+                detrimental_characters: quacker,
+                ..Options::default()
+            },
+            seed: Some("p3v0s17".into()),
+            deck: None,
+            characters: quacker.then(|| {
+                (0..3)
+                    .map(|_| AssignedCharacter {
+                        name: "Quacker".into(),
+                        metadata: None,
+                    })
+                    .collect()
+            }),
+            interpretation: Interpretation::Live,
+        })?;
+        for kind in [RecordedActionType::ColorClue, RecordedActionType::RankClue] {
+            let actor = state.active_player_index;
+            let target = (actor + 1) % state.players.len();
+            let values = if kind == RecordedActionType::ColorClue {
+                0..5
+            } else {
+                1..6
+            };
+            let action = values
+                .map(|value| {
+                    serde_json::from_value::<PlayerAction>(
+                        if kind == RecordedActionType::ColorClue {
+                            json!({"type": "clue", "receiverIndex": target, "clue": {"type": "color", "color": value}})
+                        } else {
+                            json!({"type": "clue", "receiverIndex": target, "clue": {"type": "rank", "rank": value}})
+                        },
+                    )
+                    .unwrap()
+                })
+                .find(|action| !touched_orders(&state, action).is_empty())
+                .unwrap();
+            let from = state.events.len();
+            apply_action(&mut state, actor, &action, None)?;
+            let new_events = state.events[from..].to_vec();
+            let authoritative = state.clone();
+            for events in [None, Some(new_events.as_slice())] {
+                let original = clues(events.unwrap_or(&state.events));
+                assert_ne!(original, [] as [EngineEvent; 0]);
+                for index in 0..3 {
+                    for recipient in [
+                        Recipient::Player {
+                            player_index: index,
+                        },
+                        Recipient::Spectator {
+                            shadowing_player_index: Some(index),
+                        },
+                    ] {
+                        let projected = clues(&events_for_recipient(&state, recipient, events)?);
+                        let expected = original
+                            .iter()
+                            .cloned()
+                            .map(|mut event| {
+                                if let EngineEvent::Clue {
+                                    clue, clue_type, ..
+                                } = &mut event
+                                {
+                                    match visible {
+                                        Visible::All => {}
+                                        Visible::Type => {
+                                            *clue_type = clue.take().map(|clue| clue.clue_type);
+                                        }
+                                        Visible::Nothing => *clue = None,
+                                    }
+                                }
+                                event
+                            })
+                            .collect::<Vec<_>>();
+                        assert_eq!(
+                            serde_json::to_value(projected)?,
+                            serde_json::to_value(expected)?
+                        );
+                    }
+                }
+                let spectator = events_for_recipient(
+                    &state,
+                    Recipient::Spectator {
+                        shadowing_player_index: None,
+                    },
+                    events,
+                )?;
+                assert_eq!(clues(&spectator), original);
+                assert!(original.iter().all(|event| {
+                    let value = serde_json::to_value(event).unwrap();
+                    value["clue"] != json!({"type":-1,"value":-1})
+                }));
+            }
+            assert_eq!(
+                state, authoritative,
+                "Projection modified authoritative history"
+            );
+        }
+    }
+    Ok(())
+}

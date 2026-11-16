@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT c.message,c.source,c.discord_message_id,u.username FROM chat_log c\n             LEFT JOIN users u ON u.id=c.user_id WHERE c.id=$1 AND c.table_id IS NULL AND c.deleted_at IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "message",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "chat_log",
+            "name": "message"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "source",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "chat_log",
+            "name": "source"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "discord_message_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "chat_log",
+            "name": "discord_message_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "username",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "username"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "a1ea1b6eec66bc10b602f3ac25af1fea16a3c3026e279158f8c2742127187cd1"
+}

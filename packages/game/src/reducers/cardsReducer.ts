@@ -1,7 +1,5 @@
 // Calculates the state of the deck after an action.
 
-/* eslint-disable unicorn/no-null */
-
 import {
   arrayCopyTwoDimensional,
   assertDefined,
@@ -9,26 +7,25 @@ import {
   newArray,
   tupleKeys,
 } from "complete-common";
-import { MAX_PLAYERS } from "../constants";
-import { getVariant } from "../gameData";
-import type { CardState } from "../interfaces/CardState";
-import type { GameMetadata } from "../interfaces/GameMetadata";
-import type { GameState } from "../interfaces/GameState";
-import { msgClueToClue, shouldApplyClue } from "../rules/clues";
-import { isInitialDealFinished } from "../rules/deck";
-import { isCardOnChop } from "../rules/hand";
-import { shouldSeeSlot2CardIdentity } from "../rules/variants/characters";
-import type { CardOrder } from "../types/CardOrder";
-import type { NumPlayers } from "../types/NumPlayers";
-import type { PlayerIndex } from "../types/PlayerIndex";
-import type { Rank } from "../types/Rank";
-import type { SuitIndex } from "../types/SuitIndex";
-import type { SuitRankTuple } from "../types/SuitRankTuple";
-import type { GameAction } from "../types/gameActions";
-import { cardDeductionReducer } from "./cardDeductionReducer";
-import { cardPossibilitiesReducer } from "./cardPossibilitiesReducer";
-import { getInitialCardState } from "./initialStates/initialCardState";
-import { getCharacterNameForPlayer } from "./reducerHelpers";
+import { getVariantById } from "../gameData.ts";
+import { MAX_PLAYERS } from "../generated/protocol.ts";
+import type { CardState } from "../interfaces/CardState.ts";
+import type { GameMetadata } from "../interfaces/GameMetadata.ts";
+import type { GameState } from "../interfaces/GameState.ts";
+import { msgClueToClue, shouldApplyClue } from "../rules/clues.ts";
+import { isCardOnChop } from "../rules/hand.ts";
+import { shouldSeeSlot2CardIdentity } from "../rules/variants/characters.ts";
+import type { CardOrder } from "../types/CardOrder.ts";
+import type { NumPlayers } from "../types/NumPlayers.ts";
+import type { PlayerIndex } from "../types/PlayerIndex.ts";
+import type { Rank } from "../types/Rank.ts";
+import type { SuitIndex } from "../types/SuitIndex.ts";
+import type { SuitRankTuple } from "../types/SuitRankTuple.ts";
+import type { GameAction } from "../types/gameActions.ts";
+import { cardDeductionReducer } from "./cardDeductionReducer.ts";
+import { cardPossibilitiesReducer } from "./cardPossibilitiesReducer.ts";
+import { getInitialCardState } from "./initialStates/initialCardState.ts";
+import { getCharacterNameForPlayer } from "./reducerHelpers.ts";
 
 export function cardsReducer(
   deck: readonly CardState[],
@@ -36,7 +33,7 @@ export function cardsReducer(
   game: GameState,
   metadata: GameMetadata,
 ): readonly CardState[] {
-  const variant = getVariant(metadata.options.variantName);
+  const variant = getVariantById(metadata.options.variantId);
   const newDeck = [...deck];
   const hands = arrayCopyTwoDimensional(
     game.hands as unknown as number[][],
@@ -60,45 +57,50 @@ export function cardsReducer(
         ),
       };
       newDeck[order] = card;
-      if (!shouldSeeSlot2CardIdentity(metadata)) {
-        break;
-      }
-
       if (
-        action.playerIndex === metadata.ourPlayerIndex
-        || action.suitIndex === -1
-        || action.rank === -1
+        !shouldSeeSlot2CardIdentity(metadata)
+        || action.playerIndex === metadata.ourPlayerIndex
+        || action.identity === undefined
       ) {
-        // The server scrubs the identity from cards that slide from slot 1 to slot 2 in our own
-        // hand in order to prevent leaking information.
+        // Otherwise, the server scrubs the identity from cards that slide from slot 1 to slot 2 in
+        // our own hand in order to prevent leaking information.
         break;
       }
 
-      if (card.suitIndex !== null && card.rank !== null) {
+      if (card.suitIndex !== undefined && card.rank !== undefined) {
         // We already know the full identity of this card, so we can safely ignore this action.
         break;
       }
 
       newDeck[order] = {
         ...card,
-        suitIndex: action.suitIndex,
-        rank: action.rank,
-        possibleCards: [[action.suitIndex, action.rank]],
+        suitIndex: action.identity.suitIndex,
+        rank: action.identity.rank,
+        possibleCards: [[action.identity.suitIndex, action.identity.rank]],
       };
 
       break;
     }
 
     case "clue": {
-      const clue = msgClueToClue(action.clue, variant);
+      const clue =
+        action.clue.type === undefined
+          ? undefined
+          : msgClueToClue(action.clue, variant);
 
-      const hand = game.hands[action.target];
-      assertDefined(hand, `Failed to find the hand at index: ${action.target}`);
+      const hand = game.hands[action.receiverIndex];
+      assertDefined(
+        hand,
+        `Failed to find the hand at index: ${action.receiverIndex}`,
+      );
 
       // eslint-disable-next-line func-style
       const applyClue = (order: CardOrder, positive: boolean) => {
         // Clues do not have to be applied in certain situations.
-        if (!shouldApplyClue(action.giver, metadata, variant)) {
+        if (
+          clue === undefined
+          || !shouldApplyClue(action.playerIndex, metadata, variant)
+        ) {
           return;
         }
 
@@ -113,7 +115,7 @@ export function cardsReducer(
       };
 
       // Positive clues
-      for (const order of action.list) {
+      for (const order of action.orders) {
         const card = getCard(newDeck, order);
         newDeck[order] = {
           ...card,
@@ -127,9 +129,10 @@ export function cardsReducer(
       }
 
       // Negative clues
-      const negativeClues = action.ignoreNegative
-        ? []
-        : hand.filter((order) => !action.list.includes(order));
+      const negativeClues =
+        action.ignoreNegative === true
+          ? []
+          : hand.filter((order) => !action.orders.includes(order));
       for (const order of negativeClues) {
         const card = getCard(newDeck, order);
         newDeck[order] = {
@@ -143,19 +146,18 @@ export function cardsReducer(
     }
 
     case "discard":
+    case "misplay":
     case "play": {
       const { order } = action;
       const card = getCard(deck, order);
 
-      // If the rank or suit coming from the action is -1 (i.e. unknown), prefer what we already had
-      // inferred.
-      const suitIndex =
-        action.suitIndex === -1 ? card.suitIndex : action.suitIndex;
-      const rank = action.rank === -1 ? card.rank : action.rank;
+      // If the action does not give the card's identity, keep what we already inferred.
+      const suitIndex = action.identity?.suitIndex ?? card.suitIndex;
+      const rank = action.identity?.rank ?? card.rank;
 
       const identityDetermined = revealCard(suitIndex, rank, card);
 
-      let { segmentPlayed, segmentDiscarded, location, isMisplayed } = card;
+      let { location, segmentDiscarded, segmentPlayed, isMisplayed } = card;
 
       switch (action.type) {
         case "play": {
@@ -167,22 +169,32 @@ export function cardsReducer(
         case "discard": {
           location = "discard";
           segmentDiscarded = game.turn.segment;
-          if (action.failed) {
-            isMisplayed = true;
-          }
+          break;
+        }
+
+        case "misplay": {
+          location = "discard";
+          segmentDiscarded = game.turn.segment;
+          isMisplayed = true;
           break;
         }
       }
 
+      // Cards that go into the hole stay hidden from the players, even when a replay knows them.
+      const goesIntoHole =
+        variant.throwItInAHole
+        && (action.type === "play" || action.type === "misplay");
       const revealedToPlayer =
-        action.suitIndex !== -1 && action.rank !== -1
-          ? newArray(MAX_PLAYERS, true)
-          : card.revealedToPlayer;
+        goesIntoHole || action.identity === undefined
+          ? card.revealedToPlayer
+          : newArray(MAX_PLAYERS, true);
 
       const possibleCards =
-        action.suitIndex !== -1 && action.rank !== -1
-          ? ([[action.suitIndex, action.rank]] as readonly SuitRankTuple[])
-          : card.possibleCards;
+        action.identity === undefined
+          ? card.possibleCards
+          : ([
+              [action.identity.suitIndex, action.identity.rank],
+            ] as readonly SuitRankTuple[]);
 
       newDeck[order] = {
         ...card,
@@ -225,12 +237,13 @@ export function cardsReducer(
 
       let { possibleCards } = initial;
 
-      if (action.suitIndex !== -1 && action.rank !== -1) {
-        possibleCards = [[action.suitIndex, action.rank]] as const;
+      if (action.identity !== undefined) {
+        possibleCards = [
+          [action.identity.suitIndex, action.identity.rank],
+        ] as const;
       }
 
-      const suitIndex = action.suitIndex === -1 ? null : action.suitIndex;
-      const rank = action.rank === -1 ? null : action.rank;
+      const { rank, suitIndex } = action.identity ?? {};
 
       const drawnCard = {
         ...initial,
@@ -244,8 +257,8 @@ export function cardsReducer(
           metadata.characterAssignments,
         ),
         possibleCards,
-        // The segment will be null during the initial deal.
-        dealtToStartingHand: game.turn.segment === null,
+        // The segment will be undefined during the initial deal.
+        dealtToStartingHand: game.turn.segment === undefined,
       };
 
       newDeck[action.order] = drawnCard;
@@ -254,28 +267,20 @@ export function cardsReducer(
     }
 
     // Some actions do not affect the card state.
-    case "setEffMod":
+    case "setEfficiencyModifier":
     case "editNote":
     case "noteList":
     case "noteListPlayer":
     case "receiveNote":
     case "gameOver":
     case "playerTimes":
-    case "strike":
     case "turn": {
       break;
     }
   }
 
-  if (
-    game.turn.turnNum === 0
-    && action.type === "draw"
-    && !isInitialDealFinished(newDeck.length, metadata)
-  ) {
-    // No need to do deduction while cards are being drawn.
-    return newDeck;
-  }
-
+  // Deduction runs after every action, because `cardDeductionReducer` only recalculates cards whose
+  // inputs changed.
   return cardDeductionReducer(newDeck, deck, action, hands, metadata);
 }
 
@@ -294,7 +299,7 @@ function cardIdentityRevealedToPlayer(
       playerIndex,
       characterAssignments,
     );
-    if (playerIndex !== card.location && characterName === "Slow-Witted") {
+    if (characterName === "Slow-Witted" && playerIndex !== card.location) {
       revealedToPlayer.push(true);
     } else {
       const previouslyRevealed = card.revealedToPlayer[playerIndex] ?? false;
@@ -308,7 +313,7 @@ function cardIdentityRevealedToPlayer(
 function drawnCardRevealedToPlayer(
   drawLocation: number,
   numPlayers: NumPlayers,
-  characterAssignments: Readonly<Array<number | null>>,
+  characterAssignments: Readonly<Array<number | undefined>>,
 ): readonly boolean[] {
   const revealedToPlayer: boolean[] = [];
 
@@ -331,7 +336,7 @@ function canPlayerSeeDrawnCard(
   playerIndex: PlayerIndex,
   drawLocation: number,
   numPlayers: NumPlayers,
-  characterAssignments: Readonly<Array<number | null>>,
+  characterAssignments: Readonly<Array<number | undefined>>,
 ): boolean {
   if (playerIndex === drawLocation) {
     return false;
@@ -369,13 +374,13 @@ function getCard(deck: readonly CardState[], order: CardOrder): CardState {
 }
 
 function revealCard(
-  suitIndex: SuitIndex | null,
-  rank: Rank | null,
+  suitIndex: SuitIndex | undefined,
+  rank: Rank | undefined,
   card: CardState,
 ): boolean {
   // The action from the server did not specify the identity of the card, so we cannot reveal it
   // (e.g. we are playing a special variant where cards are not revealed when they are played)
-  if (suitIndex === null || rank === null) {
+  if (suitIndex === undefined || rank === undefined) {
     return false;
   }
 

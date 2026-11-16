@@ -26,7 +26,12 @@ export function escapeHtml(unsafe: string): string {
     .replaceAll("'", "&#039;");
 }
 
-export function getHTMLElement(selectors: string): HTMLElement {
+/** The HTML of plain text from the server, where a newline starts a new line. */
+export function textToHtml(text: string): string {
+  return escapeHtml(text).replaceAll("\n", "<br />");
+}
+
+export function getHtmlElement(selectors: string): HTMLElement {
   const element = document.querySelector(selectors);
 
   if (!(element instanceof HTMLElement)) {
@@ -36,7 +41,7 @@ export function getHTMLElement(selectors: string): HTMLElement {
   return element;
 }
 
-export function getHTMLInputElement(selectors: string): HTMLInputElement {
+export function getHtmlInputElement(selectors: string): HTMLInputElement {
   const element = document.querySelector(selectors);
 
   if (!(element instanceof HTMLInputElement)) {
@@ -46,7 +51,7 @@ export function getHTMLInputElement(selectors: string): HTMLInputElement {
   return element;
 }
 
-export function getURLFromPath(path: string): string {
+export function getUrlFromPath(path: string): string {
   let url = `${globalThis.location.protocol}//${globalThis.location.hostname}`;
   if (globalThis.location.port !== "") {
     url += `:${globalThis.location.port}`;
@@ -86,21 +91,4 @@ export function setBrowserAddressBarPath(
   } else {
     globalThis.history.replaceState(undefined, "", path);
   }
-}
-
-export function timerFormatter(totalSeconds: number): string {
-  const time = new Date();
-  time.setHours(0, 0, totalSeconds);
-
-  const hours = time.getHours();
-  const minutes = time.getMinutes();
-  const seconds = time.getSeconds();
-  const secondsFormatted = seconds < 10 ? `0${seconds}` : seconds;
-
-  if (hours > 0) {
-    const minutesFormatted = minutes < 10 ? `0${minutes}` : minutes;
-    return `${hours}:${minutesFormatted}:${secondsFormatted}`;
-  }
-
-  return `${minutes}:${secondsFormatted}`;
 }

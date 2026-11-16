@@ -1,7 +1,7 @@
 import type { Tuple } from "complete-common";
-import type { PaceRisk } from "../enums/PaceRisk";
-import type { CardOrder } from "../types/CardOrder";
-import type { NumSuits } from "../types/NumSuits";
+import type { PaceRisk } from "../enums/PaceRisk.ts";
+import type { CardOrder } from "../types/CardOrder.ts";
+import type { NumSuits } from "../types/NumSuits.ts";
 
 export interface StatsState {
   // For max score.
@@ -9,7 +9,7 @@ export interface StatsState {
   readonly maxScorePerStack: Readonly<Tuple<number, NumSuits>>;
 
   // For pace.
-  readonly pace: number | null;
+  readonly pace: number | undefined;
   readonly paceRisk: PaceRisk;
   readonly finalRoundEffectivelyStarted: boolean;
 
@@ -19,14 +19,14 @@ export interface StatsState {
   // (Efficiency is simply "cardsGotten / potentialCluesLost".)
 
   // For future efficiency.
-  readonly cluesStillUsable: number | null;
-  readonly cluesStillUsableNotRounded: number | null;
-  readonly cardsGottenByNotes: number | null;
+  readonly cluesStillUsable: number | undefined;
+  readonly cluesStillUsableNotRounded: number | undefined;
+  readonly cardsGottenByNotes: number | undefined;
   // - `cardsNotGotten` is simply "maxScore - cardsGotten".
   // - Future efficiency is simply "cardsNotGotten / cluesStillUsable".
 
-  /** Store the order of the double-discard candidate card, or null if not in DDA. */
-  readonly doubleDiscardCard: CardOrder | null;
+  /** Store the order of the double-discard candidate card, or undefined if not in DDA. */
+  readonly doubleDiscardCard: CardOrder | undefined;
 
   // For determining sound effects.
   readonly numSubsequentBlindPlays: number;

@@ -1,12 +1,12 @@
 import { assertDefined } from "complete-common";
-import { charactersInit } from "./charactersInit";
-import { colorsInit } from "./colorsInit";
-import { DEFAULT_VARIANT_NAME } from "./constants";
-import type { Character } from "./interfaces/Character";
-import type { Suit } from "./interfaces/Suit";
-import type { Variant } from "./interfaces/Variant";
-import { suitsInit } from "./suitsInit";
-import { variantsInit } from "./variantsInit";
+import { charactersInit } from "./charactersInit.ts";
+import { colorsInit } from "./colorsInit.ts";
+import { DEFAULT_VARIANT_NAME } from "./generated/protocol.ts";
+import type { Character } from "./interfaces/Character.ts";
+import type { Suit } from "./interfaces/Suit.ts";
+import type { Variant } from "./interfaces/Variant.ts";
+import { suitsInit } from "./suitsInit.ts";
+import { variantsInit } from "./variantsInit.ts";
 
 /** Indexed by character ID. */
 const CHARACTERS_MAP = charactersInit();
@@ -22,13 +22,13 @@ const VARIANTS_MAP_BY_NAME = variantsInit(COLORS_MAP, SUITS_MAP);
 export const VARIANT_NAMES = [...VARIANTS_MAP_BY_NAME.keys()] as const;
 
 const VARIANTS_MAP_BY_ID: ReadonlyMap<number, Variant> = (() => {
-  const variantsMapByID = new Map<number, Variant>();
+  const variantsMapById = new Map<number, Variant>();
 
   for (const variant of VARIANTS_MAP_BY_NAME.values()) {
-    variantsMapByID.set(variant.id, variant);
+    variantsMapById.set(variant.id, variant);
   }
 
-  return variantsMapByID;
+  return variantsMapById;
 })();
 
 export function getSuit(suitName: string): Suit {
@@ -51,14 +51,18 @@ export function getVariant(variantName: string): Variant {
   return variant;
 }
 
-export function getVariantByID(variantID: number): Variant {
-  const variant = VARIANTS_MAP_BY_ID.get(variantID);
+export function getVariantById(variantId: number): Variant {
+  const variant = VARIANTS_MAP_BY_ID.get(variantId);
   assertDefined(
     variant,
-    `Failed to find the "${variantID}" variant in the "VARIANTS_BY_ID" map.`,
+    `Failed to find the "${variantId}" variant in the "VARIANTS_BY_ID" map.`,
   );
 
   return variant;
+}
+
+export function doesVariantIdExist(variantId: number): boolean {
+  return VARIANTS_MAP_BY_ID.has(variantId);
 }
 
 export function getDefaultVariant(): Variant {
@@ -69,12 +73,16 @@ export function doesVariantExist(variantName: string): boolean {
   return VARIANTS_MAP_BY_NAME.has(variantName);
 }
 
-export function getCharacter(characterID: number): Character {
-  const character = CHARACTERS_MAP.get(characterID);
+export function getCharacter(characterId: number): Character {
+  const character = CHARACTERS_MAP.get(characterId);
   assertDefined(
     character,
-    `Failed to find the character corresponding to ID ${characterID} in the "CHARACTERS" map.`,
+    `Failed to find the character corresponding to ID ${characterId} in the "CHARACTERS" map.`,
   );
 
   return character;
+}
+
+export function getCharacters(): readonly Character[] {
+  return [...CHARACTERS_MAP.values()];
 }

@@ -1,43 +1,41 @@
-/* eslint-disable unicorn/no-null */
-
 import type { Tuple } from "complete-common";
 import { newArray, sumArray } from "complete-common";
-import { MAX_CLUE_NUM } from "../../constants";
-import type { CardStatus } from "../../enums/CardStatus";
-import type { StackDirection } from "../../enums/StackDirection";
-import { getVariant } from "../../gameData";
-import type { GameMetadata } from "../../interfaces/GameMetadata";
-import type { GameState } from "../../interfaces/GameState";
-import type { Variant } from "../../interfaces/Variant";
-import { getCardStatus } from "../../rules/card";
+import type { CardStatus } from "../../enums/CardStatus.ts";
+import type { StackDirection } from "../../enums/StackDirection.ts";
+import { getVariantById } from "../../gameData.ts";
+import { MAX_CLUES } from "../../generated/protocol.ts";
+import type { GameMetadata } from "../../interfaces/GameMetadata.ts";
+import type { GameState } from "../../interfaces/GameState.ts";
+import type { Variant } from "../../interfaces/Variant.ts";
+import { getCardStatus } from "../../rules/card.ts";
 import {
   getAdjustedClueTokens,
   getDiscardClueTokenValue,
   getSuitCompleteClueTokenValue,
   getUnadjustedClueTokens,
-} from "../../rules/clueTokens";
-import { getTotalCardsInDeck } from "../../rules/deck";
-import { getCardsPerHand } from "../../rules/hand";
-import { getStackDirection } from "../../rules/playStacks";
+} from "../../rules/clueTokens.ts";
+import { getTotalCardsInDeck } from "../../rules/deck.ts";
+import { getCardsPerHand } from "../../rules/hand.ts";
+import { getStackDirection } from "../../rules/playStacks.ts";
 import {
   getCluesStillUsableNotRounded,
   getPaceRisk,
   getStartingDeckSize,
   getStartingPace,
-} from "../../rules/stats";
-import { getEndGameLength } from "../../rules/turn";
-import type { CardOrder } from "../../types/CardOrder";
-import type { NumPlayers } from "../../types/NumPlayers";
-import type { NumSuits } from "../../types/NumSuits";
-import type { Rank } from "../../types/Rank";
-import type { SuitIndex } from "../../types/SuitIndex";
-import type { SuitRankMap } from "../../types/SuitRankMap";
-import { getInitialTurnState } from "./initialTurnState";
+} from "../../rules/stats.ts";
+import { getEndGameLength } from "../../rules/turn.ts";
+import type { CardOrder } from "../../types/CardOrder.ts";
+import type { NumPlayers } from "../../types/NumPlayers.ts";
+import type { NumSuits } from "../../types/NumSuits.ts";
+import type { Rank } from "../../types/Rank.ts";
+import type { SuitIndex } from "../../types/SuitIndex.ts";
+import type { SuitRankMap } from "../../types/SuitRankMap.ts";
+import { getInitialTurnState } from "./initialTurnState.ts";
 
 export function getInitialGameState(metadata: GameMetadata): GameState {
   // Calculate some things before we get the game state properties.
   const { options } = metadata;
-  const variant = getVariant(options.variantName);
+  const variant = getVariantById(options.variantId);
   const playStacks = newArray<readonly CardOrder[]>(
     variant.suits.length,
     [],
@@ -46,13 +44,13 @@ export function getInitialGameState(metadata: GameMetadata): GameState {
   const playStackDirections = suitIndexes.map((suitIndex) =>
     getStackDirection(suitIndex, [], [], variant),
   ) as Tuple<StackDirection, NumSuits>;
-  const playStackStarts = newArray(variant.suits.length, null) as Tuple<
-    Rank | null,
+  const playStackStarts = newArray(variant.suits.length, undefined) as Tuple<
+    Rank | undefined,
     NumSuits
   >;
 
   // Game state properties
-  const turn = getInitialTurnState(options.startingPlayer);
+  const turn = getInitialTurnState();
   const cardsRemainingInTheDeck = getTotalCardsInDeck(variant);
   const cardStatus = getInitialCardStatusMap(
     variant,
@@ -60,7 +58,7 @@ export function getInitialGameState(metadata: GameMetadata): GameState {
     playStackDirections,
     playStackStarts,
   );
-  const clueTokens = getAdjustedClueTokens(MAX_CLUE_NUM, variant);
+  const clueTokens = getAdjustedClueTokens(MAX_CLUES, variant);
   const hands = newArray<number[]>(options.numPlayers, []) as Tuple<
     CardOrder[],
     NumPlayers
@@ -105,8 +103,8 @@ export function getInitialGameState(metadata: GameMetadata): GameState {
     currentClues,
   );
   const cluesStillUsable =
-    cluesStillUsableNotRounded === null
-      ? null
+    cluesStillUsableNotRounded === undefined
+      ? undefined
       : Math.floor(cluesStillUsableNotRounded);
 
   return {
@@ -140,7 +138,7 @@ export function getInitialGameState(metadata: GameMetadata): GameState {
       cluesStillUsable,
       cluesStillUsableNotRounded,
 
-      doubleDiscardCard: null,
+      doubleDiscardCard: undefined,
 
       numSubsequentBlindPlays: 0,
       numSubsequentMisplays: 0,

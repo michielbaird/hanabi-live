@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO chat_log(user_id,source,message) VALUES(NULL,'server',$1)\n         RETURNING id, datetime_sent",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "chat_log",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "datetime_sent",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "chat_log",
+            "name": "datetime_sent"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "eb74fea83a9de7479582f29a6419c1bc88e1af8ea979805f716154e5ebbe540e"
+}

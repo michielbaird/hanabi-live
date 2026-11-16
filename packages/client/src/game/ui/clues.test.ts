@@ -1,46 +1,77 @@
-import {
-  ClueType,
-  getDefaultMetadata,
-  getDefaultVariant,
-} from "@hanabi-live/game";
-import { describe, expect, jest, test } from "@jest/globals";
-import type { HanabiCard } from "./HanabiCard";
-import { globals } from "./UIGlobals";
-import * as arrows from "./arrows";
-import { checkLegal } from "./clues";
+import { getDefaultMetadata, getDefaultVariant } from "@hanabi-live/game";
+import { describe, expect, test, vi } from "vitest";
 
-jest.mock("./UIGlobals", () => ({ globals: {} }));
-jest.mock("./arrows", () => ({ hideAll: jest.fn(), set: jest.fn() }));
-jest.mock("./turn", () => ({}));
+vi.mock("./UiGlobals.ts", () => ({
+  globals: {},
+}));
+vi.mock("./arrows.ts", () => ({
+  hideAll: vi.fn(),
+  set: vi.fn(),
+  isPotentialClueShown: vi.fn(),
+}));
+vi.mock("./turn.ts", () => ({ end: vi.fn() }));
+vi.mock("./cluePreview.ts", () => ({
+  setPotentialClue: vi.fn(),
+  hide: vi.fn(),
+}));
+vi.mock("./reactive/views/cluesView.ts", () => ({}));
+const { globals } = await import("./UiGlobals.ts");
+const arrows = await import("./arrows.ts");
+const cluePreview = await import("./cluePreview.ts");
+const turn = await import("./turn.ts");
+const { checkLegal, give } = await import("./clues.ts");
 
 describe("hypothetical clue matching", () => {
   test("uses the layout card rather than its first Konva child", () => {
     const metadata = getDefaultMetadata(2);
     const variant = getDefaultVariant();
-    const clue = { type: ClueType.Rank, value: 1 } as const;
+    const clue = {
+      type: "rank",
+      value: 1,
+    } as const;
     const card = {
+      state: {
+        order: 0,
+      },
       getMorphedPossibilities: () => [[0, 1]],
       visibleRank: 1,
       visibleSuitIndex: 0,
     };
-    const setEnabled = jest.fn();
+    const setEnabled = vi.fn();
     Object.assign(globals, {
       metadata,
       variant,
       options: metadata.options,
       state: {
-        replay: { hypothetical: {} },
-        visibleState: { turn: { currentPlayerIndex: 0 } },
+        replay: {
+          hypothetical: {},
+        },
+        visibleState: {
+          turn: {
+            currentPlayerIndex: 0,
+          },
+        },
       },
       elements: {
         clueTargetButtonGroup2: {
           getPressed: () => ({ targetPlayerIndex: 1 }),
         },
-        clueTypeButtonGroup: { getPressed: () => ({ clue }) },
-        giveClueButton: { setEnabled },
+        clueTypeButtonGroup: {
+          getPressed: () => ({ clue }),
+        },
+        giveClueButton: {
+          setEnabled,
+        },
         playerHands: [
           { children: [] },
-          { children: [{ card, children: [{}] }] },
+          {
+            children: [
+              {
+                card,
+                children: [{}],
+              },
+            ],
+          },
         ],
       },
     });
@@ -48,12 +79,54 @@ describe("hypothetical clue matching", () => {
     checkLegal();
 
     expect(setEnabled).toHaveBeenCalledWith(true);
-    expect(arrows.set).toHaveBeenCalledWith(
-      0,
-      card as unknown as HanabiCard,
-      null,
-      clue,
-      true,
-    );
+    expect(arrows.set).toHaveBeenCalledWith(0, card, undefined, clue, true);
+  });
+});
+
+describe("giving a clue", () => {
+  test("hides the clue preview before the clue is planned", () => {
+    const metadata = getDefaultMetadata(2);
+    const variant = getDefaultVariant();
+    const clue = {
+      type: "rank",
+      value: 1,
+    } as const;
+    Object.assign(globals, {
+      metadata,
+      variant,
+      uiClickTime: 0,
+      state: {
+        ongoingGame: {
+          turn: {
+            currentPlayerIndex: 0,
+          },
+        },
+        replay: {
+          hypothetical: {
+            ongoing: {
+              clueTokens: 8,
+            },
+          },
+        },
+      },
+      elements: {
+        clueTargetButtonGroup2: {
+          getPressed: () => ({ targetPlayerIndex: 1 }),
+        },
+        clueTypeButtonGroup: {
+          getPressed: () => ({ clue }),
+        },
+        giveClueButton: {
+          enabled: true,
+        },
+      },
+    });
+    vi.mocked(turn.end).mockImplementation(() => {
+      expect(cluePreview.hide).toHaveBeenCalled();
+    });
+
+    give();
+
+    expect(turn.end).toHaveBeenCalledOnce();
   });
 });

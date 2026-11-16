@@ -1,45 +1,79 @@
 import type { PlayerIndex } from "@hanabi-live/game";
 import {
-  getAdjustedClueTokens,
+  getClueCost,
   getUnadjustedClueTokens,
   isAtMaxClueTokens,
   isHandLocked,
 } from "@hanabi-live/game";
 import { assertDefined, eRange } from "complete-common";
 import Konva from "konva";
-import type { State } from "../../../types/State";
-import { globals } from "../../UIGlobals";
-import { LABEL_COLOR } from "../../constants";
+import { store } from "../../../../store.ts";
+import { getViewPlayerIndex, isOurSeat } from "../../../ourSeat.ts";
+import type { State } from "../../../types/State.ts";
+import { globals } from "../../UiGlobals.ts";
+import {
+  DOUBLE_DISCARD_COLOR,
+  FULL_TURN_DEGREES,
+  HALF_TURN_DEGREES,
+  LABEL_COLOR,
+  NO_CLUES_COLOR,
+  TEXT_SHRINK_FACTOR,
+} from "../../constants.ts";
+import { degreesToRadians, radiansToDegrees } from "../../konvaHelpers.ts";
+
+/** The most times the player name shrinks before it is drawn as it is. */
+const MAX_SHRINK_STEPS = 100;
+
+/** How long the current player arrow takes to turn toward the next player. */
+const ARROW_ROTATION_SECONDS = 0.75;
+
+/** The stage height, in pixels, on which the imaginary player distance was tuned. */
+const REFERENCE_STAGE_HEIGHT = 1080;
+
+/**
+ * In Keldon mode, how far behind each hand the arrow aims, as a fraction of the stage height (600
+ * pixels on the reference stage).
+ */
+const IMAGINARY_PLAYER_DISTANCE = 600 / REFERENCE_STAGE_HEIGHT;
+
+/**
+ * How far the center of each line of text sits below the center of the current player area, as
+ * fractions of the stage height. The lines are "Current player:", the player's name, and an
+ * optional warning (such as "(cannot discard; at 8 clues)").
+ */
+const LINE_OFFSETS = {
+  withoutWarning: [-0.03, 0.03],
+  withWarning: [-0.04, 0.01, 0.06],
+} as const;
 
 export function isVisible(state: State): boolean {
   return (
     // Do not show it we happen to have the in-game replay open.
-    !state.replay.active
+    state.replay.segment === undefined
     // The clue UI should take precedence over the "Current Player" area.
-    && (state.ongoingGame.turn.currentPlayerIndex
-      !== state.metadata.ourPlayerIndex
+    && (!isOurSeat(state.ongoingGame.turn.currentPlayerIndex, state.metadata)
       || !state.playing)
     // The premove cancel button should take precedence over the "Current Player" area.
-    && state.premove === null
+    && state.premove === undefined
     // Do not show it if the game is over.
-    && state.ongoingGame.turn.currentPlayerIndex !== null
+    && state.ongoingGame.turn.currentPlayerIndex !== undefined
   );
 }
 
 export function onChanged(
   data: {
     visible: boolean;
-    currentPlayerIndex: PlayerIndex | null;
+    currentPlayerIndex: PlayerIndex | undefined;
   },
   previousData:
     | {
         visible: boolean;
-        currentPlayerIndex: PlayerIndex | null;
+        currentPlayerIndex: PlayerIndex | undefined;
       }
     | undefined,
 ): void {
   const { currentPlayerArea } = globals.elements;
-  if (currentPlayerArea === null) {
+  if (currentPlayerArea === undefined) {
     return;
   }
 
@@ -55,7 +89,7 @@ export function onChanged(
   const winH = globals.stage.height();
   const { clueTokens } = globals.state.ongoingGame;
   const { currentPlayerIndex } = globals.state.ongoingGame.turn;
-  if (currentPlayerIndex === null) {
+  if (currentPlayerIndex === undefined) {
     return;
   }
   const currentPlayerHand =
@@ -65,7 +99,7 @@ export function onChanged(
   // Update the text
   const { text1, text2, text3 } = currentPlayerArea;
   let specialText = "";
-  if (!globals.lobby.settings.realLifeMode) {
+  if (!store.getState().session.settings.realLifeMode) {
     // In "Clue Starved" variants, clues are tracked internally at twice the value shown to the
     // user.
     const unadjustedClueTokens = getUnadjustedClueTokens(
@@ -74,48 +108,46 @@ export function onChanged(
     );
     const cluesTokensText = unadjustedClueTokens.toString();
 
-    if (clueTokens < getAdjustedClueTokens(1, globals.variant)) {
+    if (clueTokens < getClueCost(globals.variant)) {
       specialText = `(cannot clue; ${cluesTokensText} clues left)`;
-      text3.fill("red");
+      text3.fill(NO_CLUES_COLOR);
     } else if (isAtMaxClueTokens(clueTokens, globals.variant)) {
       specialText = `(cannot discard; at ${cluesTokensText} clues)`;
       text3.fill(LABEL_COLOR);
     } else if (
-      globals.lobby.settings.hyphenatedConventions
+      store.getState().session.settings.hGroupConventions
       && isHandLocked(currentPlayerHand, globals.state.ongoingGame.deck)
     ) {
       specialText = "(locked; may not be able to discard)";
       text3.fill(LABEL_COLOR);
     } else if (
-      globals.state.ongoingGame.stats.doubleDiscardCard !== null
-      && globals.lobby.settings.hyphenatedConventions
+      globals.state.ongoingGame.stats.doubleDiscardCard !== undefined
+      && store.getState().session.settings.hGroupConventions
     ) {
       specialText = '(potentially in a "Double Discard" situation)';
-      text3.fill("yellow");
+      text3.fill(DOUBLE_DISCARD_COLOR);
     }
   }
 
   // eslint-disable-next-line func-style
-  const setPlayerText = (threeLines: boolean) => {
-    const { rect1, textValues, values } = currentPlayerArea;
+  const setPlayerText = (numLines: number) => {
+    const { values, textValues, rect1 } = currentPlayerArea;
 
     text2.fitText(globals.metadata.playerNames[data.currentPlayerIndex!]!);
 
-    let maxSize = (values.h / 3) * winH;
-    if (threeLines) {
-      maxSize = (values.h / 4) * winH;
-    }
+    // The name may fill one share of the area, with one more share than there are lines.
+    const maxSize = (values.h / (numLines + 1)) * winH;
     text2.width(textValues.w * winW);
     text2.resize();
 
     // We need to adjust the font size of the player name, depending on how long the name is.
-    // Continue to shrink the text until it reaches the maximum size. Run at most 100 times; in most
-    // cases, it will take around 15.
-    for (const _i of eRange(100)) {
+    // Continue to shrink the text until it reaches the maximum size. In most cases, it will take
+    // around 15 steps.
+    for (const _i of eRange(MAX_SHRINK_STEPS)) {
       if (text2.measureSize(text2.text()).height <= maxSize) {
         break;
       }
-      text2.width(text2.width() * 0.9);
+      text2.width(text2.width() * TEXT_SHRINK_FACTOR);
       text2.resize();
     }
     text2.x(rect1.width() / 2 - text2.width() / 2);
@@ -124,22 +156,22 @@ export function onChanged(
   const totalH = currentPlayerArea.height();
   const text1H = text1.measureSize(text1.text()).height;
   if (specialText === "") {
-    // 2 lines
-    setPlayerText(false);
+    const [text1Offset, text2Offset] = LINE_OFFSETS.withoutWarning;
+    setPlayerText(LINE_OFFSETS.withoutWarning.length);
     const text2H = text2.measureSize(text2.text()).height;
-    const spacing = 0.03 * winH;
-    text1.y(totalH / 2 - text1H / 2 - spacing);
-    text2.y(totalH / 2 - text2H / 2 + spacing);
+    text1.y(totalH / 2 - text1H / 2 + text1Offset * winH);
+    text2.y(totalH / 2 - text2H / 2 + text2Offset * winH);
     text3.hide();
   } else {
-    // 3 lines
-    setPlayerText(true);
+    const [text1Offset, text2Offset, text3Offset] = LINE_OFFSETS.withWarning;
+    setPlayerText(LINE_OFFSETS.withWarning.length);
     const text2H = text2.measureSize(text2.text()).height;
-    const spacing = 0.04 * winH;
-    text1.y(totalH / 2 - text1H / 2 - spacing);
-    text2.y(totalH / 2 - text2H / 2 + spacing * 0.25);
-    text3.y(totalH / 2 - text1H / 2 + spacing * 1.5);
+    text1.y(totalH / 2 - text1H / 2 + text1Offset * winH);
+    text2.y(totalH / 2 - text2H / 2 + text2Offset * winH);
     text3.fitText(specialText);
+    // The offsets were tuned with the warning offset by half the height of the first line rather
+    // than its own.
+    text3.y(totalH / 2 - text1H / 2 + text3Offset * winH);
     text3.show();
   }
 
@@ -149,8 +181,8 @@ export function onChanged(
   );
 
   if (
-    globals.animateFast
-    || previousData === undefined
+    previousData === undefined
+    || globals.animateFast
     || !previousData.visible
   ) {
     // Immediately snap the arrow in position and do not tween if:
@@ -159,9 +191,9 @@ export function onChanged(
     // 2) we are exiting an in-game replay
     currentPlayerArea.arrow.rotation(rotation);
   } else {
-    if (currentPlayerArea.tween !== null) {
+    if (currentPlayerArea.tween !== undefined) {
       currentPlayerArea.tween.destroy();
-      currentPlayerArea.tween = null;
+      currentPlayerArea.tween = undefined;
     }
 
     // Since the "Current Player" area might have been hidden and/or not updated for a while, update
@@ -178,24 +210,17 @@ export function onChanged(
     // We want the arrow to always be moving clockwise.
     const unmodifiedRotation = rotation;
     if (previousRotation > rotation) {
-      rotation += 360;
+      rotation += FULL_TURN_DEGREES;
     }
 
     currentPlayerArea.tween = new Konva.Tween({
       node: currentPlayerArea.arrow,
-      duration: 0.75,
+      duration: ARROW_ROTATION_SECONDS,
       rotation,
       // eslint-disable-next-line @typescript-eslint/unbound-method
       easing: Konva.Easings.EaseInOut,
       onFinish: () => {
-        if (
-          // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-          currentPlayerArea.arrow !== undefined
-          // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-          && currentPlayerArea.arrow !== null
-        ) {
-          currentPlayerArea.arrow.rotation(unmodifiedRotation);
-        }
+        currentPlayerArea.arrow.rotation(unmodifiedRotation);
       },
     }).play();
   }
@@ -212,13 +237,15 @@ function getArrowRotationCorrespondingToPlayer(playerIndex: PlayerIndex) {
 
   const centerPos = hand.getAbsoluteCenterPos();
 
-  if (globals.lobby.settings.keldonMode) {
+  if (store.getState().session.settings.keldonMode) {
     // Make sure that the arrow points to an imaginary person behind the hand of cards.
     const winH = globals.stage.height();
-    const distanceToImaginaryPlayer = (600 / 1080) * winH;
+    const distanceToImaginaryPlayer = IMAGINARY_PLAYER_DISTANCE * winH;
     const handRotation =
-      globals.metadata.ourPlayerIndex === playerIndex ? 180 : hand.origRotation;
-    const rot = (-handRotation / 180) * Math.PI;
+      getViewPlayerIndex(globals.metadata) === playerIndex
+        ? HALF_TURN_DEGREES
+        : hand.origRotation;
+    const rot = degreesToRadians(-handRotation);
     centerPos.x += distanceToImaginaryPlayer * -Math.sin(rot); // -sin(x) = cos(x + PI / 2)
     centerPos.y -= distanceToImaginaryPlayer * Math.cos(rot); // cos(x) = sin(x + PI / 2)
   }
@@ -228,9 +255,9 @@ function getArrowRotationCorrespondingToPlayer(playerIndex: PlayerIndex) {
   const x = centerPos.x - thisPos.x;
   const y = centerPos.y - thisPos.y;
   const radians = Math.atan(y / x);
-  let rotation = radians * (180 / Math.PI);
+  let rotation = radiansToDegrees(radians);
   if (x < 0) {
-    rotation += 180;
+    rotation += HALF_TURN_DEGREES;
   }
 
   return rotation;

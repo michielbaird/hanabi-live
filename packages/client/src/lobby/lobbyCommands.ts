@@ -1,375 +1,224 @@
 // We will receive WebSocket messages / commands from the server that tell us to do things.
 
-import type {
-  ServerCommandTableData,
-  ServerCommandUserData,
-  ServerCommandUserLeftData,
-  ServerCommandUserListData,
-  ServerCommandWelcomeData,
-  Spectator,
-  UserID,
-} from "@hanabi-live/data";
-import { globals } from "../Globals";
-import * as gameMain from "../game/main";
-import type { SoundType } from "../game/types/SoundType";
-import * as spectatorsView from "../game/ui/reactive/views/spectatorsView";
-import * as sounds from "../sounds";
-import * as history from "./history";
-import * as lobbyLogin from "./login";
-import * as playerSettings from "./playerSettings";
-import * as pregame from "./pregame";
-import { tablesDraw } from "./tablesDraw";
-import type { Game } from "./types/Game";
-import type { GameHistory } from "./types/GameHistory";
-import { Screen } from "./types/Screen";
-import * as url from "./url";
-import * as usersDraw from "./usersDraw";
+import { setTabAccount } from "@hanabi-live/data";
+import { globals } from "../Globals.ts";
+import * as gameMain from "../game/main.ts";
+import { SoundType } from "../game/types/SoundType.ts";
+import * as spectatorsView from "../game/ui/reactive/views/spectatorsView.ts";
+import * as modals from "../modals.ts";
+import { noticeHtml } from "../notice.ts";
+import { ServerHandlers } from "../serverHandlers.ts";
+import {
+  blockedChanged,
+  friendsChanged,
+  settingsChanged,
+  userIdChanged,
+  usernameChanged,
+} from "../sessionSlice.ts";
+import * as sounds from "../sounds.ts";
+import { store } from "../store.ts";
+import * as theme from "../theme.ts";
+import {
+  historyReceived,
+  lobbyStatusReceived,
+  totalGamesChanged,
+} from "./gameHistory/historySlice.ts";
+import * as lobbyLogin from "./login.ts";
+import { shouldPlayJoinSound } from "./pregame/joinSound.ts";
+import * as pregame from "./pregame/pregame.ts";
+import {
+  gameChanged,
+  startGameCooldownChanged,
+} from "./pregame/pregameSlice.ts";
+import { tableChanged, tableGone, tablesListed } from "./tables/tablesSlice.ts";
+import { Screen } from "./types/Screen.ts";
+import * as url from "./url.ts";
+import { userChanged, userLeft, usersListed } from "./users/usersSlice.ts";
+
+/** How long the start game button stays disabled after the player count changes. */
+const START_GAME_BUTTON_DISABLED_MILLISECONDS = 500;
+
+let startGameCooldownTimeout: ReturnType<typeof setTimeout> | undefined;
 
 // Define a command handler map.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type CommandCallback = (data: any) => void;
-export const lobbyCommands = new Map<string, CommandCallback>();
+export const lobbyCommands = new ServerHandlers();
 
-interface FriendsData {
-  friends: string[];
-}
-lobbyCommands.set("friends", (data: FriendsData) => {
+lobbyCommands.set("lobbyStatus", (data) => {
+  store.dispatch(lobbyStatusReceived(data));
+  if (data.type === "error") {
+    modals.showWarning(noticeHtml(data));
+  }
+});
+
+lobbyCommands.set("blocked", (data) => {
+  store.dispatch(blockedChanged(data.blocked));
+});
+
+lobbyCommands.set("friends", (data) => {
   // The server has sent us a new list of our friends; store this locally.
-  globals.friends = data.friends;
+  store.dispatch(friendsChanged([...data.friends]));
 
-  // Since our list of friends has changed, we need to redraw some UI elements so that users that
-  // happen to be our friend will be shown in the correct color.
+  // Since our list of friends has changed, we need to redraw the spectators of the game so that
+  // users that happen to be our friend will be shown in the correct color.
+  const state = store.getState().game.current;
   if (
-    globals.currentScreen === Screen.Lobby
-    || globals.currentScreen === Screen.PreGame
+    state !== undefined
+    && store.getState().session.screen === Screen.Game
+    && globals.ui !== undefined
   ) {
-    usersDraw.draw();
-  }
-  if (globals.currentScreen === Screen.Lobby) {
-    tablesDraw();
-  }
-  if (globals.currentScreen === Screen.PreGame) {
-    pregame.draw();
-  }
-  if (globals.currentScreen === Screen.Game && globals.ui !== null) {
     spectatorsView.onSpectatorsChanged({
-      spectators: globals.ui.globals.state.spectators,
-      finished: globals.ui.globals.state.finished,
+      spectators: state.spectators,
+      finished: state.finished,
     });
   }
 });
 
-lobbyCommands.set("game", (data: Game) => {
-  const previousPlayers = globals.game?.players;
-  globals.game = data;
-  pregame.draw();
-  if (previousPlayers?.length !== data.players.length) {
-    // Disable the start game button for a short time after the player count changes.
-    if (globals.enableStartGameButtonTimeout !== null) {
-      clearTimeout(globals.enableStartGameButtonTimeout);
-    }
-    $("#nav-buttons-pregame-start").addClass("disabled");
-    globals.enableStartGameButtonTimeout = setTimeout(() => {
-      globals.enableStartGameButtonTimeout = null;
-      pregame.toggleStartGameButton();
-    }, 500);
+lobbyCommands.set("pregame", (data) => {
+  const previous = store.getState().pregame.game;
+  const previousPlayers = previous?.players;
+  if (
+    shouldPlayJoinSound(
+      previous,
+      data,
+      store.getState().session.userId,
+      Date.now(),
+    )
+  ) {
+    sounds.play(SoundType.SomeoneJoined);
+  }
+  store.dispatch(gameChanged(data));
+  globals.tableId = data.tableId;
+  if (previousPlayers?.length === data.players.length) {
+    return;
   }
 
-  pregame.drawSpectators(globals.tableID);
+  // Disable the start game button for a short time after the player count changes.
+  clearTimeout(startGameCooldownTimeout);
+  store.dispatch(startGameCooldownChanged(true));
+  startGameCooldownTimeout = setTimeout(() => {
+    store.dispatch(startGameCooldownChanged(false));
+  }, START_GAME_BUTTON_DISABLED_MILLISECONDS);
 });
 
-lobbyCommands.set("gameHistory", (dataArray: readonly GameHistory[]) => {
-  // `data` will be an array of all of the games that we have previously played.
-  for (const data of dataArray) {
-    globals.history.set(data.id, data);
-
-    if (data.incrementNumGames) {
-      globals.totalGames++;
-    }
-  }
-
-  // The server sent us more games because we clicked on the "Show More History" button.
-  if (globals.showMoreHistoryClicked) {
-    globals.showMoreHistoryClicked = false;
-    history.draw(false);
-  }
-
-  const shownGames = globals.history.size;
-  $("#nav-buttons-history-shown-games").html(shownGames.toString());
-  $("#nav-buttons-history-total-games").html(globals.totalGames.toString());
-  if (shownGames === globals.totalGames) {
-    $("#lobby-history-show-more").hide();
+lobbyCommands.set("gameHistoryAdded", (data) => {
+  // We just finished a game, so add it to our history and our total.
+  store.dispatch(historyReceived([data]));
+  const { totalGames } = store.getState().history;
+  if (totalGames !== undefined) {
+    store.dispatch(totalGamesChanged(totalGames + 1));
   }
 });
 
-lobbyCommands.set("gameHistoryFriends", (dataArray: readonly GameHistory[]) => {
-  // `data` will be an array of all of the games that our friends have previously played.
-  for (const data of dataArray) {
-    globals.historyFriends.set(data.id, data);
+lobbyCommands.set("tableJoined", (data) => {
+  // Record the table ID for later.
+  globals.tableId = data.tableId;
+
+  // Transition between screens.
+  if (data.stage === "pregame") {
+    pregame.show();
+    return;
   }
-
-  // The server sent us more games because we clicked on the "Show More History" button.
-  if (globals.showMoreHistoryClicked) {
-    globals.showMoreHistoryClicked = false;
-    history.draw(true);
+  if (
+    data.stage !== "replay"
+    && store.getState().session.screen === Screen.PreGame
+  ) {
+    pregame.hide(false);
   }
+  gameMain.show(data.stage === "justStarted");
 });
 
-interface GameHistoryOtherScoresData {
-  games: GameHistory[];
-  variantName: string;
-  friends: boolean;
-  seed: string;
-}
-lobbyCommands.set(
-  "gameHistoryOtherScores",
-  (data: GameHistoryOtherScoresData) => {
-    history.drawOtherScores(
-      data.games,
-      data.variantName,
-      data.friends,
-      data.seed,
-    );
-  },
-);
-
-interface JoinedData {
-  tableID: number;
-}
-lobbyCommands.set("joined", (data: JoinedData) => {
-  globals.tableID = data.tableID;
-
-  // We joined a new game, so transition between screens.
-  pregame.show();
-});
-
-lobbyCommands.set("left", () => {
-  // We left a table, so transition between screens.
-  pregame.hide();
-});
-
-interface MaintenanceData {
-  maintenanceMode: boolean;
-}
-lobbyCommands.set("maintenance", (data: MaintenanceData) => {
-  globals.maintenanceMode = data.maintenanceMode;
-});
-
-interface NameData {
-  name: string;
-}
-lobbyCommands.set("name", (data: NameData) => {
-  globals.randomTableName = data.name;
-});
-
-interface ShutdownData {
-  shuttingDown: boolean;
-  datetimeShutdownInit: string;
-}
-lobbyCommands.set("shutdown", (data: ShutdownData) => {
-  globals.shuttingDown = data.shuttingDown;
-  globals.datetimeShutdownInit = new Date(data.datetimeShutdownInit);
-});
-
-interface SoundLobbyData {
-  file: SoundType;
-}
-lobbyCommands.set("soundLobby", (data: SoundLobbyData) => {
-  sounds.play(data.file);
+// Received when we leave a table, or when the server takes us out of one, such as when the owner
+// kicks us or the table fails.
+lobbyCommands.set("tableLeft", (data) => {
+  // After we leave a table ourselves, we have already returned to the lobby or a history screen,
+  // and we may have joined another table since.
+  if (data.tableId !== globals.tableId) {
+    return;
+  }
+  if (store.getState().session.screen === Screen.PreGame) {
+    pregame.hide();
+  } else if (store.getState().session.screen === Screen.Game) {
+    gameMain.hide();
+  }
+  globals.tableId = undefined;
 });
 
 // Received by the client when a table is created or modified.
-lobbyCommands.set("table", (data: ServerCommandTableData) => {
-  globals.tableMap.set(data.id, data);
-  if (globals.currentScreen === Screen.Lobby) {
-    tablesDraw();
-  }
+lobbyCommands.set("table", (data) => {
+  store.dispatch(tableChanged(data));
 });
 
 // Received by the client when a table no longer has any members present.
-interface TableGoneData {
-  tableID: number;
-}
-lobbyCommands.set("tableGone", (data: TableGoneData) => {
-  globals.tableMap.delete(data.tableID);
-
-  if (globals.currentScreen === Screen.Lobby) {
-    tablesDraw();
-  }
+lobbyCommands.set("tableRemoved", (data) => {
+  store.dispatch(tableGone(data.tableId));
 
   // If we were spectating the pre-game of this table, return to the lobby.
   if (
-    globals.currentScreen === Screen.PreGame
-    && globals.tableID === data.tableID
+    store.getState().session.screen === Screen.PreGame
+    && globals.tableId === data.tableId
   ) {
     pregame.hide();
-    globals.tableID = -1;
+    globals.tableId = undefined;
+  }
+
+  // If we followed a link to this table, it no longer exists, so stay in the lobby.
+  if (store.getState().session.screen === Screen.Lobby) {
+    url.leaveTableLink(data.tableId);
   }
 });
 
 // Received by the client upon initial connection.
-lobbyCommands.set(
-  "tableList",
-  (dataList: readonly ServerCommandTableData[]) => {
-    for (const data of dataList) {
-      globals.tableMap.set(data.id, data);
-    }
-    if (globals.currentScreen === Screen.Lobby) {
-      tablesDraw();
-    }
-  },
-);
-
-interface TableProgressData {
-  tableID: number;
-  progress: number;
-}
-lobbyCommands.set("tableProgress", (data: TableProgressData) => {
-  const table = globals.tableMap.get(data.tableID);
-  if (table === undefined) {
-    return;
-  }
-
-  const newTable = {
-    ...table,
-    progress: data.progress,
-  };
-  globals.tableMap.set(data.tableID, newTable);
-
-  if (globals.currentScreen === Screen.Lobby) {
-    $(`#status-${data.tableID}`).html(data.progress.toString());
-  }
-});
-
-interface TableStartData {
-  tableID: number;
-  replay: boolean;
-}
-lobbyCommands.set("tableStart", (data: TableStartData) => {
-  // Record the table ID for later.
-  globals.tableID = data.tableID;
-
-  if (!data.replay && globals.currentScreen === Screen.PreGame) {
-    pregame.hide(false);
-  }
-  gameMain.show();
-});
-
-interface SpectatorsData {
-  tableID: number;
-  spectators: Spectator[];
-}
-lobbyCommands.set("pregameSpectators", (data: SpectatorsData) => {
-  globals.tableID = data.tableID;
-  pregame.drawSpectators(globals.tableID);
+lobbyCommands.set("tableList", (data) => {
+  store.dispatch(tablesListed(data.tables));
 });
 
 // Received by the client when a user connects or has a new status.
-lobbyCommands.set("user", (data: ServerCommandUserData) => {
-  globals.userMap.set(data.userID, data);
-  if (
-    globals.currentScreen === Screen.Lobby
-    || globals.currentScreen === Screen.PreGame
-  ) {
-    usersDraw.draw();
-  }
+lobbyCommands.set("user", (data) => {
+  store.dispatch(userChanged(data));
 });
 
-lobbyCommands.set("userList", (dataList: ServerCommandUserListData) => {
-  for (const data of dataList) {
-    globals.userMap.set(data.userID, data);
-  }
-  if (
-    globals.currentScreen === Screen.Lobby
-    || globals.currentScreen === Screen.PreGame
-  ) {
-    usersDraw.draw();
-  }
+lobbyCommands.set("userList", (data) => {
+  store.dispatch(usersListed(data.users));
 });
 
-lobbyCommands.set("userLeft", (data: ServerCommandUserLeftData) => {
-  globals.userMap.delete(data.userID);
-
-  if (
-    globals.currentScreen === Screen.Lobby
-    || globals.currentScreen === Screen.PreGame
-  ) {
-    usersDraw.draw();
-  }
-});
-
-interface UserInactiveData {
-  userID: UserID;
-  inactive: boolean;
-}
-lobbyCommands.set("userInactive", (data: UserInactiveData) => {
-  const { userID, inactive } = data;
-
-  const user = globals.userMap.get(userID);
-  if (user === undefined) {
-    return;
-  }
-
-  const newUser = {
-    ...user,
-    inactive,
-  };
-  globals.userMap.set(userID, newUser);
-
-  if (
-    globals.currentScreen === Screen.Lobby
-    || globals.currentScreen === Screen.PreGame
-  ) {
-    usersDraw.setInactive(user.userID, user.inactive);
-  }
+lobbyCommands.set("userRemoved", (data) => {
+  store.dispatch(userLeft(data.userId));
 });
 
 // Received by the client upon first connecting.
-lobbyCommands.set("welcome", (data: ServerCommandWelcomeData) => {
+lobbyCommands.set("welcome", (data) => {
   // Store some variables (mostly relating to our user account).
-  globals.userID = data.userID;
-  globals.username = data.username; // We might have logged-in with a different stylization
-  globals.totalGames = data.totalGames;
+  store.dispatch(userIdChanged(data.userId));
+  setTabAccount(data.userId);
+  store.dispatch(usernameChanged(data.username)); // We might have logged-in with a different stylization
+  store.dispatch(totalGamesChanged(undefined));
   globals.muted = data.muted;
-  globals.settings = data.settings;
-  globals.friends = data.friends;
-  globals.randomTableName = data.randomTableName;
-  globals.shuttingDown = data.shuttingDown;
-  globals.datetimeShutdownInit =
-    data.datetimeShutdownInit === undefined
-      ? undefined
-      : new Date(data.datetimeShutdownInit);
-  globals.maintenanceMode = data.maintenanceMode;
+  store.dispatch(settingsChanged(data.settings));
+  store.dispatch(friendsChanged(data.friends));
+  store.dispatch(blockedChanged(data.blocked));
 
-  // Update various elements of the UI to reflect our settings.
-  $("#nav-buttons-history-total-games").html(globals.totalGames.toString());
-  playerSettings.setPlayerSettings();
+  if (
+    theme.takeLegacyDarkMode()
+    && !store.getState().session.settings.darkMode
+  ) {
+    store.dispatch(
+      settingsChanged({
+        ...store.getState().session.settings,
+        darkMode: true,
+      }),
+    );
+    globals.connection.send("settings", {
+      settings: {
+        darkMode: true,
+      },
+    });
+  }
+  theme.setDarkMode(store.getState().session.settings.darkMode);
+
+  // The "lobbyStatus" message reports the total number of games once the statistics load.
   lobbyLogin.hide(data.firstTimeUser);
 
-  // If the server has informed us that we are currently playing in an ongoing game, automatically
-  // reconnect to that game (and ignore any specific custom path that the user has entered).
-  if (data.playingAtTables.length > 0) {
-    const firstTableID = data.playingAtTables[0];
-    globals.conn!.send("tableReattend", {
-      tableID: firstTableID,
-    });
-    return;
-  }
-
-  // If the server has informed us that were previously spectating an ongoing shared replay,
-  // automatically spectate that table (and ignore any specific custom path that the user has
-  // entered).
-  if (
-    data.disconSpectatingTable !== undefined
-    && data.disconSpectatingTable > 0
-  ) {
-    globals.conn!.send("tableSpectate", {
-      tableID: data.disconSpectatingTable,
-      shadowingPlayerIndex: data.disconShadowingSeat,
-    });
-    return;
-  }
-
-  // If we have entered a specific URL, we might want to go somewhere specific instead of the lobby.
+  // Go to the table that we were at before we disconnected, or somewhere specific if we have
+  // entered a specific URL.
   url.parseAndGoto(data);
 });

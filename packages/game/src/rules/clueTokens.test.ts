@@ -1,16 +1,16 @@
-import { describe, expect, test } from "@jest/globals";
+import { describe, expect, test } from "bun:test";
 import { eRange } from "complete-common";
-import { MAX_CLUE_NUM } from "../constants";
-import { getDefaultVariant, getVariant } from "../gameData";
-import { discard, play } from "../testActions";
-import { getNewClueTokensAfterAction } from "./clueTokens";
+import { getDefaultVariant, getVariant } from "../gameData.ts";
+import { MAX_CLUES } from "../generated/protocol.ts";
+import { discard, play } from "../testActions.ts";
+import { getNewClueTokensAfterAction } from "./clueTokens.ts";
 
-const DISCARD_ACTION = discard(0, 0, 0, 1, false);
+const DISCARD_ACTION = discard(0, 0, 0, 1);
 const DEFAULT_VARIANT = getDefaultVariant();
 const THROW_IT_IN_A_HOLE_VARIANT = getVariant("Throw It in a Hole (6 Suits)");
 
 describe("gain", () => {
-  test.each([...eRange(MAX_CLUE_NUM)])(
+  test.each([...eRange(MAX_CLUES)])(
     "adds a clue when there are %i clues",
     (n) => {
       const clueTokens = getNewClueTokensAfterAction(
@@ -25,10 +25,10 @@ describe("gain", () => {
   test("does not add clues when maxed out", () => {
     const clueTokens = getNewClueTokensAfterAction(
       DISCARD_ACTION,
-      MAX_CLUE_NUM,
+      MAX_CLUES,
       DEFAULT_VARIANT,
     );
-    expect(clueTokens).toBe(MAX_CLUE_NUM);
+    expect(clueTokens).toBe(MAX_CLUES);
   });
 
   test("does not add a clue when a stack is not finished", () => {
@@ -37,7 +37,6 @@ describe("gain", () => {
       playAction,
       0,
       DEFAULT_VARIANT,
-      false,
     );
     expect(clueTokens).toBe(0);
   });

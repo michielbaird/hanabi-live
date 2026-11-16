@@ -1,13 +1,13 @@
 // - This is a JSON object that represents a game of Hanabi. This also matches how games are stored
 //   in the database for the "Hanab Live" website.
 // - Created by: Zamiel
-// - Format version: 3.0.0
+// - Format version: 4.0.0
 {
-  // "players" is an array that contains the names of the players. The 0th player will always go
+  // "playerNames" is an array that contains the names of the players. The 0th player will always go
   // first. If omitted or empty, the player count is taken from a seed such as "p4v0s1", and the
   // names default to Alice, Bob, Cathy, Donald, Emily, and Frank (up to that player count).
-  // Otherwise, "players" must be provided.
-  "players": ["Alice", "Bob", "Cathy", "Donald", "Emily"],
+  // Otherwise, "playerNames" must be provided.
+  "playerNames": ["Alice", "Bob", "Cathy", "Donald", "Emily"],
 
   // "deck" is an array that contains all of the cards in the deck. It lists the cards from top to
   // bottom. Cards are NOT dealt to the players like they conventionally would be in real life.
@@ -71,69 +71,44 @@
   ],
 
   // "actions" is an array that contains all of the actions that the players performed in the game.
-  // Valid actions types are:
-  // - 0 for a play
-  // - 1 for a discard
-  // - 2 for a color clue
-  // - 3 for a number clue
-  // - 4 for an end game
-  // An example of each action is listed below
+  // Each action names its type. An example of each type is listed below.
   "actions": [
     {
-      // A "play" action (type 0).
-      "type": 0,
-
-      // The index of the card that is being played (e.g. 0 corresponds to the 1st card dealt,
-      // etc.).
-      "target": 2
+      // A play. "order" is the index of the card in the deck (e.g. 0 corresponds to the 1st card
+      // dealt, etc.).
+      "type": "play",
+      "order": 2
     },
     {
-      // A "discard" action (type 1).
-      "type": 1,
-
-      // The index of the card that is being discarded (e.g. 0 corresponds to the 1st card dealt,
-      // etc.).
-      "target": 5
+      // A discard. "order" is the index of the card in the deck.
+      "type": "discard",
+      "order": 5
     },
     {
-      // A "color clue" action (type 2).
-      "type": 2,
-
-      // The index of the player that is receiving the clue (e.g. 0 corresponds to the 1st player,
-      // etc.).
+      // A color clue. "target" is the index of the player that is receiving the clue (e.g. 0
+      // corresponds to the 1st player, etc.). The value of a color clue is the index of the color
+      // in the variant's clue colors, from left to right (e.g. 0 corresponds to red, 1 corresponds
+      // to yellow, and so on in a "No Variant" game).
+      "type": "clue",
       "target": 1,
-
-      // The value for a color clue is the index of the possible colors from 1 to N, from left to
-      // right (e.g. 0 corresponds to red, 1 corresponds to yellow, and so on in a "No Variant"
-      // game).
-      "value": 0
+      "clue": { "type": "color", "value": 0 }
     },
     {
-      // A "rank clue" action (type 3).
-      "type": 3,
-
-      // The index of the player that is receiving the clue (e.g. 0 corresponds to the 1st player,
-      // etc.).
+      // A rank clue. The value of a rank clue is the rank chosen for the clue, from 1 to 5.
+      "type": "clue",
       "target": 1,
-
-      // The value for a rank clue is equal to to the rank chosen for the clue (e.g. 1 corresponds
-      // to rank 1, 2 corresponds to rank 2, etc.).
-      "value": 3
+      "clue": { "type": "rank", "value": 3 }
     },
     {
-      // An "end game" action (type 4).
-      "type": 4,
-
-      // The index of the player that is ending the game (e.g. 0 corresponds to the 1st player,
-      // etc.).
-      "target": 1,
-
-      // The reason for ending the game, corresponding to the "endCondition" value in
-      // "EndCondition.ts":
-      // https://github.com/Hanabi-Live/hanabi-live/blob/main/packages/client/src/game/types/EndCondition.ts
-      // (e.g. 3 corresponds to someone running out of time in a timed game, 4 corresponds to a
-      // player manually terminating the game, etc.)
-      "value": 3
+      // The end of the game. "endCondition" is the name of a value of the "EndCondition" enum:
+      // https://github.com/Hanabi-Live/hanabi-live/blob/main/server/protocol/src/enums.rs
+      // (e.g. "timeout" corresponds to someone running out of time in a timed game,
+      // "terminatedByPlayer" corresponds to a player manually terminating the game, etc.)
+      // "playerIndex" is the index of the player that ended the game. It is omitted when no player
+      // did.
+      "type": "gameOver",
+      "endCondition": "timeout",
+      "playerIndex": 1
     }
   ],
 
@@ -143,11 +118,11 @@
     // found here:
     // https://github.com/Hanabi-Live/hanabi-live/blob/main/docs/variants.md#full-variant-listing
     // If this value is not specified, "No Variant" will be assumed.
-    "variant": "No Variant",
+    "variantName": "No Variant",
 
-    // Any other website option can be specified, such as "cardCycle" or "emptyClues". A full list
-    // of options can be found in the "OptionsJSON" struct, located here:
-    // https://github.com/Hanabi-Live/hanabi-live/blob/main/src/options.go
+    // Any other website option can be specified, such as "deckPlays" or "emptyClues". A full list
+    // of options can be found in the "ReplayOptions" struct, located here:
+    // https://github.com/Hanabi-Live/hanabi-live/blob/main/server/protocol/src/replay.rs
     // The various options are documented here:
     // https://github.com/Hanabi-Live/hanabi-live/blob/main/docs/features.md#custom-game-options
     // If an option is not specified, the default will be assumed (e.g. false or 0).
@@ -179,9 +154,9 @@
     { "name": "Picky", "metadata": -1 }
   ],
 
-  // "id" is an integer that corresponds to the database ID of the game on the "Hanab Live" website.
-  // This field is optional.
-  "id": 12345,
+  // "gameId" is an integer that corresponds to the database ID of the game on the "Hanab Live"
+  // website. This field is optional.
+  "gameId": 12345,
 
   // "seed" is a string corresponding to the seed of the game on the "Hanab Live" website. This
   // field is optional.

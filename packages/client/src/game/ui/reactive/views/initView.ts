@@ -1,15 +1,10 @@
-import { globals } from "../../UIGlobals";
+import { globals } from "../../UiGlobals.ts";
 
+/** Once the first state is drawn, the moves that follow animate. */
 export function onInitializationChanged(initialized: boolean): void {
   if (!initialized || globals.isResizing) {
     return;
   }
 
-  if (globals.loading) {
-    globals.lobby.conn!.send("loaded", {
-      tableID: globals.lobby.tableID,
-    });
-  }
-  globals.loading = false;
   globals.animateFast = false;
 }

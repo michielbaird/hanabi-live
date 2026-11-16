@@ -1,12 +1,19 @@
 // Touch actions for the HanabiCard object. These are a subset of the actions in HanabiCardClick.ts.
 
 import { isCardDiscarded, isCardPlayed } from "@hanabi-live/game";
-import type { HanabiCard } from "./HanabiCard";
-import { DOUBLE_TAP_DELAY_SECONDS } from "./constants";
-import * as notes from "./notes";
-import * as replay from "./replay";
+import type { HanabiCard } from "./HanabiCard.ts";
+import { DOUBLE_TAP_DELAY_MILLISECONDS } from "./constants.ts";
+import * as notes from "./notes.ts";
+import * as replay from "./replay.ts";
 
 export function HanabiCardTap(this: HanabiCard): void {
+  // We executed a tap, so prevent the code from considering a long press is happening. (Otherwise,
+  // the second tap of a double tap would close the note that the double tap opens.)
+  if (this.touchstartTimeout !== undefined) {
+    clearTimeout(this.touchstartTimeout);
+    this.touchstartTimeout = undefined;
+  }
+
   // We must delay the action by a bit to make sure it isn't a double tap.
   if (this.wasRecentlyTapped) {
     // We now know it was a double tap, so ignore the tap action.
@@ -15,17 +22,12 @@ export function HanabiCardTap(this: HanabiCard): void {
   }
   this.wasRecentlyTapped = true;
 
-  if (this.touchstartTimeout !== null) {
-    // We executed a tap, so prevent the code from considering a long press is happening.
-    clearTimeout(this.touchstartTimeout);
-  }
-
   setTimeout(() => {
     if (this.wasRecentlyTapped) {
       HanabiCardTapAction.call(this);
     }
     this.wasRecentlyTapped = false;
-  }, DOUBLE_TAP_DELAY_SECONDS);
+  }, DOUBLE_TAP_DELAY_MILLISECONDS);
 }
 
 function HanabiCardTapAction(this: HanabiCard) {
@@ -34,21 +36,15 @@ function HanabiCardTapAction(this: HanabiCard) {
     return;
   }
 
-  if (isCardPlayed(this.state) && this.state.segmentPlayed !== null) {
+  if (isCardPlayed(this.state) && this.state.segmentPlayed !== undefined) {
     // Tapping on played cards goes to the turn immediately before they were played.
-    replay.goToSegmentAndIndicateCard(
-      this.state.segmentPlayed,
-      this.state.order,
-    );
+    replay.goToSegmentAndIndicateCard(this.state.segmentPlayed, this.order);
   } else if (
     isCardDiscarded(this.state)
-    && this.state.segmentDiscarded !== null
+    && this.state.segmentDiscarded !== undefined
   ) {
     // Tapping on discarded cards goes to the turn immediately before they were discarded.
-    replay.goToSegmentAndIndicateCard(
-      this.state.segmentDiscarded,
-      this.state.order,
-    );
+    replay.goToSegmentAndIndicateCard(this.state.segmentDiscarded, this.order);
   }
 }
 

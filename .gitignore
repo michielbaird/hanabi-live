@@ -9,7 +9,7 @@
 .DS_Store
 thumbs.db
 
-# The compiled Golang binary
+# The installed server binary
 hanabi-live
 hanabi-live~
 hanabi-live.exe
@@ -24,10 +24,14 @@ motd.txt*
 /packages/data/src/version.js
 
 # Various directories
+/server/**/target
+/server/__pycache__
+/scripts/__pycache__
+hanabi-live.next
 /backups
 /letsencrypt
 /logs
-/ongoing_tables
+/install/__pycache__
 
 # Development files
 *.code-workspace
@@ -38,10 +42,7 @@ GitHub_private_key.pem
 # vim temporary files
 .*.swp
 
-# Grunt output
-/packages/client/grunt_output
-
-# Jest Code coverage
+# Client test coverage
 /packages/client/coverage
 
 # Dependency graph output
@@ -49,10 +50,9 @@ GitHub_private_key.pem
 
 # We do not need to include combined or minified CSS
 /public/css/main.*.min.css
-/public/css/critical.css
 
 # Scripts can create temporary SQL files
-/scripts/bash/*.sql
+/scripts/dev/*.sql
 
 # Docs for npm packages
 /packages/game/docs
@@ -60,7 +60,6 @@ GitHub_private_key.pem
 # ------------------------------
 # GitHub Node.gitignore template
 # https://raw.githubusercontent.com/github/gitignore/master/Node.gitignore
-# cspell:disable
 # ------------------------------
 
 # Logs
@@ -70,7 +69,6 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 lerna-debug.log*
-.pnpm-debug.log*
 
 # Diagnostic reports (https://nodejs.org/api/report.html)
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
@@ -122,12 +120,6 @@ web_modules/
 # Optional stylelint cache
 .stylelintcache
 
-# Microbundle cache
-.rpt2_cache/
-.rts2_cache_cjs/
-.rts2_cache_es/
-.rts2_cache_umd/
-
 # Optional REPL history
 .node_repl_history
 
@@ -139,10 +131,8 @@ web_modules/
 
 # dotenv environment variable files
 .env
-.env.development.local
-.env.test.local
-.env.production.local
-.env.local
+.env.*
+!.env.example
 
 # parcel-bundler cache (https://parceljs.org/)
 .cache
@@ -155,6 +145,10 @@ out
 # Nuxt.js build / generate output
 .nuxt
 dist
+.output
+
+# NitroJS
+.nitro/
 
 # Gatsby files
 .cache/
@@ -165,9 +159,17 @@ dist
 # vuepress build output
 .vuepress/dist
 
-# vuepress v2.x temp and cache directory
+# vuepress v2.x temp directory
 .temp
-.cache
+
+# Sveltekit cache directory
+.svelte-kit/
+
+# vitepress build output
+**/.vitepress/dist
+
+# vitepress cache directory
+**/.vitepress/cache
 
 # Docusaurus cache and generated files
 .docusaurus
@@ -181,17 +183,34 @@ dist
 # DynamoDB Local files
 .dynamodb/
 
+# Firebase cache directory
+.firebase/
+
 # TernJS port file
 .tern-port
 
-# Stores VSCode versions used for testing VSCode extensions
+# Stores Visual Studio Code versions used for testing Visual Studio Code extensions
 .vscode-test
 
-# yarn v2
-.yarn/cache
-.yarn/unplugged
-.yarn/build-state.yml
-.yarn/install-state.gz
+# pnpm
+.pnpm-store
+
+# yarn v3
 .pnp.*
-.direnv/
-.envrc
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/sdks
+!.yarn/versions
+
+# Vite files
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
+.vite/
+
+# Astro generated types
+.astro/
+
+# Turbo Repo
+.turbo

@@ -1,11 +1,16 @@
 import equal from "fast-deep-equal";
-import type { Action, Store, Unsubscribe } from "redux";
+import type { StateSource } from "../../gameStateSource.ts";
 
-export type Selector<T, U> = (s: T) => U | undefined;
+/** A selector returns this to skip its listener. Any other value, including undefined, fires it. */
+export const SKIP = Symbol("skip");
 
+export type Selector<T, U> = (s: T) => U | typeof SKIP;
+
+/** `previousValue` is undefined while the store initializes, which `initializing` reports. */
 export type Listener<U> = (
   currentValue: U,
   previousValue: U | undefined,
+  initializing: boolean,
 ) => void;
 
 export interface Subscription<T, U> {
@@ -13,12 +18,15 @@ export interface Subscription<T, U> {
   onChange: Listener<U>;
 }
 
-// Observes a property of type T on a Store<S, A> and calls a listener function when it changes.
-export function observeStore<S, A extends Action, T>(
-  store: Store<S, A>,
+/**
+ * Observes the parts of a state that the subscriptions select, and calls their listeners when they
+ * change. Nothing fires while the source has no state.
+ */
+export function observeStore<S, T>(
+  source: StateSource<S>,
   subscriptions: ReadonlyArray<Subscription<S, T>>,
-): Unsubscribe {
-  let currentState: S;
+): () => void {
+  let currentState: S | undefined;
   let isUpdating = false;
 
   function handleChange() {
@@ -29,16 +37,15 @@ export function observeStore<S, A extends Action, T>(
 
     isUpdating = true;
     try {
-      let nextState = store.getState();
-      while (currentState !== nextState) {
+      let nextState = source.getState();
+      while (nextState !== undefined && currentState !== nextState) {
         const previousState = currentState;
         const snapshot = nextState;
 
         // If the path changed, call the function.
         const filteredSubscriptions = subscriptions.filter((subscription) => {
           const nextValue = subscription.select(snapshot);
-          if (nextValue === undefined) {
-            // The selector wants to skip this one.
+          if (nextValue === SKIP) {
             return false;
           }
 
@@ -53,23 +60,27 @@ export function observeStore<S, A extends Action, T>(
 
         for (const subscription of filteredSubscriptions) {
           // `previousState` is undefined during initialization.
-          const previousValue =
-            previousState === undefined
-              ? undefined
-              : subscription.select(previousState);
-          subscription.onChange(subscription.select(snapshot)!, previousValue);
+          const initializing = previousState === undefined;
+          const previousValue = initializing
+            ? undefined
+            : subscription.select(previousState);
+          subscription.onChange(
+            subscription.select(snapshot) as T,
+            previousValue === SKIP ? undefined : previousValue,
+            initializing,
+          );
         }
 
         // Commit only after every callback succeeds, then process any nested dispatch.
         currentState = snapshot;
-        nextState = store.getState();
+        nextState = source.getState();
       }
     } finally {
       isUpdating = false;
     }
   }
 
-  const unsubscribe = store.subscribe(handleChange);
+  const unsubscribe = source.subscribe(handleChange);
   handleChange();
   return unsubscribe;
 }

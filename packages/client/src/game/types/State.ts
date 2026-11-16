@@ -1,13 +1,12 @@
 import type { Spectator } from "@hanabi-live/data";
 import type { CardIdentity, GameMetadata, GameState } from "@hanabi-live/game";
-import type { ClientAction } from "./ClientAction";
-import type { NotesState } from "./NotesState";
-import type { PauseState } from "./PauseState";
-import type { ReplayState } from "./ReplayState";
-import type { UIState } from "./UIState";
+import type { ClientAction } from "./ClientAction.ts";
+import type { NotesState } from "./NotesState.ts";
+import type { PauseState } from "./PauseState.ts";
+import type { ReplayState } from "./ReplayState.ts";
 
 export interface State {
-  readonly visibleState: GameState | null; // Null during initialization
+  readonly visibleState: GameState | undefined; // Null during initialization
   readonly ongoingGame: GameState; // In a replay, this is the state of the final turn
   readonly replay: ReplayState;
 
@@ -24,14 +23,13 @@ export interface State {
   readonly metadata: GameMetadata;
 
   // We do not use a `Date` object for dates in order to speed up state copying.
-  readonly datetimeStarted: string | null;
-  readonly datetimeFinished: string | null;
+  readonly startedAt: string | undefined;
+  readonly finishedAt: string | undefined;
 
   readonly cardIdentities: readonly CardIdentity[];
-  readonly premove: ClientAction | null;
+  readonly premove: ClientAction | undefined;
   readonly pause: PauseState;
   readonly spectators: Spectator[];
 
   readonly notes: NotesState;
-  readonly UI: UIState;
 }

@@ -1,6 +1,15 @@
 import type { Clue } from "@hanabi-live/game";
 import Konva from "konva";
-import { drawLayer } from "./konvaHelpers";
+import {
+  BUTTON_CORNER_RADIUS,
+  BUTTON_HOVER_COLOR,
+  BUTTON_OPACITY,
+  BUTTON_PRESSED_COLOR,
+  BUTTON_TEXT_MIDDLE,
+  BUTTON_TEXT_SIZE,
+  FONT_FAMILY,
+} from "./constants.ts";
+import { drawLayer } from "./konvaHelpers.ts";
 
 export class RankButton extends Konva.Group {
   pressed = false;
@@ -21,20 +30,20 @@ export class RankButton extends Konva.Group {
       y: 0,
       width: w,
       height: h,
-      cornerRadius: 0.12 * h,
+      cornerRadius: BUTTON_CORNER_RADIUS * h,
       fill: "black",
-      opacity: 0.6,
+      opacity: BUTTON_OPACITY,
       listening: true,
     });
     this.add(this.background);
 
     const text = new Konva.Text({
       x: 0,
-      y: 0.275 * h, // 0.25 is too high for some reason
+      y: (BUTTON_TEXT_MIDDLE - BUTTON_TEXT_SIZE / 2) * h,
       width: w,
-      height: 0.5 * h,
-      fontSize: 0.5 * h,
-      fontFamily: "Verdana",
+      height: BUTTON_TEXT_SIZE * h,
+      fontSize: BUTTON_TEXT_SIZE * h,
+      fontFamily: FONT_FAMILY,
       fill: "white",
       align: "center",
       text: config["label"] as string,
@@ -43,7 +52,7 @@ export class RankButton extends Konva.Group {
     this.add(text);
 
     this.background.on("mousedown", () => {
-      this.background.fill("#888888");
+      this.background.fill(BUTTON_HOVER_COLOR);
       drawLayer(this);
 
       this.background.on("mouseout", () => {
@@ -65,7 +74,7 @@ export class RankButton extends Konva.Group {
 
   setPressed(pressed: boolean): void {
     this.pressed = pressed;
-    this.background.fill(pressed ? "#cccccc" : "black");
+    this.background.fill(pressed ? BUTTON_PRESSED_COLOR : "black");
     drawLayer(this);
   }
 }

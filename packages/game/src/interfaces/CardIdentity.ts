@@ -1,17 +1,11 @@
-import { z } from "zod";
-import { rank } from "../types/Rank";
-import { suitIndex } from "../types/SuitIndex";
+import type { Rank } from "../types/Rank.ts";
+import type { SuitIndex } from "../types/SuitIndex.ts";
 
-export const cardIdentity = z
-  .object({
-    /** `null` represents an unknown suit index. */
-    suitIndex: suitIndex.or(z.null()),
+/** A card's suit and rank, as far as a player knows them. */
+export interface CardIdentity {
+  /** `undefined` represents an unknown suit index. */
+  readonly suitIndex: SuitIndex | undefined;
 
-    /** `null` represents an unknown rank. */
-    rank: rank.or(z.null()),
-  })
-  .strict()
-  .readonly();
-
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type
-export interface CardIdentity extends z.infer<typeof cardIdentity> {}
+  /** `undefined` represents an unknown rank. */
+  readonly rank: Rank | undefined;
+}

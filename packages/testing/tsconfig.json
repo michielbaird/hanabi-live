@@ -1,0 +1,20 @@
+{
+  "$schema": "https://raw.githubusercontent.com/complete-ts/complete/main/packages/complete-tsconfig/schemas/tsconfig-strict-schema.json",
+  "extends": [
+    "complete-tsconfig/tsconfig.base.json",
+    "../../tsconfig.monorepo.json",
+  ],
+  "compilerOptions": {
+    "types": ["bun"],
+    // The Node.js libraries, plus the DOM for the code that "criticalCss.ts" runs in a page.
+    "lib": [
+      "es2024",
+      "ESNext.Array",
+      "ESNext.Collection",
+      "ESNext.Iterator",
+      "ESNext.Promise",
+      "DOM",
+      "DOM.Iterable",
+    ],
+  },
+}

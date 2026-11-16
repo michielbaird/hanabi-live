@@ -6,8 +6,6 @@ Read through this page (or use
 [`Ctrl + f`](https://www.google.com/search?q=ctrl+%2B+f) on your keyboard)
 before asking any questions in the chat.
 
-<br />
-
 ## Table of Contents
 
 1. [Basic How-To](#basic-how-to)
@@ -24,11 +22,10 @@ before asking any questions in the chat.
 1. [Linked Accounts](#linked-accounts)
 1. [Tags](#tags)
 1. [Website Endpoints](#website-endpoints)
-1. [Research & Bots](#research--bots)
+1. [JSON Games](#json-games)
+1. [Bots](#bots)
 1. [Password Reset](#password-reset)
 1. [Project History](#project-history)
-
-<br />
 
 ## Basic How-To
 
@@ -36,8 +33,8 @@ before asking any questions in the chat.
   For visual learners, you can also try watching
   [this video explanation](https://www.youtube.com/watch?v=VrFCekQb4nY).
 - Getting a game going should be self-explanatory, but just in case:
-  - Once logged in, click on the "Create Game" button on the top navigation bar
-    and then click "Create".
+  - Once logged in, click on the "New Game" button on the top navigation bar and
+    then click "Create".
   - For everyone else, the game will now appear in the list of games. To join
     it, they need to click on row corresponding to the game.
   - Then, the creator of the table needs to click on the "Start Game" button on
@@ -65,8 +62,6 @@ before asking any questions in the chat.
     - Clicking on the "Give Clue" button.
 - Once the game is over, use the "Lobby" button in the bottom-left-hand corner.
 
-<br />
-
 ## Major Features
 
 ### Clue Indication
@@ -83,6 +78,12 @@ before asking any questions in the chat.
   in" when appropriate.
 - You can hold down the left mouse button or tap and hold on someone else's hand
   to see how it appears to them. (This is referred to as "empathy".)
+- Hold Space to see every hand this way. Hold Ctrl + Space to see every hand
+  this way, but narrowed by your notes. In a replay, or when you spectate
+  without shadowing a player, each hand is narrowed by its own player's notes
+  instead.
+- Before you give a clue, click the flashlight button beside "Give Clue" to see
+  the target's hand as they would see it after the clue.
 
 ### Pips
 
@@ -92,6 +93,10 @@ before asking any questions in the chat.
   negative clues "touch" the card.
 - The pips and numbers will automatically be crossed out if all the particular
   cards for that suit/rank are visible.
+- A trash can icon appears on a card when its holder can work out that it is
+  trash.
+- Hold the left mouse button on the deck (or hold Space) to see which suits and
+  ranks can still be in it.
 
 ### Critical Indicator
 
@@ -111,9 +116,11 @@ that have not been played yet and have only one copy remaining.)
 
 - Games will be automatically terminated by the server if no move is performed
   in 30 minutes. (This helps to clean the lobby of games that will never be
-  finished.)
-- Players can vote to terminate a game by clicking on the X button where the
-  strike indicators are (near the bottom of the screen).
+  finished.) A warning appears 5 minutes before, and a player can keep the game
+  going.
+- Players can click on the skull button (near the strike indicators at the
+  bottom of the screen) to open a menu. From the menu, they can vote to end the
+  game, or end it now. The menu shows how many players voted.
 
 ### Spectators
 
@@ -123,6 +130,8 @@ that have not been played yet and have only one copy remaining.)
   the bottom-right-hand corner.
 - Spectators can right-click on a player's name to view the game from their
   perspective. In ongoing games, this is indicated with a "🕵️" icon.
+- Anyone can left-click on a player's name to see only that player's actions in
+  the action log.
 
 ### In-Game Replay
 
@@ -141,7 +150,8 @@ that have not been played yet and have only one copy remaining.)
     was given.
   - You can click on the three strike squares to go to the turn before the
     strike happened, if any.
-  - You can right-click on the "Turn" label to go to an arbitrary turn.
+  - You can click on the "Turn" label (or press Alt + t) to go to an arbitrary
+    turn.
 
 ### Game History and Profiles
 
@@ -149,12 +159,20 @@ that have not been played yet and have only one copy remaining.)
 - Players will be able to see their past games in the "Show History" screen.
 - You can click on a player's name in the lobby to view their profile, which
   will show all of their past games and some extra statistics.
+- Profiles show the time spent playing, the time spent reviewing replays, and
+  the total of both. Review time does not count the time before an idle replay
+  closes.
 
 ### Replays
 
 - Any past game can be viewed as a replay or a shared replay.
 - Similar to an in-game replay, in a post-game replay, you can review the game
   turn by turn.
+- On the "Watch Replay" page, select "Spoiler-free review" to see only what has
+  already happened at each turn.
+- After a game, "Restart game" starts the next game with the same players, and
+  "Remake table" returns everyone to a pre-game table first. Players can click
+  "Ready" to tell the leader that they will not play another game.
 
 ### Bot Analysis
 
@@ -192,8 +210,9 @@ that have not been played yet and have only one copy remaining.)
   button.)
 - The leader can right-click on a card to highlight it with an arrow (to point
   out things to the other players).
-  - Other players can create "local" arrows by Ctrl + right-clicking. These
-    arrows won't be shown to anyone else.
+  - In a solo replay, right-clicking on a card draws an arrow too.
+  - During a game, players can create "local" arrows by Ctrl + right-clicking.
+    These arrows won't be shown to anyone else.
 - The current leader can be seen by hovering over the "👑" icon in the bottom
   right-hand corner.
 - The leader role can be transferred by clicking or double-tapping the crown.
@@ -205,11 +224,18 @@ that have not been played yet and have only one copy remaining.)
   playing the game forward for as long as desired.
 - Hypotheticals are useful to show what would happen if a player decided to do a
   different move than they really did in the game.
-- When a hypothetical is active, other players cannot "break free" or return to
-  previous turns.
+- When a hypothetical is active, other players can pause the shared turns, but
+  cannot go back to previous turns. While the leader is in a hypothetical, the
+  "Use Shared Turns" button says "Join Hypothetical".
 - The leader can Alt + right-click on a card to morph it into an arbitrary card.
-  This can be useful for showing how players have to account for different kinds
-  of situations or to create specific game states.
+  (Or, check "Edit Cards" and then left-click on the card.) This can be useful
+  for showing how players have to account for different kinds of situations or
+  to create specific game states.
+- The "Pass" button (or the right arrow key) spends a clue to pass the turn to
+  the next player. The "Back" button (or the left arrow key) undoes the last
+  action.
+- Check "Show drawn cards" to show the cards that players draw during the
+  hypothetical.
 
 ### In-Game Statistics
 
@@ -218,19 +244,24 @@ that have not been played yet and have only one copy remaining.)
 - More information about the stats can be found in
   [the Pace & Efficiency section](#pace--efficiency) below.
 
+### Lobby
+
+- Click on a name in the online users list to open a menu with "Profile",
+  "Private Message", "Add to Friends", and "Block". Bots are listed on a
+  separate tab.
+- Ctrl + click on a table row to copy a link to that table.
+- Click on the spectators section of a table row to spectate a game before it
+  starts.
+
 ### 6-Player Games
 
 - In 6-player games, only three cards are dealt to each player.
-
-<br />
 
 ## Custom Game Options
 
 - In a pre-game, the custom game options (if any) can be seen on the left side
   of the screen.
 - In a game, the custom game (if any) can be seen by hovering over the deck.
-
-<br />
 
 ### Variants
 
@@ -246,8 +277,6 @@ that have not been played yet and have only one copy remaining.)
   clock after performing each move.
 - If time runs out for any player, the game immediately ends and a score of 0
   will be given.
-- The player who goes first will be refunded the amount of time that it took for
-  them to load the page.
 - Players can pause (or queue a pause) by right-clicking on their timer.
 
 ### Speedruns
@@ -264,17 +293,10 @@ that have not been played yet and have only one copy remaining.)
   - Right-clicking on a card in your teammate's hand will give it a rank clue.
   - Ctrl + right-clicking on a card in your hand opens a note on the card.
   - Empathy can still be used by holding down the space bar.
+- If a card is lost so that a perfect score is no longer possible, the game
+  immediately ends with a score of 0.
 - Speedrunning games will not count towards your statistics.
 - If this mode is enabled, then the "Timed" option will be disabled.
-
-### Card Cycling
-
-- Each game has the option to enable algorithmic card cycling.
-- If enabled, whenever a player gives a clue, their oldest unclued card will be
-  moved to their newest slot.
-- This is a way to play that is used by
-  [Alessandro Iraci's](https://sites.google.com/view/iraci) group from the
-  [Scuola Normale Superiore di Pisa](https://www.sns.it/en).
 
 ### Bottom Deck Blind Plays
 
@@ -317,9 +339,9 @@ that have not been played yet and have only one copy remaining.)
   players to continue playing as normal until all of the stacks are completed.
 - The game immediately ends with a score of 0 if the team gets 3 strikes, as per
   normal.
-- The game immediately ends with a score of 0 if a "critical" card is discarded.
-  (Critical cards are cards that have not been played yet and have only one copy
-  remaining.)
+- The game immediately ends with a score of 0 if a "critical" card is discarded
+  or misplayed. (Critical cards are cards that have not been played yet and have
+  only one copy remaining.)
 - The game immediately ends with a score of 0 if a player has no cards in their
   hand and no clue tokens are available.
 - (This is the fourth
@@ -340,9 +362,27 @@ that have not been played yet and have only one copy remaining.)
 - Each game has the option to be created with a password.
 - This allows private tables to be created.
 
-<br />
-
 ## Other Options
+
+These options are on the "Settings" page.
+
+### Notifications & Sound
+
+- You can get a desktop notification when it reaches your turn.
+- You can choose to play a sound when any move is made, only when it is your
+  turn, or never.
+- You can play a sound when a timer is below 10 seconds, and set the volume.
+
+### Dark Mode
+
+- Dark mode is saved to your account. New accounts start with the light theme.
+
+### New UI
+
+- The "New UI" setting shows games and replays in a redesigned game screen. It
+  is in testing and off by default.
+- In a game, a "Classic UI" button switches to the classic screen, and a "New
+  UI" button switches back.
 
 ### Keldon Mode
 
@@ -371,6 +411,15 @@ that have not been played yet and have only one copy remaining.)
 - This is useful for players that are used to drawing cards from the right side
   instead of from the left.
 
+### Other Appearance Options
+
+- "Make numbers on cards match the art style" draws the rank numbers in the
+  style of the card art.
+- "Show turn timers in untimed games" shows how long each player has taken.
+- "Reduced motion" leaves out the fireworks, explosions, shaking, and pulses in
+  games, and the sliding of the action log in replays. Cards still move. It is
+  off by default.
+
 ### Pre-Playing
 
 - Each player has the option to enable the ability to pre-play cards, which is
@@ -380,12 +429,21 @@ that have not been played yet and have only one copy remaining.)
   hover over the location until their turn has arrived, and then the action will
   be automatically performed.
 
+### Speedrun Features
+
+- "Enable speedrun features in non-speedrun games" uses
+  [the speedrun controls](#speedruns) in every game.
+
 ### H-Group Conventions
 
 If you are playing with the [H-Group](https://hanabi.github.io/), some
 additional UI elements are enabled:
 
 - an "H" indicator next to the username in the "Online Users" section.
+- your highest H-Group level (which you can set on the "Settings" page) beside
+  your name at pre-game tables, with a link to that level's page
+- a different arrow color for chop-moved cards
+- a red efficiency number in hard variants (1.33 efficiency or higher)
 - double discard situation notification (as a border around the discard pile and
   in the "Current Player" area)
 - a blue question mark drawn on cards potentially in a double discard situation
@@ -395,21 +453,21 @@ additional UI elements are enabled:
 - a
   [special sound effect when discarding a clued card](../public/sounds/turn-discard-clued.mp3)
 - a
-  [special sound effect when discarding to enter a double discard situation](../public/sounds/turn-double_discard-cause.mp3)
+  [special sound effect when discarding to enter a double discard situation](../public/sounds/turn-double-discard-cause.mp3)
 - a
   [special sound effect when discarding in a double discard situation](../public/sounds/turn-double-discard.mp3)
 - a
   [special sound effect when playing a 1 out of order](../public/sounds/turn-order-chop-move.mp3)
-
-<br />
 
 ## Notes
 
 ### Basic Description
 
 - When in the middle of an ongoing game, players can right-click or double-tap
-  on any card to add a note to it. Afterward, by hovering over a card, a tooltip
-  will appear with the written note.
+  on any card to add a note to it. (Ctrl + left-click also works, for devices
+  without right-click.) Afterward, by hovering over a card, a tooltip will
+  appear with the written note.
+- Press Delete while hovering over a card to delete its note.
 - This is useful for storing contextual information about a card for later.
   (e.g. "they should know that this card is exactly red 2 from the clue on turn
   3")
@@ -419,6 +477,10 @@ additional UI elements are enabled:
   and keep any notes written.
 - Notes are saved in the database and will persist into the replay.
 - Everyone's notes are combined and shown to spectators, which is fun to see.
+- Spectators can write their own notes too. They are kept after the spectator
+  leaves, and are shown after the game, below the players' notes.
+- If you try to play a card whose note says that it is unplayable, the game asks
+  you to confirm.
 
 ### Card Identity Notes
 
@@ -434,8 +496,10 @@ additional UI elements are enabled:
 | Black           | K                                              |
 | Rainbow         | M                                              |
 | Muddy Rainbow   | M                                              |
+| Cocoa Rainbow   | M                                              |
 | Pink            | I                                              |
 | Light Pink      | I                                              |
+| Gray Pink       | I                                              |
 | Brown           | N                                              |
 | Omni            | O                                              |
 | Null            | U                                              |
@@ -465,10 +529,15 @@ additional UI elements are enabled:
 
 - A note of "f" can be written to indicate that the card is _Finessed_. This
   will draw a special border around the card.
+  - "hf", "sf", "cf", "pf", and "gd" work the same way.
+  - "xf" and "ctp" (for an unclued finesse or a call to play) also remove the
+    clue border.
 - A note of "cm" can be written to indicate that the card is _Chop Moved_. This
   will draw a special border around the card.
-- A note of "ptd" can be written to indicate that the card has _Permission to
-  Discard_. This will draw a special border around the card.
+  - "chop move", "bd", and many other chop move abbreviations (such as "5cm",
+    "tcm", "ocm", and "ttcm") work the same way.
+- A note of "ptd", "ctd", or "discard" can be written to indicate that the card
+  has _Permission to Discard_. This will draw a special border around the card.
 
 ### Other Special Notes
 
@@ -481,6 +550,7 @@ additional UI elements are enabled:
   information written on it. This will draw a special image on the card.
 - A note of "!" can be written to indicate that the card have certain
   information written on it. This will draw a special image on the card.
+- A note of "spook" can be written to draw a ghost on the card.
 - A note of "blank" or "unknown" can be written on a card to make it look like
   the deck back.
 - A note of "unclued" or "x" can be written to manually remove the border that
@@ -510,8 +580,6 @@ There are also some keyboard shortcuts for making notes:
 - Shift + alt + right-click --> [ptd]
 - Ctrl + shift + alt + right-click --> [kt]
 
-<br />
-
 ## Sounds
 
 There are different sounds for:
@@ -523,11 +591,9 @@ There are different sounds for:
 - [when a card blind-plays](../public/sounds/turn-blind1.mp3)
 - [when multiple cards blind-play in a row (up to 6)](../public/sounds/turn-blind2.mp3)
 - [discarding a "critical" card](../public/sounds/turn-sad.mp3)
-- [finishing the game with a score of 0](../public/sounds/turn-finished-fail.mp3)
-- [finishing the game with a non-perfect score](../public/sounds/turn-finished-success.mp3)
-- [finishing the game with a perfect score](../public/sounds/turn-finished-perfect.mp3)
-
-<br />
+- [finishing the game with a score of 0](../public/sounds/finished-fail.mp3)
+- [finishing the game with a non-perfect score](../public/sounds/finished-success.mp3)
+- [finishing the game with a perfect score](../public/sounds/finished-perfect.mp3)
 
 ## Pace & Efficiency
 
@@ -591,8 +657,8 @@ move for the current situation.
 
 #### Manually Modifying Efficiency
 
-- Players can manually modify the "cards gotten" term by doing an
-  `alt + right-click` on the _Future Required Efficiency_.
+- Players can manually modify the "cards gotten" term by clicking on the _Future
+  Required Efficiency_.
 - This is useful to account for cards that are _Finessed_, cards that are known
   to be trash, and so forth.
 
@@ -628,18 +694,21 @@ move for the current situation.
   - Thus, a player in this situation should probably discard and in that hopes
     that a teammate can perform a 2-for-1 clue.
 
-<br />
-
 ## Keyboard Shortcuts
 
 - In the lobby:
   - Join the first game: `Alt + j`
-  - Create a table: `Alt + c`
+  - Create a table: `Alt + n`
   - Show history: `Alt + h`
   - Watch a specific replay: `Alt + a`
+  - Watch the pasted JSON on that page: `Ctrl + Enter`
   - Sign out: `Alt + o`
+  - Return to the lobby from a page (such as "Settings"): `Alt + r` or `Escape`
 - In a pre-game:
   - Start a game: `Alt + s`
+  - Join the game: `Alt + j`
+  - Spectate the game: `Alt + p`
+  - Change the options: `Alt + c`
   - Return to the lobby: `Alt + r` or `Escape`
   - Leave the game: `Alt + l`
 - In a game:
@@ -648,8 +717,14 @@ move for the current situation.
   - Clue:
     - `Tab` or semicolon `;` to select a player
     - `1`, `2`, `3`, `4`, `5` for a rank clue
-    - Or `q`, `w`, `e`, `r`, `t` for a color clue
+    - Or `q`, `w`, `e`, `r`, `t`, `y` for a color clue
     - Then `Ctrl + Enter` to submit
+  - Open or close the in-game replay: `Up` or `Down`
+  - Toggle the chat: `Alt + c`
+  - Go to a specific turn: `Alt + t`
+  - Delete the note of the card under the mouse: `Delete`
+  - Return to the lobby: `Alt + l`
+  - Close the chat, leave a hypothetical, or leave a replay: `Escape`
 - In a replay:
   - Rewind back one turn: `Left`
   - Fast-forward one turn: `Right`
@@ -657,10 +732,15 @@ move for the current situation.
   - Fast-forward one full rotation: `]`
   - Go to the beginning: `Home`
   - Go to the end: `End`
+  - Enter a hypothetical: `Page Up`
 - In a shared replay:
   - Toggle shared turns: `Up` or `Down`
-
-<br />
+  - Play a sound for everyone: `Alt + a` (clap), `Alt + b` (buzz), `Alt + h`
+    (holy), or `Alt + n` (nooo)
+- In a hypothetical:
+  - Undo the last action: `Left`
+  - Pass the turn: `Right`
+  - Leave the hypothetical: `Page Down` or `Escape`
 
 ## Similar Deals and Competitive Play
 
@@ -683,29 +763,30 @@ move for the current situation.
     "Valentine Mix (6 Suit)". (Variant number 0 would be equal to no variant.)
   - The "s5" part means that it is seed 5. In other words, it is the 5th
     generated deal for this player number and variant combination.
-- You can force the server to give you a specific deal by entering a specific
-  game name. This is useful for competitive play (e.g. if two groups of players
-  want to compete against each other).
-- The first way to guarantee a specific deal is by starting the game with a name
-  of: `!seed [seed]`
+- You can force the server to give you a specific deal by entering a seed in the
+  "Custom Seed" field under "Extra Options" when creating a game. This is useful
+  for competitive play (e.g. if two groups of players want to compete against
+  each other). The seed can contain letters, numbers, and hyphens.
   - For example, say that a group wanted to play a deal that another group had
     already played. So, they went into the replay for the existing game, and
     moused over the deck, and saw that the seed was `p3v0s123`. Thus, they knew
     that this game was the 123rd seed for this player and variant combination.
     So, they created a game with the appropriate player count & variant, using a
-    name of `!seed 123`.
+    seed of `123`.
   - For example, say that two groups wanted to play a brand new deal that had
     never been played before. So, they each created a game with the same player
-    count & variant, using a name of `!seed showmatch-jan-2050-game-1`. (In this
-    case, they were playing a 3-player game of no variant, so resulting full
-    seed for the game was `p3v0sshowmatch-jan-2050-game-1`.)
+    count & variant, using a seed of `showmatch-jan-2050-game-1`. (In this case,
+    they were playing a 3-player game of no variant, so resulting full seed for
+    the game was `p3v0sshowmatch-jan-2050-game-1`.)
+  - Restarting a game with a seed moves on to the next one, such as from
+    `showmatch-jan-2050-game-1` to `showmatch-jan-2050-game-2`.
 - Additionally, you can start a game that will be a partial replay of an
   existing game. For example, this is useful if you want to see how a game would
-  play out if a different move was taken. The format for this is to use a name
-  of `!replay [id] [turn]`. Specifying the turn number is optional; if omitted,
-  the game will start on the first turn.
-
-<br />
+  play out if a different move was taken. To do this, enter the ID of the game
+  in the "Replay Game" option under "Extra Options" when creating a game, and
+  optionally the turn to start from. If the turn is omitted, the game will start
+  on the first turn. The game uses the same deal, seats, and options as the
+  original, so it needs the same number of players.
 
 ## Chat
 
@@ -715,10 +796,10 @@ move for the current situation.
 - You can also send private messages to other players with the `/pm` command and
   revisit recent private messages with the `/pmhistory` command.
 - You can type any emoji into chat using the
-  [standard emoji short-code](https://raw.githubusercontent.com/Hanabi-Live/hanabi-live/main/packages/client/src/json/emojis.json).
+  [standard emoji short-code](https://raw.githubusercontent.com/Hanabi-Live/hanabi-live/main/packages/data/src/json/emojis.json).
   For example, `:thinking:` will turn into 🤔.
 - You can type any
-  [Twitch emote](https://raw.githubusercontent.com/Hanabi-Live/hanabi-live/main/packages/client/src/json/emotes.json)
+  [Twitch emote](https://raw.githubusercontent.com/Hanabi-Live/hanabi-live/main/packages/data/src/json/emotes.json)
   into chat. For example, `Kappa` will turn into
   <img alt="Kappa" src="https://github.com/Hanabi-Live/hanabi-live/raw/main/public/img/emotes/twitch/Kappa.png">.
   (Many BetterTwitchTV and FrankerFaceZ emotes are also supported.)
@@ -730,8 +811,6 @@ move for the current situation.
   from chat and hide the spectator count ("zen mode", indicated by ☯️).
   Right-clicking again reverts this.
 
-<br />
-
 ## Friends
 
 - When there are a lot of users online and a lot of games going on, it can be
@@ -741,8 +820,6 @@ move for the current situation.
 - Your friends will be listed alphabetically at the top of the user list.
 - Games that contain one or more of your friends will be sorted at the top of
   the games list.
-- If you have one or more friends, a "Show History of Friends" button will
-  appear on the history screen.
 
 ## Linked Accounts
 
@@ -762,8 +839,6 @@ move for the current situation.
   receive any of Bob's seeds, but Bob might still receive seeds that Alice has
   played. This way, each user is in control of their own seed selection.
 
-<br />
-
 ## Tags
 
 - Attaching notes to cards is useful for keeping track of things in the middle
@@ -780,34 +855,30 @@ move for the current situation.
   tag is to the other players (in order to avoid leaking information about the
   game).
 - Tags added during a replay will echo to everyone in the replay.
-- You can use the `/tagdelete [tag]` command to delete an existing tag, or
+- You can use the `/untag [tag]` command to delete an existing tag, or
   `/tagsdeleteall` to delete all your tags in that game.
 - You can use the `/tagsearch [tag]` command to search through all games for a
   specific tag.
-
-<br />
 
 ## Website Endpoints
 
 - As mentioned previously, the website offers pages to show statistics on
   specific players, variants, and so forth.
 
-| URL                                                | Description                                                                                     |
-| -------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `/scores/[username]`                               | Lists the player's profile and best scores.                                                     |
-| `/history/[username]`                              | Lists the player's past games.                                                                  |
-| `/history/[username1]/[username2]`                 | Lists the past games that 2 players were in together. (You can specify up to 6 players.)        |
-| `/missing-scores/[username]`                       | Lists the player's remaining non-max scores.                                                    |
-| `/shared-missing-scores/2/[username1]/[username2]` | Lists the remaining non-max scores that 2 players both need. (You can specify up to 6 players.) |
-| `/tags/[username]`                                 | Lists the player's tagged games.                                                                |
-| `/seed/[seed]`                                     | Lists the games played on a specific seed.                                                      |
-| `/stats`                                           | Lists stats for the entire website.                                                             |
-| `/variant/[id]`                                    | Lists stats for a specific variant.                                                             |
-| `/tag/[tag]`                                       | Lists all the games that match the specified tag.                                               |
+| URL                                                | Description                                                                                              |
+| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `/scores/[username]`                               | Lists the player's profile and best scores.                                                              |
+| `/history/[username]`                              | Lists the player's past games.                                                                           |
+| `/history/[username1]/[username2]`                 | Lists the past games that 2 players were in together. (You can specify up to 6 players.)                 |
+| `/missing-scores/[username]`                       | Lists the player's remaining non-max scores.                                                             |
+| `/missing-scores/[username]/[number of players]`   | Lists the player's remaining non-max scores for one number of players.                                   |
+| `/shared-missing-scores/2/[username1]/[username2]` | Lists the remaining non-max scores that 2 players both need. (You can specify up to 6 players.)          |
+| `/tags/[username]`                                 | Lists the player's tagged games.                                                                         |
+| `/seed/[seed]`                                     | Lists the games played on a specific seed.                                                               |
+| `/tag/[tag]`                                       | Lists all the games that match the specified tag.                                                        |
+| `/create-table`                                    | Creates a table. Query parameters (such as `?variantName=Rainbow (6 Suits)&timed=true`) set its options. |
 
-<br />
-
-## Research & Bots
+## JSON Games
 
 - A game can be stored as a [JSON](https://www.json.org/json-en.html) object.
   The community uses
@@ -819,50 +890,60 @@ move for the current situation.
 - This is useful for researchers and bot-makers because you can take one of the
   games that your bot plays and then plug it into the website in order to
   more-easily see what kinds of strategies that it is doing.
-- It is also possible to program a bot to play on the website with other
-  players. Unlike other websites such as [lichess.org](https://lichess.org/),
-  there is no bot-specific API. Bots must connect to the WebSocket server and
-  send messages in exactly the same way that a real player would. A reference
-  bot implementation can be found at
-  [`hanabi-live-bot`](https://github.com/Hanabi-Live/hanabi-live-bot).
 
 ### JSON Endpoints
 
-| URL                                           | Description                                                                                                 |
-| --------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `/export/[game ID]`                           | Provides the data for an arbitrary game from the database.                                                  |
-| `/api/v1/variants`                            | Displays a list of variants and their IDs.                                                                  |
-| `/api/v1/variants-full`                       | Displays a list of variants information and their IDs.                                                      |
-| `/api/v1/variants/[variant ID]`               | Displays a paginated list of games played in that specific variant.                                         |
-| `/api/v1/history/[username]`                  | Lists a paginated list of the player's past games.                                                          |
-| `/api/v1/history/[username]/[username2]`      | Lists a paginated list of past games where the players were in together. (You can specify up to 6 players.) |
-| `/api/v1/history-full/[username]`             | Lists all the player's past games.                                                                          |
-| `/api/v1/history-full/[username]/[username2]` | Lists all the past games that 2 players were in together. (You can specify up to 6 players.)                |
-| `/api/v1/tags/[username]`                     | Lists all games tagged by the player, with only that player's tags on each game.                            |
-| `/api/v1/tag/[tag]`                           | Lists all games containing the specified tag.                                                               |
-| `/api/v1/seed/[seed]`                         | Lists paginated games played on a specific seed.                                                            |
-| `/api/v1/seed-full/[seed]`                    | Lists all the games played on a specific seed.                                                              |
+| URL                                      | Description                                                                                                 |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `/export/[game ID]`                      | Provides the data for an arbitrary game from the database.                                                  |
+| `/api/v1/variants`                       | Displays a list of variants and their IDs.                                                                  |
+| `/api/v1/variants-full`                  | Displays a list of variants information and their IDs.                                                      |
+| `/api/v1/history/[username]`             | Lists a paginated list of the player's past games.                                                          |
+| `/api/v1/history/[username]/[username2]` | Lists a paginated list of past games where the players were in together. (You can specify up to 6 players.) |
+| `/api/v1/tags/[username]`                | Lists a paginated list of the games tagged by the player, with only that player's tags on each game.        |
+| `/api/v1/tag/[tag]`                      | Lists a paginated list of the games containing the specified tag.                                           |
+| `/api/v1/seed/[seed]`                    | Lists paginated games played on a specific seed.                                                            |
 
-Notes: The following query parameters can be used by adding a `?` at the end of
-the URL (e.g. `/api/v1/variants/1?size=50&page=2`):
+Notes: The paginated lists take the following query parameters, added with a `?`
+at the end of the URL (e.g. `/api/v1/history/Alice?limit=50&offset=100`). A
+request with any other parameter, or with a parameter repeated, is rejected.
 
-| Group | Parameter | Type    | Explanation                             | Values                    |
-| ----- | --------- | ------- | --------------------------------------- | ------------------------- |
-| 1     | size      | integer | controls the number of results          | 0 to 100                  |
-| 1     | page      | integer | displays a specific page of the results | 0 to ...                  |
-| 1     | col[x]    | integer | sorts by column x (0, 1, ...)           | 0 ascending, 1 descending |
-| 1     | fcol[x]   | string  | filters by column x (0, 1, ...)         | filter value              |
-| 2     | start     | integer | sets the starting ID of the data        | ...                       |
-| 2     | end       | integer | sets the ending ID of the data          | ...                       |
+| Parameter | Type    | Explanation                     | Values          |
+| --------- | ------- | ------------------------------- | --------------- |
+| limit     | integer | controls the number of results  | 1 to 100        |
+| offset    | integer | skips this many results         | 0 to ...        |
+| sort      | string  | sorts by one column (see below) | a column name   |
+| order     | string  | sets the direction of the sort  | `asc` or `desc` |
+| filter[x] | integer | filters by column x (see below) | filter value    |
+| start     | integer | sets the lowest game ID         | ...             |
+| end       | integer | sets the highest game ID        | ...             |
 
-<br />
+The columns are `gameId`, `numPlayers`, `score`, and `variantId` (for example,
+`?sort=score&order=desc`). Every list sorts by `gameId`, `numPlayers`, or
+`score`. Seed lists filter by `gameId` or `score`, and the other lists by any
+column.
+
+## Bots
+
+- It is possible to program a bot to play on the website with other players.
+  Unlike other websites such as [lichess.org](https://lichess.org/), there is no
+  bot-specific API. Bots must connect to the WebSocket server and send messages
+  in exactly the same way that a real player would. A reference bot
+  implementation can be found at
+  [`hanabi-live-bot`](https://github.com/Hanabi-Live/hanabi-live-bot).
+- To mark an account as a bot, send `client=bot` instead of a client version: in
+  the form when you log in to `/login`, or as `?client=bot` in the WebSocket
+  URL. Other players see a robot icon next to it. If a person logs in to the
+  account without `client=bot`, it becomes a normal account until the bot logs
+  in again. A program that people use, such as a mobile client, sends
+  `client=app` instead. To create the account on its first login, also send
+  `createAccount=true`.
+- Unlike human players, bots can play at more than one table at a time.
 
 ## Password Reset
 
 If you need to reset your password, visit
 [this page](https://hanab.live/password-reset) to learn more.
-
-<br />
 
 ## Project History
 
@@ -874,5 +955,3 @@ code is vastly different.
 Development on the site continues to the present day. There have been many
 helpful contributions from various community members. If you can code,
 [you are welcome to help us](https://github.com/Hanabi-Live/hanabi-live/blob/main/CONTRIBUTING.md).
-
-<br />

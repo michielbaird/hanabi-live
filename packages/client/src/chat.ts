@@ -1,65 +1,96 @@
 // Users can chat in the lobby, in the pregame, and in a game. Logic for the game chat box is
 // located separately in "game/chat.ts".
 
-import type {
-  ServerCommandChatData,
-  ServerCommandChatPMHistoryMessageData,
+import type { ServerEventData, TableId } from "@hanabi-live/data";
+import {
+  CHAT_EMOJIS as emojis,
+  CHAT_EMOTES as emotes,
+  MAX_CHAT_LENGTH,
+  PROJECT_NAME,
+  tableIdSchema,
+  TYPING_TIMEOUT_MS,
 } from "@hanabi-live/data";
-import { PROJECT_NAME } from "@hanabi-live/data";
+import { eRange, isArray, trimPrefix } from "complete-common";
+import { globals } from "./Globals.ts";
+import type { LengthLimit } from "./LengthCounter.tsx";
+import { countCharacters, rejectTooLong } from "./LengthCounter.tsx";
+import { chatCommands } from "./chatCommands.ts";
+import { LobbyChatDeletionState } from "./chatDeletion.ts";
+import type { SuggestedSettings } from "./chatKind.ts";
+import { chatAuthor, chatAuthorName, chatRecipient } from "./chatKind.ts";
+import { LOCAL_STORAGE_KEY, TYPED_HISTORY_MAX_LENGTH } from "./constants.ts";
+import { gameChatLineAdded } from "./game/gameChatSlice.ts";
+import type { ChatLine, LocalPart } from "./lobby/chat/ChatBox.tsx";
 import {
-  eRange,
-  isArray,
-  SECOND_IN_MILLISECONDS,
-  trimPrefix,
-} from "complete-common";
-import * as KeyCode from "keycode-js";
-import linkifyHtml from "linkify-html";
-import { find as linkifyFind } from "linkifyjs";
-import { globals } from "./Globals";
-import { chatCommands } from "./chatCommands";
+  lobbyChatLineAdded,
+  lobbyChatLineDeleted,
+} from "./lobby/chat/lobbyChatSlice.ts";
 import {
-  getLobbyChatIDAttribute,
-  LobbyChatDeletionState,
-} from "./chatDeletion";
-import { FADE_TIME_MS, TYPED_HISTORY_MAX_LENGTH } from "./constants";
-import emojis from "./json/emojis.json";
-import emotes from "./json/emotes.json";
-import { Screen } from "./lobby/types/Screen";
-import * as modals from "./modals";
-import { getHTMLInputElement } from "./utils";
+  pregameChatLineAdded,
+  typingStopped,
+} from "./lobby/pregame/pregameSlice.ts";
+import { Screen } from "./lobby/types/Screen.ts";
+import * as modals from "./modals.ts";
+import { getOnlineUsernames } from "./onlineUsers.ts";
+import { store } from "./store.ts";
+
+/** Formats chat timestamps as 24-hour "HH:MM" regardless of the browser's locale. */
+const chatTimeFormatter = new Intl.DateTimeFormat("en-US", {
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+});
+
+type ChatData = ServerEventData["chat"];
+
+/** The table of a chat room ("lobby" or "table" and the table's ID), or undefined for the lobby. */
+function roomTableId(room: string): TableId | undefined {
+  const tableId = /^table(?<tableId>\d+)$/u.exec(room)?.groups?.["tableId"];
+  return tableId === undefined
+    ? undefined
+    : tableIdSchema.parse(Number(tableId));
+}
 
 export enum SelfChatMessageType {
-  Normal,
-  Info,
-  Error,
+  Normal = "Normal",
+  Info = "Info",
+  Error = "Error",
 }
+
+/**
+ * The least time between the typing reports that we send to the server. It is shorter than the
+ * server's typing timeout so that the indicator does not flicker while we keep typing.
+ */
+const TYPING_REPORT_INTERVAL_MS = TYPING_TIMEOUT_MS / 2;
+
+/** The limit of a chat message, which the server counts after it trims the message. */
+export const CHAT_LENGTH_LIMIT = {
+  max: MAX_CHAT_LENGTH,
+  left: (text) => MAX_CHAT_LENGTH - countCharacters(fillEmojis(text.trim())),
+  tooLongText: "Message is too long",
+} as const satisfies LengthLimit;
 
 const emojiMap = new Map<string, string>();
 const emojiList: string[] = [];
 const emoteList: string[] = [];
 let chatLineNum = 1;
 const lobbyChatDeletionState = new LobbyChatDeletionState();
-let lastPM = "";
+let lastPrivateMessageSender: string | undefined;
 let datetimeLastChatInput = Date.now();
 let typedChatHistory: string[] = [];
-let typedChatHistoryIndex: number | null = null;
-let typedChatHistoryPrefix = "";
-let tabCompleteWordListIndex: number | null = null;
+/**
+ * The state of browsing the typed history with the arrow keys, or undefined when not browsing.
+ * `prefix` is the text typed before browsing started. `index` is the history entry shown, or
+ * undefined when `prefix` is shown.
+ */
+let typedChatHistoryBrowse:
+  { readonly prefix: string; index: number | undefined } | undefined;
+let tabCompleteWordListIndex: number | undefined;
 let tabCompleteWordList: string[] = [];
 let tabCompleteOriginalText = "";
-let activeChatInput: HTMLInputElement | null = null;
 
 export function init(): void {
-  $("#lobby-chat-input").on("input", input);
-  $("#lobby-chat-input").on("keypress", keypress("lobby"));
-  $("#lobby-chat-input").on("keydown", keydown);
-  $("#lobby-chat-pregame-input").on("input", input);
-  $("#lobby-chat-pregame-input").on("keypress", keypress("table"));
-  $("#lobby-chat-pregame-input").on("keydown", keydown);
-  $("#game-chat-input").on("input", input);
-  $("#game-chat-input").on("keypress", keypress("table"));
-  $("#game-chat-input").on("keydown", keydown);
-  $(".emoji-button").on("click", emojiClick);
+  // (The chat inputs are React components that attach themselves.)
 
   // Make an emoji list/map and ensure that there are no overlapping emoji.
   for (const [emojiName, emoji] of Object.entries(emojis)) {
@@ -83,102 +114,83 @@ export function init(): void {
     }
   }
 
-  // Populate the emote/emoji picker.
-  const picker = $("#emoji-picker");
-  for (const [categoryName, emotesInCategory] of Object.entries(emotes)) {
-    const emoteArray = [...emotesInCategory];
-    for (const emote of emoteArray) {
-      const emoteImg = $("<img>")
-        .addClass("chat-emote")
-        .attr("src", `/public/img/emotes/${categoryName}/${emote}.png`)
-        .attr("title", emote)
-        .on("click", pickEmote);
-      picker.append(emoteImg);
-    }
-  }
-
-  for (const [emojiName, emoji] of emojiMap) {
-    const emojiSpan = $("<span>")
-      .addClass("emoji-item")
-      .attr("title", `:${emojiName}:`)
-      .text(emoji)
-      .on("click", pickEmoji);
-    picker.append(emojiSpan);
-  }
-
   // Retrieve the contents of the typed chat list from local storage (cookie).
-  const typedChatHistoryString = localStorage.getItem("typedChatHistory");
+  const typedChatHistoryString = localStorage.getItem(
+    LOCAL_STORAGE_KEY.TYPED_CHAT_HISTORY,
+  );
   if (
-    typedChatHistoryString !== null
-    && typedChatHistoryString !== ""
-    && typedChatHistoryString !== "[]"
+    typedChatHistoryString === null
+    || typedChatHistoryString === ""
+    || typedChatHistoryString === "[]"
   ) {
-    let potentialArray: unknown;
-    try {
-      potentialArray = JSON.parse(typedChatHistoryString);
-    } catch {
-      return;
-    }
+    return;
+  }
 
-    if (isArray(potentialArray)) {
-      typedChatHistory = potentialArray as string[];
-    }
+  let potentialArray: unknown;
+  try {
+    potentialArray = JSON.parse(typedChatHistoryString);
+  } catch {
+    return;
+  }
+
+  if (isArray(potentialArray)) {
+    typedChatHistory = potentialArray as string[];
   }
 }
 
-function pickEmote(this: HTMLElement) {
-  if (activeChatInput) {
-    activeChatInput.value += `${this.title} `;
-    activeChatInput.focus();
-  }
-  modals.closeModals();
+/** Handles a change to a chat input's text. */
+export function onChatInput(
+  element: HTMLInputElement,
+  room: "lobby" | "table",
+): void {
+  // We have typed something new, so reset the tab-complete variables.
+  tabResetAutoCompleteList();
+  typedChatHistoryBrowse = undefined;
+  input(element, room);
 }
 
-function pickEmoji(this: HTMLElement) {
-  if (activeChatInput) {
-    activeChatInput.value += this.textContent;
-    activeChatInput.focus();
+/** Handles a key in a chat input: Enter sends, and the arrows and Tab browse and complete. */
+export function onChatKeyDown(
+  element: HTMLInputElement,
+  room: "lobby" | "table",
+  event: KeyboardEvent,
+): void {
+  // Enter also ends the composition of an input method, which must not send the message.
+  if (event.key === "Enter" && !event.isComposing) {
+    // Sending can open a modal, which focuses its button. Without this, the key press that follows
+    // would press that button.
+    event.preventDefault();
+    send(room, element);
+    return;
   }
-  modals.closeModals();
+  keydown(element, event);
 }
 
-function emojiClick(this: HTMLElement) {
-  const targetInputId = this.dataset["target"];
-  activeChatInput = getHTMLInputElement(`#${targetInputId}`);
-  modals.showPrompt("#emoji-modal");
-}
-
-function input(this: HTMLElement, event: JQuery.Event) {
-  const element = $(this);
-  const text = element.val();
-  if (typeof text !== "string") {
-    throw new TypeError(
-      "The value of the element in the input function is not a string.",
-    );
-  }
+function input(element: HTMLInputElement, room: "lobby" | "table") {
+  const text = element.value;
 
   // If this is a pregame or game input, report to the server that we are typing. (But do not spam
-  // the server with more than one message a second.)
-  if (this.id !== "lobby-chat-input") {
+  // the server with more than one message per interval.)
+  if (room !== "lobby") {
     const datetimeNow = Date.now();
-    if (datetimeNow - datetimeLastChatInput >= SECOND_IN_MILLISECONDS) {
+    if (datetimeNow - datetimeLastChatInput >= TYPING_REPORT_INTERVAL_MS) {
       datetimeLastChatInput = datetimeNow;
-      globals.conn!.send("chatTyping", {
-        tableID: globals.tableID,
+      globals.connection.send("chatTyping", {
+        tableId: globals.joinedTableId,
       });
     }
   }
 
   // /r - A PM reply.
-  if (text === "/r " && lastPM !== "") {
-    element.val(`/pm ${lastPM} `);
+  if (text === "/r " && lastPrivateMessageSender !== undefined) {
+    element.value = `/pm ${lastPrivateMessageSender} `;
     return;
   }
 
   // /shrug
   if (text === "/shrug") {
     // eslint-disable-next-line complete/require-ascii
-    element.val(String.raw`¯\_(ツ)_/¯`);
+    element.value = String.raw`¯\_(ツ)_/¯`;
     return;
   }
 
@@ -186,33 +198,13 @@ function input(this: HTMLElement, event: JQuery.Event) {
   // eslint-disable-next-line complete/require-ascii
   // e.g. :100: --> 💯
   const newText = substituteEmoji(text);
-  if (newText !== null) {
-    element.val(newText);
-    event.preventDefault();
+  if (newText !== undefined) {
+    element.value = newText;
   }
 }
 
-// This cannot be a normal function since it uses `this`.
-// eslint-disable-next-line func-style
-const keypress = (room: string) =>
-  function keypressFunction(this: HTMLElement, event: JQuery.Event) {
-    const element = $(this);
-
-    // We have typed a new character, so reset the tab-complete variables.
-    tabResetAutoCompleteList();
-    typedChatHistoryIndex = null;
-
-    if (event.which === KeyCode.KEY_RETURN) {
-      send(room, element);
-    }
-  };
-
-function send(room: string, element: JQuery) {
-  let msg = element.val();
-  if (typeof msg !== "string") {
-    throw new TypeError("The value of the element is not a string.");
-  }
-  msg = msg.trim();
+function send(room: string, element: HTMLInputElement) {
+  const msg = element.value.trim();
 
   // Validate that they are accidentally broadcasting a private message reply.
   if (msg.startsWith("/r ")) {
@@ -222,8 +214,13 @@ function send(room: string, element: JQuery) {
     return;
   }
 
+  // Keep a message that is too long, so that the player can shorten it.
+  if (rejectTooLong(element, CHAT_LENGTH_LIMIT)) {
+    return;
+  }
+
   // Clear the chat box.
-  element.val("");
+  element.value = "";
 
   sendText(room, msg);
 }
@@ -246,84 +243,71 @@ function sendText(room: string, msgRaw: string) {
 
   // Use "startsWith" instead of "===" to work around an bug where the room can already have the
   // table number appended (e.g. "table123").
-  let roomID = room;
-  if (roomID.startsWith("table")) {
-    roomID = `table${globals.tableID}`;
+  let roomId = room;
+  if (roomId.startsWith("table")) {
+    roomId = `table${globals.joinedTableId}`;
   }
 
-  // Add the chat message to the typed history so that we can use the up arrow later. (But only if
-  // it isn't in the history already.)
-  const index = typedChatHistory.indexOf(msg);
-  if (index !== -1) {
-    typedChatHistory.splice(index, 1);
-  }
-  typedChatHistory.unshift(msg);
-
-  // Prevent the typed history from getting too large.
-  if (typedChatHistory.length > TYPED_HISTORY_MAX_LENGTH) {
-    // Pop off the final element.
-    typedChatHistory.pop();
-  }
+  // Add the chat message to the start of the typed history so that we can use the up arrow later,
+  // and remove its older copy. Keep the history at its maximum length.
+  typedChatHistory = [
+    msg,
+    ...typedChatHistory.filter((typedMsg) => typedMsg !== msg),
+  ].slice(0, TYPED_HISTORY_MAX_LENGTH);
 
   // Save the typed chat history to local storage (cookie).
-  localStorage.setItem("typedChatHistory", JSON.stringify(typedChatHistory));
+  localStorage.setItem(
+    LOCAL_STORAGE_KEY.TYPED_CHAT_HISTORY,
+    JSON.stringify(typedChatHistory),
+  );
 
-  // Reset the typed history index.
-  typedChatHistoryPrefix = "";
-  typedChatHistoryIndex = null;
+  // Stop browsing the typed history.
+  typedChatHistoryBrowse = undefined;
 
-  // Check for chat commands. Each chat command should also have an error handler in
-  // "chat_command.go" (in case someone tries to use the command from Discord).
-  const args = msg.split(" ");
-  const firstArg = args[0];
+  // Check for chat commands.
+  const [firstArg, ...args] = msg.split(" ");
   if (firstArg !== undefined && firstArg.startsWith("/")) {
     const command = trimPrefix(firstArg, "/").toLowerCase();
-    args.shift(); // Remove the command from the rest of the arguments.
 
     const chatCommandFunction = chatCommands.get(command);
     if (chatCommandFunction !== undefined) {
-      chatCommandFunction(roomID, args);
+      chatCommandFunction(roomId, args);
       return;
     }
   }
 
   // This is not a command, so send a the chat message to the server.
-  globals.conn!.send("chat", {
-    msg,
-    room: roomID,
+  const tableId = roomTableId(roomId);
+  globals.connection.send("chat", {
+    text: msg,
+    ...(tableId !== undefined && { tableId }),
   });
 }
 
-function keydown(this: HTMLElement, event: JQuery.Event) {
-  const element = $(this);
-
+function keydown(element: HTMLInputElement, event: KeyboardEvent) {
   // The up and down arrows are only caught in the "keydown" event:
   // https://stackoverflow.com/questions/5597060/detecting-arrow-key-presses-in-javascript
   // The tab key is only caught in the "keydown" event because it switches the input focus.
-  switch (event.which) {
-    // 8, 46
-    case KeyCode.KEY_BACK_SPACE:
-    case KeyCode.KEY_DELETE: {
-      typedChatHistoryIndex = null;
+  switch (event.key) {
+    case "Backspace":
+    case "Delete": {
+      typedChatHistoryBrowse = undefined;
       break;
     }
 
-    // 9
-    case KeyCode.KEY_TAB: {
+    case "Tab": {
       event.preventDefault();
-      tab(element, event);
+      tab(element, event.shiftKey);
       break;
     }
 
-    // 38
-    case KeyCode.KEY_UP: {
+    case "ArrowUp": {
       event.preventDefault();
       arrowUp(element);
       break;
     }
 
-    // 40
-    case KeyCode.KEY_DOWN: {
+    case "ArrowDown": {
       event.preventDefault();
       arrowDown(element);
       break;
@@ -335,96 +319,104 @@ function keydown(this: HTMLElement, event: JQuery.Event) {
   }
 }
 
-function historyMatchNext(current: string, increment: number): string | null {
-  if (typedChatHistoryIndex === null) {
-    if (increment < 0) {
-      return null;
+/**
+ * Moves to the next older or newer history entry that starts with the text typed before browsing.
+ * Returns the text to show, or undefined when moving newer without browsing.
+ */
+function historyMatchNext(current: string, older: boolean): string | undefined {
+  if (typedChatHistoryBrowse === undefined) {
+    if (!older) {
+      return undefined;
     }
-    typedChatHistoryIndex = -1;
-    typedChatHistoryPrefix = current;
+    typedChatHistoryBrowse = {
+      prefix: current,
+      index: undefined,
+    };
   }
-  const oldIndex = typedChatHistoryIndex;
-  do {
-    typedChatHistoryIndex += increment;
-    // Stay within bounds of history.
-    if (typedChatHistoryIndex >= typedChatHistory.length) {
-      typedChatHistoryIndex = oldIndex;
-      return current;
+  const browse = typedChatHistoryBrowse;
+
+  if (older) {
+    const start = browse.index === undefined ? 0 : browse.index + 1;
+    for (let index = start; index < typedChatHistory.length; index++) {
+      if (typedChatHistory[index]!.startsWith(browse.prefix)) {
+        browse.index = index;
+        return typedChatHistory[index]!;
+      }
     }
-    if (typedChatHistoryIndex < 0) {
-      typedChatHistoryIndex = -1;
-      return typedChatHistoryPrefix;
+
+    // There is no older match, so keep showing the current entry.
+    return current;
+  }
+
+  if (browse.index !== undefined) {
+    for (let index = browse.index - 1; index >= 0; index--) {
+      if (typedChatHistory[index]!.startsWith(browse.prefix)) {
+        browse.index = index;
+        return typedChatHistory[index]!;
+      }
     }
-  } while (
-    // Only accept history if it matches prefix.
-    !typedChatHistory[typedChatHistoryIndex]!.startsWith(typedChatHistoryPrefix)
-  );
-  return typedChatHistory[typedChatHistoryIndex]!;
+  }
+
+  // There is no newer match, so go back to what was typed.
+  browse.index = undefined;
+  return browse.prefix;
 }
 
-function arrowUp(element: JQuery) {
-  const retrievedHistory = historyMatchNext(String(element.val() ?? ""), 1);
+function arrowUp(element: HTMLInputElement) {
+  const retrievedHistory = historyMatchNext(element.value, true);
   // Set the chat input box to what we last typed.
-  element.val(retrievedHistory ?? "");
+  element.value = retrievedHistory ?? "";
 }
 
-function arrowDown(element: JQuery) {
-  const retrievedHistory = historyMatchNext(String(element.val() ?? ""), -1);
+function arrowDown(element: HTMLInputElement) {
+  const retrievedHistory = historyMatchNext(element.value, false);
   // Set the chat input box to what we last typed.
-  element.val(retrievedHistory ?? "");
+  element.value = retrievedHistory ?? "";
 }
 
-export function tab(element: JQuery, event: JQuery.Event): void {
+/** Completes the final word of a text box. Shift-tab goes backwards through the matches. */
+export function tab(element: HTMLInputElement, shiftKey: boolean): void {
   // Parse the final word from what we have typed so far.
-  let message = element.val();
-  if (typeof message !== "string") {
-    message = "";
-  }
-  message = message.trim();
+  const message = element.value.trim();
   const messageWords = message.split(" ");
   const finalWord = messageWords.at(-1)!;
 
   // Increment the tab counter.
-  if (tabCompleteWordListIndex === null) {
-    tabInitAutoCompleteList(event, finalWord);
-  } else if (event.shiftKey === true) {
-    // Shift-tab goes backwards
-    tabCompleteWordListIndex--;
-    if (tabCompleteWordListIndex === -1) {
-      tabCompleteWordListIndex = null;
-    }
+  if (tabCompleteWordListIndex === undefined) {
+    tabInitAutoCompleteList(shiftKey, finalWord);
+  } else if (shiftKey) {
+    // Shift-tab goes backwards.
+    tabCompleteWordListIndex =
+      tabCompleteWordListIndex === 0 ? undefined : tabCompleteWordListIndex - 1;
   } else {
     // Tab goes forwards.
     tabCompleteWordListIndex++;
     if (tabCompleteWordListIndex === tabCompleteWordList.length) {
-      tabCompleteWordListIndex = null;
+      tabCompleteWordListIndex = undefined;
     }
   }
 
-  if (tabCompleteWordListIndex === null) {
+  if (tabCompleteWordListIndex === undefined) {
     // We have rotated through all of the possible auto-complete entries (or there are no
     // auto-complete matches for this particular sequence of text), so return the original text.
     messageWords[messageWords.length - 1] = tabCompleteOriginalText;
-    element.val(messageWords.join(" "));
+    element.value = messageWords.join(" ");
     return;
   }
 
   // Replace the final word with the new auto-complete word.
   const autoCompleteWord = tabCompleteWordList[tabCompleteWordListIndex]!;
   messageWords[messageWords.length - 1] = autoCompleteWord;
-  element.val(messageWords.join(" "));
+  element.value = messageWords.join(" ");
 }
 
 /** This is the first time we are pressing tab on this particular sequence of text. */
-function tabInitAutoCompleteList(event: JQuery.Event, finalWord: string) {
+function tabInitAutoCompleteList(shiftKey: boolean, finalWord: string) {
   // Save our current partially-completed word in case we need to cycle back to it later.
   tabCompleteOriginalText = finalWord;
 
   // Make a list of the currently connected users.
-  const userList: string[] = Array.from(
-    globals.userMap.values(),
-    (user) => user.name,
-  );
+  const userList = getOnlineUsernames();
 
   // Combine it with the list of emotes and the list of emoji.
   const usersAndEmojisAndEmotesList = [...userList, ...emojiList, ...emoteList];
@@ -443,7 +435,7 @@ function tabInitAutoCompleteList(event: JQuery.Event, finalWord: string) {
     }
   }
 
-  // If there were no possible matches, keep the "tabCompleteWordListIndex" as null as return.
+  // If there were no possible matches, keep the "tabCompleteWordListIndex" as undefined as return.
   if (tabCompleteWordList.length === 0) {
     return;
   }
@@ -451,13 +443,12 @@ function tabInitAutoCompleteList(event: JQuery.Event, finalWord: string) {
   // Set the starting index, depending on whether or not we are pressing shift:
   // - Shift-tab goes backwards.
   // - Tab goes forwards.
-  tabCompleteWordListIndex =
-    event.shiftKey === true ? tabCompleteWordList.length - 1 : 0;
+  tabCompleteWordListIndex = shiftKey ? tabCompleteWordList.length - 1 : 0;
 }
 
 export function tabResetAutoCompleteList(): void {
   tabCompleteWordList = [];
-  tabCompleteWordListIndex = null;
+  tabCompleteWordListIndex = undefined;
 }
 
 // eslint-disable-next-line complete/prefer-readonly-parameter-types
@@ -499,271 +490,178 @@ function fixCustomEmotePriority(usersAndEmotesList: string[]) {
   }
 }
 
-/**
- * Return the HTML-safe version of plain text input (usually a message author name, because the
- * server takes care of message content HTML processing).
- *
- * If `payload` is undefined, returns the empty string.
- */
-function textToHtml(payload?: string): string {
-  const sanEl = document.createElement("span");
-  if (payload !== undefined) {
-    sanEl.textContent = payload;
-  }
-  return sanEl.innerHTML;
+/** What the client writes itself in a chat line, in place of a message's text. */
+interface LocalLine {
+  readonly parts?: readonly LocalPart[];
+  readonly tone?: ChatLine["tone"];
+
+  /** The settings that a button in the line applies. */
+  readonly suggestion?: SuggestedSettings;
 }
 
-export function add(data: ServerCommandChatData, fast: boolean): void {
+export function add(data: ChatData, fast: boolean): void {
   addInternal(data, fast, true);
 }
 
-export function removeDeletedLobbyMessage(chatID: number): void {
-  // Retain recent deletions so a late live message or chatList cannot revive one.
-  lobbyChatDeletionState.markDeleted(chatID);
-  $(`#lobby-chat-text [data-chat-id="${chatID}"]`).remove();
-}
-
-export function addPMHistory(
-  data: ServerCommandChatPMHistoryMessageData,
-  room?: string,
+/**
+ * Shows the owner of a table the settings that the server suggests, with a button to apply them.
+ */
+export function addSettingsSuggestion(
+  data: ServerEventData["tableSettingsSuggestion"],
+  fast: boolean,
 ): void {
   addInternal(
     {
-      ...data,
-      source: "user",
-      ...(room !== undefined && { room }),
+      text: "settings suggestion",
+      sentAt: new Date().toISOString(),
+      tableId: data.tableId,
+      kind: {
+        type: "private",
+        author: {
+          type: "server",
+        },
+        recipient: store.getState().session.username,
+      },
     },
+    fast,
     true,
-    false,
+    { suggestion: data.settings },
   );
 }
 
+export function removeDeletedLobbyMessage(chatId: number): void {
+  // Retain recent deletions so a late live message or chatList cannot revive one.
+  lobbyChatDeletionState.markDeleted(chatId);
+  store.dispatch(lobbyChatLineDeleted(chatId));
+}
+
+/** Shows the private messages that a "/pmhistory" command asked for. */
+export function showPmHistory(messages: readonly ChatData[]): void {
+  if (messages.length === 0) {
+    // A private notice outside of a table shows in the chat that the user has open.
+    sendSelfPmFromServer(
+      "No private messages found.",
+      "lobby",
+      SelfChatMessageType.Info,
+    );
+    return;
+  }
+
+  for (const message of messages) {
+    addInternal(message, true, false);
+  }
+}
+
 function addInternal(
-  data: ServerCommandChatData,
+  data: ChatData,
   fast: boolean,
   updateLiveState: boolean,
+  local?: LocalLine,
 ) {
-  if (lobbyChatDeletionState.shouldSkipMessage(data.room, data.chatID)) {
+  if (lobbyChatDeletionState.shouldSkipMessage(data.tableId, data.chatId)) {
     return;
   }
 
   // If we are receiving a private message (PM), record who it is from.
+  const author = chatAuthor(data);
+  const authorName = chatAuthorName(data);
+  const recipient = chatRecipient(data);
+  const suggestion = local?.suggestion;
   if (
     updateLiveState
-    && data.recipient === globals.username
-    && data.who !== undefined
+    && author.type === "user"
+    && recipient === store.getState().session.username
   ) {
-    lastPM = data.who;
+    lastPrivateMessageSender = author.username;
   }
 
-  const chat = getChatBoxElement(data);
-  if (chat === undefined) {
+  const box = getChatBox(data);
+  if (box === undefined) {
     return;
   }
 
-  let rawMsg = data.msg;
-  // Replace chat suggestions with anchors which, when clicked, are chat commands.
-  if (chat.is($("#lobby-chat-pregame-text"))) {
-    rawMsg = mapTextSegments(rawMsg, fillChatSuggestions);
-  }
-  const msg = getPreparedMessage(rawMsg);
-
-  // TypeScript has not implemented the required DateTimeFormat option (hourCycle: h23). So we
-  // format the hours manually.
-  const dateObj = new Date(data.datetime);
-  const datetime = `${`0${dateObj.getHours()}`.slice(
-    -2,
-  )}:${`0${dateObj.getMinutes()}`.slice(-2)}`;
-
-  const chatIDAttribute = getLobbyChatIDAttribute(data.room, data.chatID);
-  let line = `<span id="chat-line-${chatLineNum}"${chatIDAttribute}`;
-  line += ` class="${fast ? "" : "hidden"}">`;
-  line += `[${datetime}]&nbsp; `;
-  if (data.recipient !== undefined && data.recipient !== "") {
-    line +=
-      data.recipient === globals.username
-        ? `<span class="red">[PM from <strong>${textToHtml(data.who)}</strong>]</span>&nbsp; `
-        : `<span class="red">[PM to <strong>${textToHtml(data.recipient)}</strong>]</span>&nbsp; `;
-  }
-  if (
-    data.source === "server"
-    || (data.recipient !== undefined && data.recipient !== "")
-  ) {
-    line += msg;
-  } else if (data.who === "") {
-    line += msg;
-  } else {
-    line += `&lt;<strong>${textToHtml(data.who)}</strong>&gt;&nbsp; `;
-    line += msg;
-  }
-  if (data.source === "server" && line.includes("[Server Notice]")) {
-    line = line.replace(
-      "[Server Notice]",
-      '<span class="red">[Server Notice]</span>',
-    );
-  }
-  line += "</span>";
-
-  // Find out if we should automatically scroll down after adding the new line of chat:
-  // https://stackoverflow.com/questions/6271237/detecting-when-user-scrolls-to-bottom-of-div-with-jquery
-  // If we are already scrolled to the bottom, then it is ok to automatically scroll. scrollTop can
-  // be a fractional value for some reason. pxEpsilon is an acceptable range defined in pixels (e.g.
-  // +-2 px).
-  const pxEpsilon = 2;
-  const firstChat = chat[0]!;
-  const autoScroll =
-    Math.abs(
-      firstChat.clientHeight + firstChat.scrollTop - firstChat.scrollHeight,
-    ) < pxEpsilon;
-
-  // Add the new line and fade it in.
-  chat.append(line);
-  $(`#chat-line-${chatLineNum}`).fadeIn(FADE_TIME_MS).css("display", "block");
-  $(`#chat-line-${chatLineNum} a.suggestion`).each((_, element) => {
-    const chatInput = $("#lobby-chat-pregame-input");
-    $(element).on("click", () => {
-      chatInput.val(element.textContent);
-      chatInput.trigger("focus");
-    });
-  });
+  const key = chatLineNum;
   chatLineNum++;
+  const fromServer = author.type === "server";
+  const line: ChatLine = {
+    key,
+    fadeIn: !fast,
+    time: chatTimeFormatter.format(new Date(data.sentAt)),
+    ...(recipient !== undefined && {
+      privateMessage:
+        recipient === store.getState().session.username
+          ? {
+              direction: "from",
+              name: authorName ?? PROJECT_NAME,
+            }
+          : {
+              direction: "to",
+              name: recipient,
+            },
+    }),
+    ...(!fromServer
+      && recipient === undefined
+      && authorName !== undefined && { author: authorName }),
+    fromServer,
+    text: data.text,
+    ...(local?.parts !== undefined && { localParts: local.parts }),
+    ...(local?.tone !== undefined && { tone: local.tone }),
+    ...(suggestion !== undefined && { suggestion }),
+    // Only the pre-game chat suggests commands.
+    ...(box === "pregame" && { commands: true }),
+  };
+  switch (box) {
+    case "lobby": {
+      store.dispatch(
+        lobbyChatLineAdded({
+          ...line,
+          ...(data.tableId === undefined
+            && data.chatId !== undefined && { chatId: data.chatId }),
+        }),
+      );
+      break;
+    }
 
-  // Automatically scroll down.
-  if (autoScroll) {
-    // From: https://stackoverflow.com/questions/270612/scroll-to-bottom-of-div?rq=1
-    // This must be executable asynchronously in order to work properly
-    setTimeout(
-      (element: HTMLElement) => {
-        element.scrollTop = element.scrollHeight;
-      },
-      0,
-      chat[0],
-    );
+    case "pregame": {
+      store.dispatch(pregameChatLineAdded(line));
+      break;
+    }
+
+    case "game": {
+      store.dispatch(gameChatLineAdded(line));
+      break;
+    }
   }
 
   // Remove the person from the typing list, if present.
-  if (updateLiveState && data.who !== undefined) {
-    const index = globals.peopleTyping.indexOf(data.who);
-    if (index !== -1) {
-      globals.peopleTyping.splice(index, 1);
-      updatePeopleTyping();
-    }
+  if (
+    updateLiveState
+    && authorName !== undefined
+    && store.getState().pregame.typing.includes(authorName)
+  ) {
+    store.dispatch(typingStopped(authorName));
   }
 }
 
-/** Find out which chat box we should add the new chat message to. */
-function getChatBoxElement(data: ServerCommandChatData): JQuery | undefined {
-  if (data.room === "lobby") {
-    return $("#lobby-chat-text");
+/** Finds out which chat box we should add the new chat message to. */
+function getChatBox(data: ChatData): "lobby" | "pregame" | "game" | undefined {
+  // A private message (PM) or private notice outside of a table has no room, so we display it on
+  // the chat window that the user currently has open.
+  const isPm = data.tableId === undefined && chatRecipient(data) !== undefined;
+  if (!isPm && data.tableId === undefined) {
+    return "lobby";
   }
 
-  if (data.room !== undefined && data.room.startsWith("table")) {
-    if (globals.currentScreen === Screen.PreGame) {
-      return $("#lobby-chat-pregame-text");
-    }
-
-    if (globals.currentScreen === Screen.Game) {
-      return $("#game-chat-text");
-    }
-
-    // Ignore table chat if we are not in a pre-game and not in a game.
-    return undefined;
+  if (store.getState().session.screen === Screen.PreGame) {
+    return "pregame";
   }
 
-  // A blank room indicates a private message (PM). PMs do not have a room associated with them, so
-  // we default to displaying them on the chat window that the user currently has open.
-  if (data.room === undefined || data.room === "") {
-    if (globals.currentScreen === Screen.PreGame) {
-      return $("#lobby-chat-pregame-text");
-    }
-
-    if (globals.currentScreen === Screen.Game) {
-      return $("#game-chat-text");
-    }
-
-    return $("#lobby-chat-text");
+  if (store.getState().session.screen === Screen.Game) {
+    return "game";
   }
 
-  return undefined;
-}
-
-/**
- * Apply a transformation to the text portions of an HTML string, leaving tags untouched. (Splitting
- * with a capture group makes the segments alternate: even indexes are text and odds indexes are
- * tags.)
- *
- * This is necessary so that a transformation based on regex replacement can never match across
- * existing markup (which would corrupt the markup and allow user-controlled text to escape into
- * attribute position).
- *
- * WARNING: The splitting regex is not a general HTML tokenizer; a ">" inside of a quoted attribute
- * value would be misclassified. It is only sound because of the input contract of
- * `getPreparedMessage`: any tags present are either trusted markup whose attribute values never
- * contain raw angle brackets (built by the server or by `sendSelfPMFromServer`) or generated by
- * `fillDiscordEmotes` (whose interpolated values are restricted to word characters). Do not reuse
- * this function on arbitrary HTML (e.g. the output of `linkifyHtml`, whose "href" value contain
- * user-influenced URLs).
- */
-function mapTextSegments(
-  html: string,
-  transform: (text: string) => string,
-): string {
-  const segments = html.split(/(<[^<>]*>)/u);
-  for (let i = 0; i < segments.length; i += 2) {
-    segments[i] = transform(segments[i]!);
-  }
-  return segments.join("");
-}
-
-/**
- * Add links, Discord emotes, and Twitch emotes.
- *
- * The input must already be safe to render as HTML; this function preserves that safety but cannot
- * create it. Specifically, all user text must already be HTML-escaped, and any tags must be trusted
- * markup whose attribute values never contain raw angle brackets (e.g. the links in server
- * messages).
- */
-export function getPreparedMessage(rawMsg: string): string {
-  let msg = mapTextSegments(rawMsg, fillDiscordEmotes);
-  msg = mapTextSegments(msg, fillTwitchEmotes);
-
-  // Automatically generate links from any URLs that are present in the message. (We must use
-  // "linkifyjs/html" instead of "linkifyjs/string" because the latter will convert "&gt;" to
-  // "&amp;gt;", and the server has already escaped HTML input.)
-  msg = linkifyHtml(msg, {
-    target: "_blank",
-    attributes: {
-      rel: "noopener noreferrer",
-    },
-  });
-
-  return msg;
-}
-
-// Chat suggestions are in the form of: @/command@
-function fillChatSuggestions(text: string): string {
-  const linkSpans = linkifyFind(text);
-
-  return text.replaceAll(
-    /@(\/[^@]*)@/gu,
-    (fullMatch, command: string, offset: number) => {
-      const insideLink = linkSpans.some(
-        (span) => offset < span.end && offset + fullMatch.length > span.start,
-      );
-      return insideLink
-        ? fullMatch
-        : `<a href="#" class="suggestion">${command}</a>`;
-    },
-  );
-}
-
-// Discord emotes are in the form of: <:PogChamp:254683883033853954>
-function fillDiscordEmotes(message: string) {
-  return message.replaceAll(
-    /&lt;:(\w+):(\d+)&gt;/gu,
-    (_fullMatch, name: string, id: string) =>
-      `<img src="https://cdn.discordapp.com/emojis/${id}.png" title="${name}" height="28">`,
-  );
+  // Ignore table chat if we are not in a pre-game and not in a game.
+  return isPm ? "lobby" : undefined;
 }
 
 export function fillEmojis(message: string): string {
@@ -781,10 +679,10 @@ export function fillEmojis(message: string): string {
   return filledMessage;
 }
 
-export function substituteEmoji(text: string): string | null {
+export function substituteEmoji(text: string): string | undefined {
   const matches = text.match(/:\S+:/gu); // "\S" is a non-whitespace character.
   if (matches === null) {
-    return null;
+    return undefined;
   }
 
   for (const match of matches) {
@@ -796,110 +694,43 @@ export function substituteEmoji(text: string): string | null {
     }
   }
 
-  return null;
+  return undefined;
 }
 
-function fillTwitchEmotes(message: string) {
-  let filledMessage = message;
-
-  // Search through the text for each emote.
-  for (const [categoryName, emotesInCategory] of Object.entries(emotes)) {
-    const emoteArray = [...emotesInCategory];
-    for (const emote of emoteArray) {
-      if (message.includes(emote)) {
-        const re = new RegExp(String.raw`\b${emote}\b`, "g"); // "\b" is a word boundary in regex.
-        const emoteTag = `<img class="chat-emote" src="/public/img/emotes/${categoryName}/${emote}.png" title="${emote}" />`;
-        filledMessage = filledMessage.replace(re, emoteTag);
-      }
-    }
-  }
-
-  // Also handle emotes that have special characters in them.
-  if (filledMessage.includes("&lt;3")) {
-    // The Twitch heart emote.
-    const emoteTag =
-      '<img class="chat-emote" src="/public/img/emotes/other/3.png" title="&lt;3" />';
-    const re = /&lt;3/gu; // "\b" won't work with a semicolon.
-    filledMessage = filledMessage.replaceAll(re, emoteTag);
-  }
-  if (filledMessage.includes("D:")) {
-    // A BetterTwitchTV emote.
-    const emoteTag =
-      '<img class="chat-emote" src="/public/img/emotes/other/D.png" title="D:" />';
-    // From: https://stackoverflow.com/questions/4134605/regex-and-the-colon
-    const re = /(?:^|\s)D:(?:\s|$)/gu; // "\b" won't work with a colon
-    filledMessage = filledMessage.replaceAll(re, ` ${emoteTag} `); // We have to re-add the spaces.
-  }
-
-  return filledMessage;
-}
-
-export function updatePeopleTyping(): void {
-  const typingMessage = getTypingMessage();
-
-  const chat1 = $("#lobby-chat-pregame-istyping");
-  chat1.html(typingMessage);
-
-  const chat2 = $("#game-chat-istyping");
-  chat2.html(typingMessage);
-}
-
-function getTypingMessage(): string {
-  switch (globals.peopleTyping.length) {
-    case 0: {
-      return "";
-    }
-
-    case 1: {
-      return `<strong>${textToHtml(globals.peopleTyping[0])}</strong> is typing...`;
-    }
-
-    case 2: {
-      return `<strong>${textToHtml(globals.peopleTyping[0])}</strong> and <strong>${textToHtml(globals.peopleTyping[1])}</strong> are typing...`;
-    }
-
-    case 3: {
-      return `<strong>${textToHtml(globals.peopleTyping[0])}</strong>, <strong>${textToHtml(globals.peopleTyping[1])}</strong>, and <strong>${textToHtml(globals.peopleTyping[2])}</strong> are typing...`;
-    }
-
-    default: {
-      return "Several people are typing...";
-    }
-  }
-}
-
-// This is used when the client needs to send a chat message to itself.
-export function sendSelfPMFromServer(
-  msg: string,
+/** Shows a private notice that the client writes itself, as if the server sent it. */
+export function sendSelfPmFromServer(
+  msg: string | readonly LocalPart[],
   room: string,
   type = SelfChatMessageType.Normal,
 ): void {
-  const message = formatChatMessage(msg, type);
-  add(
+  addInternal(
     {
-      msg: message,
-      who: PROJECT_NAME,
-      source: "server",
-      datetime: new Date().toString(),
-      room,
-      recipient: globals.username,
+      // The line shows the parts instead.
+      text: "",
+      sentAt: new Date().toISOString(),
+      ...(roomTableId(room) !== undefined && { tableId: roomTableId(room) }),
+      kind: {
+        type: "private",
+        author: {
+          type: "server",
+        },
+        recipient: store.getState().session.username,
+      },
     },
     false,
+    true,
+    {
+      parts: typeof msg === "string" ? [msg] : msg,
+      ...(SELF_CHAT_TONES[type] !== undefined && {
+        tone: SELF_CHAT_TONES[type],
+      }),
+    },
   );
 }
 
-function formatChatMessage(msg: string, type: SelfChatMessageType): string {
-  switch (type) {
-    case SelfChatMessageType.Normal: {
-      return msg;
-    }
-
-    case SelfChatMessageType.Info: {
-      return `<span class="green">${msg}</span>`;
-    }
-
-    case SelfChatMessageType.Error: {
-      return `<span class="red">${msg}</span>`;
-    }
-  }
-}
+/** The color of each type of message that the client writes to itself. */
+const SELF_CHAT_TONES = {
+  [SelfChatMessageType.Normal]: undefined,
+  [SelfChatMessageType.Info]: "info",
+  [SelfChatMessageType.Error]: "error",
+} as const satisfies Record<SelfChatMessageType, ChatLine["tone"]>;

@@ -1,0 +1,55 @@
+.stat-description {
+  display: inline-block;
+  width: 19em;
+}
+
+/* History Pages */
+.history-page > header {
+  text-align: center;
+}
+
+.history-page > header h2 {
+  font-size: 2.75em;
+  margin: 0;
+}
+
+table.history {
+  margin-top: 2em;
+}
+
+.history th.center,
+.history td.center {
+  text-align: center;
+}
+
+.history-bullets {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  width: 100%;
+  align-items: flex-start;
+  justify-content: space-around;
+}
+
+.history-bullets ul {
+  flex-direction: column;
+}
+
+@media screen and (max-width: 840px) {
+  /* Stack the profile buttons on top of each other if they would go off screen otherwise */
+  #profile-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: stretch;
+  }
+
+  #profile-buttons li {
+    padding-top: 1em;
+  }
+}
+
+@media screen and (max-width: 736px) {
+  .history-page > header h2 {
+    font-size: 2em;
+  }
+}

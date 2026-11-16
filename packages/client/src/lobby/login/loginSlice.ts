@@ -1,0 +1,101 @@
+// The state of the login screen, which "login.ts" changes as it checks our session and signs in.
+
+import type { PayloadAction } from "@reduxjs/toolkit";
+import { createSlice } from "@reduxjs/toolkit";
+
+/** What the login box shows: a wait, a warning for Firefox users, or the form. */
+type LoginStage = "loading" | "firefoxWarning" | "signIn";
+
+/** What the page shows before a game: the login screen, the tutorial, or the lobby. */
+export type LoginPage = "login" | "tutorial" | "lobby";
+
+interface LoginAlert {
+  readonly message: string;
+  /** Whether the check of our saved session failed, which a button can try again. */
+  readonly retry: boolean;
+  /** Whether the account needs a password reset, so that the alert links to the instructions. */
+  readonly passwordReset: boolean;
+  /** The server's release, when the client is outdated, so that the alert lists both releases. */
+  readonly latestVersion?: string;
+  /** Counts the alerts, so that each one fades in and scrolls into view. */
+  readonly count: number;
+}
+
+interface LoginState {
+  readonly page: LoginPage;
+  readonly stage: LoginStage;
+  /** Whether a login request is on its way. */
+  readonly busy: boolean;
+  readonly alert: LoginAlert | undefined;
+  /**
+   * The username that the server said has no account. Submitting it again creates the account, so
+   * that a mistyped username does not create one by accident.
+   */
+  readonly confirmingUsername: string | undefined;
+}
+
+const initialState: LoginState = {
+  page: "login",
+  stage: "loading",
+  busy: false,
+  alert: undefined,
+  confirmingUsername: undefined,
+};
+
+const loginSlice = createSlice({
+  name: "login",
+  initialState,
+  reducers: {
+    loginPageChanged(state, action: PayloadAction<LoginPage>) {
+      state.page = action.payload;
+    },
+    loginStageChanged(state, action: PayloadAction<LoginStage>) {
+      state.stage = action.payload;
+    },
+    loginStarted(state) {
+      state.busy = true;
+    },
+    loginFailed(
+      state,
+      action: PayloadAction<{
+        message: string;
+        retry?: boolean;
+        passwordReset?: boolean;
+        latestVersion?: string;
+      }>,
+    ) {
+      state.busy = false;
+      state.alert = {
+        message: action.payload.message,
+        retry: action.payload.retry ?? false,
+        passwordReset: action.payload.passwordReset ?? false,
+        ...(action.payload.latestVersion !== undefined && {
+          latestVersion: action.payload.latestVersion,
+        }),
+        count: (state.alert?.count ?? 0) + 1,
+      };
+    },
+    loginAlertCleared(state) {
+      state.alert = undefined;
+    },
+    noAccountFound(state, action: PayloadAction<string>) {
+      state.busy = false;
+      state.alert = undefined;
+      state.confirmingUsername = action.payload;
+    },
+    confirmingUsernameCleared(state) {
+      state.confirmingUsername = undefined;
+    },
+  },
+});
+
+export const {
+  loginPageChanged,
+  loginStageChanged,
+  loginStarted,
+  loginFailed,
+  loginAlertCleared,
+  noAccountFound,
+  confirmingUsernameCleared,
+} = loginSlice.actions;
+export const loginReducer = loginSlice.reducer;

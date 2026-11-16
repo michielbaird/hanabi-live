@@ -1,0 +1,677 @@
+use super::table::{game_mut, wrong_phase};
+use super::{
+    Attendance, GameInfo, Status, TableActor,
+    chat::table_notice,
+    wire::{game_event_message, game_events},
+};
+use crate::errors::CommandResult;
+use crate::model::{Snapshot, TableSnapshot};
+use crate::store::Commit;
+use crate::{
+    model::{IDLE_TIMEOUT_MS, MS_PER_SECOND, NoteOwner, Phase, wire_options},
+    transport::{Session, frame},
+};
+use anyhow::Context;
+use hanabi_engine::PlayerAction;
+use hanabi_engine::{CompletionTiming, EndCondition, Recipient};
+use hanabi_protocol::MAX_NOTE_LENGTH;
+use hanabi_protocol::{CardOrder, Chat, ChatTyping, MIN_PLAYERS, TableRef, ViewMode};
+use hanabi_protocol::{ClientRequest, ReplyData};
+use hanabi_protocol::{PlayerIndex, UserId};
+use std::sync::Arc;
+
+/// What a `pause` or `pauseQueue` request changes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PauseChange {
+    Paused(bool),
+    Queued(bool),
+}
+
+impl TableActor {
+    /// Runs a command that only a game in progress accepts.
+    pub(super) async fn live_command(
+        &mut self,
+        session: Arc<Session>,
+        message: ClientRequest,
+    ) -> CommandResult<()> {
+        match message {
+            ClientRequest::PlayerAction(r) => self.action(session, r.action).await,
+            ClientRequest::TableTerminate(_) => self.terminate(session, None).await,
+            ClientRequest::TableTerminateVote(r) => self.terminate(session, Some(r.voted)).await,
+            ClientRequest::Pause(r) => self.pause(session, PauseChange::Paused(r.paused)).await,
+            ClientRequest::PauseQueue(r) => {
+                self.pause(session, PauseChange::Queued(r.queued)).await
+            }
+            ClientRequest::IdleReset(_) => self.idle_reset(session).await,
+            ClientRequest::Note(r) => self.note(session, r.order, &r.text).await,
+            message @ (ClientRequest::TagAdd(_)
+            | ClientRequest::TagRemove(_)
+            | ClientRequest::TagRemoveAll(_)) => self.tag_message(session, message).await,
+            message => Err(wrong_phase(&message)),
+        }
+    }
+    /// The game in progress. Commands that use it run only while a game is live.
+    fn live(&self) -> CommandResult<&Snapshot> {
+        match &self.table.phase {
+            Phase::Live { snapshot, .. } => Ok(snapshot),
+            _ => bail_internal!("A live command ran outside a live game"),
+        }
+    }
+    async fn action(&mut self, session: Arc<Session>, a: PlayerAction) -> CommandResult<()> {
+        ensure_or_reject!(self.attending(&session), "Reattend before acting");
+        let seat = self.seat(&session)?;
+        let old = self.live()?;
+        hanabi_engine::validate_action(old.game.state(), seat, &a)?;
+        ensure_or_reject!(
+            !old.paused(),
+            "You cannot perform a game action when the game is paused."
+        );
+        let from = old.game.events.len();
+        let mut next = self.candidate();
+        let s = game_mut(&mut next)?;
+        if let Some(time) = s.game.options.time_control {
+            s.clocks[seat] += time.per_turn_seconds.get() * MS_PER_SECOND;
+        }
+        let timing = CompletionTiming {
+            player_times: s.clocks.clone(),
+            duration: s.duration,
+        };
+        s.game.apply_timed(seat, a, Some(timing))?;
+        s.timer_started = true;
+        s.turn_elapsed = 0;
+        s.idle_remaining = IDLE_TIMEOUT_MS;
+        s.maintenance_applied = false;
+        let active = s.game.active_player_index;
+        let mut paused_by = None;
+        if s.game.end.is_none() && s.queued_pauses[active] {
+            s.queued_pauses[active] = false;
+            s.paused_by = PlayerIndex::new(active);
+            paused_by = Some(s.players[active].name.clone());
+        }
+        let notice = paused_by.and_then(|name| self.pause_notice(&mut next, &name, true));
+        self.persist_turn(next, from).await?;
+        if let Some(notice) = notice {
+            let mut e = self.effects();
+            self.add_chat(&mut e, &notice);
+            self.publish(e).await?;
+        }
+        Ok(())
+    }
+    /// Posts that a player paused or unpaused the game. Users who had read all of the chat also
+    /// read the notice, since the game already shows the pause.
+    fn pause_notice(&mut self, next: &mut TableSnapshot, name: &str, paused: bool) -> Option<Chat> {
+        let read_all = next.chat.len();
+        let notice = table_notice(
+            next,
+            &format!(
+                "{} {}paused the game.",
+                name,
+                if paused { "" } else { "un" }
+            ),
+        )?;
+        for read in self.chat_read.values_mut() {
+            if *read == read_all {
+                *read = next.chat.len();
+            }
+        }
+        Some(notice)
+    }
+    /// Sends the game's events from position `from` on. For a game that just finished,
+    /// `seed_games` is how many saved games use its seed, or `None` when it has no seed.
+    pub(super) async fn transitions(
+        &self,
+        from: usize,
+        seed_games: Option<i64>,
+    ) -> CommandResult<()> {
+        let s = self.table.game().context("Missing game")?;
+        let replay = matches!(self.table.phase, Phase::Replay { .. });
+        let mut e = self.effects();
+        for a in self.audience().filter(|a| a.loaded || a.synced) {
+            let recipient = if let Some(seat) = self
+                .table
+                .players()
+                .iter()
+                .position(|p| p.is(a.session.user))
+            {
+                Recipient::Player {
+                    player_index: hanabi_engine::int(seat),
+                }
+            } else {
+                Recipient::Spectator {
+                    shadowing_player_index: a.shadow.map(i32::from),
+                }
+            };
+            let events = hanabi_engine::events_for_recipient(
+                s.game.state(),
+                recipient,
+                Some(&s.game.events[from..]),
+            )?;
+            if !events.is_empty() {
+                e.messages.push((
+                    a.session.clone(),
+                    frame(
+                        hanabi_protocol::event::GAME_EVENT,
+                        game_event_message(self.table.id, game_events(&events)),
+                    ),
+                ));
+            }
+        }
+        if replay {
+            self.spectator_messages(&mut e);
+            let count = seed_games;
+            let finished_at = hanabi_protocol::Timestamp::from(
+                s.finished.context("A finished game has no finish time")?,
+            );
+            let deck = Self::card_identities(s);
+            let events = game_events(&s.game.state().events);
+            for a in self.audience() {
+                e.statuses.push((
+                    a.session.clone(),
+                    if self.table.visible {
+                        Status::SharedReplay
+                    } else {
+                        Status::Replay
+                    },
+                    Some(self.table.id),
+                ));
+                if s.players.iter().any(|p| p.is(a.session.user))
+                    && let Some(history) = s.history(count)
+                {
+                    e.messages.push((
+                        a.session.clone(),
+                        frame(hanabi_protocol::event::GAME_HISTORY_ADDED, history),
+                    ));
+                }
+                e.messages.push((
+                    a.session.clone(),
+                    frame(
+                        hanabi_protocol::event::GAME_FINISHED,
+                        hanabi_protocol::GameFinished {
+                            table_id: self.table.id,
+                            finished_at: finished_at.clone(),
+                            deck: deck.clone(),
+                            events: events.clone(),
+                            notes: self.observer_notes(a),
+                            view: self
+                                .shared_replay_view(s, &a.session, Self::our_player_index(s, a))
+                                .context("A finished game is not a shared replay")?,
+                            shared_replay: self
+                                .shared_replay_state()
+                                .context("A finished game is not a shared replay")?,
+                        },
+                    ),
+                ));
+            }
+        } else {
+            self.add_all(&mut e, hanabi_protocol::event::CLOCK, self.clock()?);
+            if s.paused() {
+                self.pause_messages(&mut e, s);
+            }
+        }
+        self.publish(e).await
+    }
+    fn pause_message(&self, s: &Snapshot, session: &Session) -> crate::transport::Frame {
+        frame(
+            hanabi_protocol::event::PAUSE,
+            hanabi_protocol::Pause {
+                table_id: self.table.id,
+                pause: pause_state(s, session),
+            },
+        )
+    }
+    /// Tells everyone at the table whether the game is paused.
+    fn pause_messages(&self, e: &mut super::Effects, s: &Snapshot) {
+        for a in self.audience() {
+            e.messages
+                .push((a.session.clone(), self.pause_message(s, &a.session)));
+        }
+    }
+    /// Ends the game now, or with a `ballot`, casts or takes back the sender's vote to end it.
+    async fn terminate(
+        &mut self,
+        session: Arc<Session>,
+        ballot: Option<bool>,
+    ) -> CommandResult<()> {
+        let vote = ballot.is_some();
+        ensure_or_reject!(self.attending(&session), "You are not attending");
+        let seat = self.seat(&session)?;
+        let from = self.live()?.game.events.len();
+        let mut next = self.candidate();
+        let s = game_mut(&mut next)?;
+        let mut votes = None;
+        let mut terminate = !vote;
+        if let Some(voted) = ballot {
+            s.votes[seat] = voted;
+            let seats = s
+                .votes
+                .iter()
+                .enumerate()
+                .filter(|(_, v)| **v)
+                .map(|(i, _)| i)
+                .collect::<Vec<_>>();
+            terminate = seats.len() >= votes_needed(s.players.len());
+            votes = Some(seats);
+        }
+        if terminate {
+            s.game.terminate(
+                seat,
+                if vote {
+                    EndCondition::TerminatedByVote
+                } else {
+                    EndCondition::TerminatedByPlayer
+                },
+                (!vote).then_some(seat),
+                votes,
+                Some(CompletionTiming {
+                    player_times: s.clocks.clone(),
+                    duration: s.duration,
+                }),
+            )?;
+        }
+        let outcome = self.persist_with(next, Commit::default()).await?;
+        let mut e = self.effects();
+        // A vote that ends the game has already made it a replay. Only the voter learns of the vote:
+        // the votes of others would tell a player what their teammates think of the game.
+        if vote && !terminate {
+            e.messages.push((
+                session.clone(),
+                frame(
+                    hanabi_protocol::event::VOTES,
+                    hanabi_protocol::Votes {
+                        table_id: self.table.id,
+                        votes: seat_votes(self.live()?, seat)?,
+                    },
+                ),
+            ));
+        }
+        self.publish(e).await?;
+        if terminate {
+            self.transitions(from, outcome.seed_games).await?;
+        }
+        Ok(())
+    }
+    /// A player keeps an idle game going, restarting its idle timer.
+    async fn idle_reset(&mut self, session: Arc<Session>) -> CommandResult<()> {
+        ensure_or_reject!(self.attending(&session), "Not attending");
+        self.seat(&session)?;
+        self.live()?;
+        let mut next = self.candidate();
+        next.game_mut().context("Missing game")?.idle_remaining = IDLE_TIMEOUT_MS;
+        // Like arrows and sounds, an idle reset only restarts the idle timer, so it skips the durable
+        // write.
+        self.apply_without_checkpoint(next)?;
+        let mut e = self.effects();
+        self.add_all(
+            &mut e,
+            hanabi_protocol::event::IDLE_RESET,
+            TableRef {
+                table_id: self.table.id,
+            },
+        );
+        self.publish(e).await
+    }
+    async fn pause(&mut self, session: Arc<Session>, mut change: PauseChange) -> CommandResult<()> {
+        ensure_or_reject!(self.attending(&session), "Not attending");
+        let seat = self.seat(&session)?;
+        let old = self.live()?;
+        ensure_or_reject!(
+            old.game.options.time_control.is_some(),
+            "This is not a timed game"
+        );
+        if change == PauseChange::Queued(true) && seat == old.game.active_player_index {
+            change = PauseChange::Paused(true);
+        }
+        ensure_or_reject!(
+            match change {
+                PauseChange::Paused(paused) => old.paused() != paused,
+                PauseChange::Queued(queued) => old.queued_pauses[seat] != queued,
+            },
+            "Pause setting already applied"
+        );
+        let mut next = self.candidate();
+        let s = game_mut(&mut next)?;
+        let mut notice = None;
+        match change {
+            PauseChange::Queued(queued) => s.queued_pauses[seat] = queued,
+            PauseChange::Paused(paused) => {
+                s.paused_by = if paused { PlayerIndex::new(seat) } else { None };
+                if !s.paused() {
+                    s.turn_elapsed = 0;
+                }
+                let paused = s.paused();
+                notice = self.pause_notice(&mut next, &session.name, paused);
+            }
+        }
+        self.persist(next).await?;
+        let s = self.live()?;
+        let mut e = self.effects();
+        if matches!(change, PauseChange::Paused(_)) {
+            self.pause_messages(&mut e, s);
+            self.add_all(&mut e, hanabi_protocol::event::CLOCK, self.clock()?);
+        } else {
+            e.messages
+                .push((session.clone(), self.pause_message(s, &session)));
+        }
+        if let Some(notice) = notice {
+            self.add_chat(&mut e, &notice);
+        }
+        self.publish(e).await
+    }
+    async fn note(
+        &mut self,
+        session: Arc<Session>,
+        card: CardOrder,
+        note: &str,
+    ) -> CommandResult<()> {
+        ensure_or_reject!(self.attending(&session), "Not attending");
+        self.live()?;
+        let order = card.index();
+        let text = crate::accounts::truncate_to_max_chars(note, MAX_NOTE_LENGTH);
+        let text = crate::accounts::remove_disallowed_characters(text)
+            .trim()
+            .to_owned();
+        ensure_or_reject!(
+            crate::accounts::max_consecutive_marks(&text) <= crate::accounts::MAX_CONSECUTIVE_MARKS,
+            "Notes cannot contain more than {} consecutive diacritics.",
+            crate::accounts::MAX_CONSECUTIVE_MARKS
+        );
+        let seat = self.table.players().iter().position(|p| p.is(session.user));
+        let mut next = self.candidate();
+        let s = game_mut(&mut next)?;
+        let size = s.game.deck.len() + s.game.stacks.len();
+        ensure_or_reject!(order < size, "Invalid note order");
+        if let Some(seat) = seat {
+            s.notes[seat][order].clone_from(&text);
+        } else {
+            s.spectator_notes
+                .entry(session.user)
+                .or_insert_with(|| NoteOwner {
+                    name: session.name.clone(),
+                    notes: vec![String::new(); size],
+                })
+                .notes[order]
+                .clone_from(&text);
+        }
+        self.persist(next).await?;
+        let mut e = self.effects();
+        let message = frame(
+            hanabi_protocol::event::NOTE,
+            hanabi_protocol::Note {
+                table_id: self.table.id,
+                order: card,
+                note: hanabi_protocol::AuthorNote {
+                    username: session.name.as_str().into(),
+                    text,
+                    spectator: seat.is_none(),
+                },
+            },
+        );
+        for a in self.audience().filter(|a| {
+            a.spectator
+                && a.session.user != session.user
+                && seat.map_or_else(
+                    || Self::sees_spectator_notes(a, session.user),
+                    |seat| self.sees_player_notes(a, seat),
+                )
+        }) {
+            e.messages.push((a.session.clone(), message.clone()));
+        }
+        self.publish(e).await
+    }
+    /// Whether `a` may see the notes of the player in `seat`.
+    fn sees_player_notes(&self, a: &Attendance, seat: usize) -> bool {
+        a.shadow.is_none_or(|shadow| shadow.index() == seat)
+            || matches!(self.table.phase, Phase::Replay { .. })
+    }
+    /// Whether `a` may see the notes of the spectator `user`.
+    fn sees_spectator_notes(a: &Attendance, user: UserId) -> bool {
+        user == a.session.user || a.shadow.is_none()
+    }
+    pub(super) fn observer_notes(&self, a: &Attendance) -> Vec<hanabi_protocol::AuthorNotes> {
+        let Some(s) = self.table.game() else {
+            return vec![];
+        };
+        let mut notes = vec![];
+        for (i, p) in s.players.iter().enumerate() {
+            if self.sees_player_notes(a, i) {
+                notes.push(hanabi_protocol::AuthorNotes {
+                    username: p.name.clone().into(),
+                    notes: s.notes[i].clone(),
+                    spectator: false,
+                });
+            }
+        }
+        for (id, n) in &s.spectator_notes {
+            if Self::sees_spectator_notes(a, *id) {
+                notes.push(hanabi_protocol::AuthorNotes {
+                    username: n.name.clone().into(),
+                    notes: n.notes.clone(),
+                    spectator: true,
+                });
+            }
+        }
+        for spectator in self
+            .audience()
+            .filter(|p| p.spectator && !s.spectator_notes.contains_key(&p.session.user))
+        {
+            if a.shadow.is_none() || spectator.session.user == a.session.user {
+                notes.push(hanabi_protocol::AuthorNotes {
+                    username: spectator.session.name.clone().into(),
+                    notes: vec![String::new(); s.game.deck.len() + s.game.stacks.len()],
+                    spectator: true,
+                });
+            }
+        }
+        notes
+    }
+    /// How `session` views the table's shared replay from `our_player_index`, or `None` if the
+    /// table is not a shared replay.
+    fn shared_replay_view(
+        &self,
+        s: &Snapshot,
+        session: &Session,
+        our_player_index: Option<PlayerIndex>,
+    ) -> Option<hanabi_protocol::SharedReplayView> {
+        let Phase::Replay { replay, .. } = &self.table.phase else {
+            return None;
+        };
+        self.table
+            .visible
+            .then(|| hanabi_protocol::SharedReplayView {
+                game_id: s.game_id,
+                our_player_index,
+                spoiler_free: replay.spoiler_free,
+                can_play_again: self.can_play_again(session),
+                // A review of a game just played begins when the game ends; a replay of an older
+                // game begins when its table is created.
+                replay_started_at: hanabi_protocol::Timestamp::from(
+                    s.finished
+                        .map_or(self.table.created, |f| f.max(self.table.created)),
+                ),
+            })
+    }
+    /// Where the table's shared replay is now, or `None` if the table is not a shared replay.
+    fn shared_replay_state(&self) -> Option<hanabi_protocol::SharedReplayState> {
+        let Phase::Replay { replay, .. } = &self.table.phase else {
+            return None;
+        };
+        self.table
+            .visible
+            .then(|| hanabi_protocol::SharedReplayState {
+                owner: self.table.owner.clone(),
+                turn: replay.segment,
+                efficiency_modifier: replay.efficiency_modifier,
+                restart_decliners: self.restart_decliners(),
+                hypothetical: replay
+                    .hypothetical
+                    .then(|| hanabi_protocol::ActiveHypothetical {
+                        show_drawn_cards: replay.show_drawn_cards,
+                        events: replay.hypothetical_actions.clone(),
+                    }),
+            })
+    }
+    /// The seat that the attendee sees the game from: the one they shadow, or else their own.
+    fn our_player_index(s: &Snapshot, a: &Attendance) -> Option<PlayerIndex> {
+        let user = a.session.user;
+        let seat = s.players.iter().position(|p| p.is(user));
+        let display_seat = seat.or_else(|| s.players.iter().position(|p| p.name == a.session.name));
+        a.shadow.or_else(|| display_seat.and_then(PlayerIndex::new))
+    }
+    pub(super) async fn info(
+        &self,
+        session: Arc<Session>,
+        part: GameInfo,
+    ) -> CommandResult<Option<ReplyData>> {
+        ensure_or_reject!(
+            self.attending(&session),
+            "Reattend before requesting private game data"
+        );
+        let s = self.table.game().context("No available game")?;
+        let a = self.attendees.get(&session.user).expect("attendee");
+        let replay = matches!(self.table.phase, Phase::Replay { .. });
+        let seat = s.players.iter().position(|p| p.is(session.user));
+        let mut e = self.effects();
+        let data = if part == GameInfo::Init {
+            let our_player_index = Self::our_player_index(s, a);
+            let shared_replay = self.shared_replay_view(s, &session, our_player_index);
+            let init = hanabi_protocol::GameInit {
+                player_names: s.players.iter().map(|p| p.name.as_str().into()).collect(),
+                mode: match (shared_replay, a.shadow) {
+                    (Some(view), _) => ViewMode::SharedReplay(view),
+                    (None, _) if replay => ViewMode::SoloReplay {
+                        game_id: s.game_id,
+                        our_player_index,
+                    },
+                    (None, Some(our_player_index)) => ViewMode::Shadowing { our_player_index },
+                    (None, None) if a.spectator => ViewMode::Spectating {},
+                    (None, None) => ViewMode::Playing {
+                        our_player_index: our_player_index.context("Missing player")?,
+                    },
+                },
+                custom_deal: self.table.extra.custom_seed.is_some(),
+                seed: s.seed.clone().map(Into::into),
+                started_at: hanabi_protocol::Timestamp::from(s.started),
+                finished_at: s.finished.map(hanabi_protocol::Timestamp::from),
+                options: wire_options(&s.game.options),
+                characters: if s.game.options.detrimental_characters {
+                    s.game
+                        .players
+                        .iter()
+                        .map(|p| {
+                            crate::game::character_assignment(
+                                p.character().context("A player has no character")?,
+                                p.assigned_value(),
+                            )
+                        })
+                        .collect::<anyhow::Result<_>>()?
+                } else {
+                    vec![]
+                },
+            };
+            Some(hanabi_protocol::reply::GAME_INIT.data(init))
+        } else {
+            let recipient = if replay {
+                Recipient::Spectator {
+                    shadowing_player_index: None,
+                }
+            } else if !a.spectator {
+                Recipient::Player {
+                    player_index: hanabi_engine::int(seat.context("Missing player")?),
+                }
+            } else {
+                Recipient::Spectator {
+                    shadowing_player_index: a.shadow.map(i32::from),
+                }
+            };
+            let list = hanabi_engine::events_for_recipient(s.game.state(), recipient, None)?;
+            // A player of a game in progress sees only their own notes and votes.
+            let player_seat = seat.filter(|_| !replay && !a.spectator);
+            let notes = if replay || a.spectator {
+                self.observer_notes(a)
+            } else {
+                player_seat
+                    .map(|seat| hanabi_protocol::AuthorNotes {
+                        username: s.players[seat].name.as_str().into(),
+                        notes: s.notes[seat].clone(),
+                        spectator: false,
+                    })
+                    .into_iter()
+                    .collect()
+            };
+            let phase = match &self.table.phase {
+                Phase::Replay { .. } => hanabi_protocol::GamePhase::Replay {
+                    deck: Self::card_identities(s),
+                    shared_replay: self.shared_replay_state(),
+                },
+                _ => hanabi_protocol::GamePhase::Playing {
+                    clock: self.clock()?.clock,
+                    pause: pause_state(s, &session),
+                    connections: self.connections().connections,
+                    votes: player_seat.map(|seat| seat_votes(s, seat)).transpose()?,
+                    idle_remaining_ms: self.idle_warning_remaining(),
+                },
+            };
+            let state = hanabi_protocol::GameState {
+                table_id: self.table.id,
+                events: game_events(&list),
+                notes,
+                spectators: self.spectators(),
+                phase,
+            };
+            e.messages.push((
+                session.clone(),
+                frame(hanabi_protocol::event::GAME_STATE, state),
+            ));
+            self.chat_history(&mut e, &session)?;
+            for a in self
+                .audience()
+                .filter(|a| a.session.user != session.user && a.typing_until.is_some())
+            {
+                e.messages.push((
+                    session.clone(),
+                    frame(
+                        hanabi_protocol::event::CHAT_TYPING,
+                        ChatTyping {
+                            table_id: self.table.id,
+                            username: a.session.name.clone().into(),
+                            typing: true,
+                        },
+                    ),
+                ));
+            }
+            None
+        };
+        self.publish(e).await?;
+        Ok(data)
+    }
+}
+
+/// How many votes end a game with this many players.
+fn votes_needed(players: usize) -> usize {
+    if players == MIN_PLAYERS {
+        // A majority of two players would let either one end the game alone.
+        players
+    } else {
+        players.div_ceil(2)
+    }
+}
+
+/// Whether the game is paused, as the user in `session` sees it.
+fn pause_state(s: &Snapshot, session: &Session) -> hanabi_protocol::PauseState {
+    hanabi_protocol::PauseState {
+        pausing_player_index: s.paused_by,
+        queued: s
+            .players
+            .iter()
+            .position(|p| p.is(session.user))
+            .is_some_and(|seat| s.queued_pauses[seat]),
+    }
+}
+
+fn seat_votes(s: &Snapshot, seat: usize) -> anyhow::Result<hanabi_protocol::VoteState> {
+    Ok(hanabi_protocol::VoteState {
+        voted: s.votes[seat],
+        num_votes_needed: hanabi_protocol::VoteCount::new(votes_needed(s.players.len()))
+            .context("Too many votes needed")?,
+    })
+}

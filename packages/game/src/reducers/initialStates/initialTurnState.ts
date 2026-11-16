@@ -1,15 +1,12 @@
-import type { TurnState } from "../../interfaces/TurnState";
-import type { PlayerIndex } from "../../types/PlayerIndex";
+import type { TurnState } from "../../interfaces/TurnState.ts";
 
-export function getInitialTurnState(
-  startingPlayerIndex: PlayerIndex = 0,
-): TurnState {
+export function getInitialTurnState(): TurnState {
   return {
-    segment: null, // eslint-disable-line unicorn/no-null
+    segment: undefined,
     turnNum: 0,
-    currentPlayerIndex: startingPlayerIndex,
+    currentPlayerIndex: 0,
     playOrderInverted: false,
-    endTurnNum: null, // eslint-disable-line unicorn/no-null
+    endTurnNum: undefined,
     cardsPlayedOrDiscardedThisTurn: 0,
     cardsDiscardedThisTurn: 0,
     cluesGivenThisTurn: 0,

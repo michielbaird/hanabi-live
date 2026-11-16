@@ -1,0 +1,78 @@
+<!doctype html>
+<!--
+  Alpha by HTML5 UP
+  html5up.net | @ajlkn
+  Free for personal and commercial use under the CCA 3.0 license (html5up.net/license)
+-->
+<html lang="en">
+  <head>
+    <title>
+      {% if isDev %} Test {% else %} {{ projectName }} {% if title != "Main" %}
+      - {{ title }} {% endif %} {% endif %}
+    </title>
+    <meta charset="utf-8" />
+    <!-- We remove "user-scalable=no" since we are removing the mobile nav and want them to be able to zoom. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="A place to play Hanab online, a cooperative card game of logic and reasoning."
+    />
+    <meta
+      name="keywords"
+      content="hanab,hanabi,keldon,bga,board,game,arena,boardgame,boardgamearena,card,cards,strategy,coop,cooperative,logic,reasoning"
+    />
+    {% include "theme-init.html" %} {% if not isDev %}
+    <!-- Load the Critical CSS first. -->
+    <link
+      rel="stylesheet"
+      type="text/css"
+      href="/public/css/critical.min.css?{{ version }}"
+    />
+    {% endif %}
+    <!-- Preload fonts. -->
+    <link
+      rel="preload"
+      as="font"
+      crossorigin="anonymous"
+      type="font/woff2"
+      href="/public/webfonts/fa-solid-900.woff2"
+    />
+    {% if isDev %}
+    <link rel="stylesheet" type="text/css" href="/public/css/main.css" />
+    {% else %}
+    <!-- Load the rest of the CSS without blocking the first render, which the critical CSS styles. -->
+    <link
+      rel="preload"
+      as="style"
+      href="/public/css/main.{{ version }}.min.css"
+      onload="
+        this.onload = null;
+        this.rel = 'stylesheet';
+      "
+    />
+    <noscript>
+      <link
+        rel="stylesheet"
+        type="text/css"
+        href="/public/css/main.{{ version }}.min.css"
+      />
+    </noscript>
+    {% endif %}
+    <link
+      rel="icon"
+      type="image/png"
+      sizes="32x32"
+      href="/public/img/favicon-32x32.png"
+    />
+    <link
+      rel="icon"
+      type="image/png"
+      sizes="16x16"
+      href="/public/img/favicon-16x16.png"
+    />
+  </head>
+
+  <body>
+    {% block body %}{% endblock %}
+  </body>
+</html>

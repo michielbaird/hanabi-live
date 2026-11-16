@@ -1,0 +1,353 @@
+use crate::{
+    Character, CharacterState, Clue, EngineCard, EngineEvent, EngineState, PlayerAction,
+    StackDirection, Variant, get_variant, int, is_card_touched, types::Move,
+};
+use hanabi_protocol::{MAX_RANK, MIN_RANK, START_CARD_RANK};
+use std::collections::HashSet;
+
+/// The turns left after the last card is drawn when a Contrarian plays.
+const CONTRARIAN_FINAL_TURNS: i32 = 2;
+/// The fewest stacks that must reach a card's rank before a Follower can play it.
+const FOLLOWER_MIN_STACKS: usize = 2;
+
+pub(crate) fn variant_for(state: &EngineState) -> &'static Variant {
+    get_variant(&state.options.variant_name).expect("validated engine variant")
+}
+pub fn clue_cost(state: &EngineState) -> i32 {
+    clue_cost_for(variant_for(state))
+}
+
+/// The clue tokens that a clue costs in a variant: clue-starved variants count each token twice.
+pub fn clue_cost_for(variant: &Variant) -> i32 {
+    if variant.clue_starved { 2 } else { 1 }
+}
+
+/// The cards that a clue action touches. Empty for an action that is not a clue.
+pub fn touched_orders(state: &EngineState, action: &PlayerAction) -> Vec<usize> {
+    match Move::of(*action) {
+        Move::Clue { target, clue } => touched_by(state, target, clue),
+        Move::Card { .. } => vec![],
+    }
+}
+
+/// The cards in `target`'s hand that `clue` touches.
+pub(crate) fn touched_by(state: &EngineState, target: usize, clue: Clue) -> Vec<usize> {
+    let Some(player) = state.players.get(target) else {
+        return vec![];
+    };
+    player
+        .hand
+        .iter()
+        .copied()
+        .filter(|&order| {
+            let card = &state.deck[order];
+            is_card_touched(
+                variant_for(state),
+                clue.clue_type,
+                clue.value,
+                card.suit_index,
+                card.rank,
+            )
+        })
+        .collect()
+}
+
+pub(crate) fn sees_card(state: &EngineState, viewer: usize, holder: usize, order: usize) -> bool {
+    if !state.options.detrimental_characters {
+        return true;
+    }
+    let n = state.players.len();
+    match state.players[viewer].character() {
+        Some(Character::BlindSpot) if holder == (viewer + 1) % n => false,
+        Some(Character::Oblivious) if holder == (viewer + n - 1) % n => false,
+        Some(Character::SlowWitted) => state.players[holder].hand.last() != Some(&order),
+        _ => true,
+    }
+}
+
+pub(crate) fn draw_card(state: &mut EngineState, player: usize) {
+    if state.deck_index >= state.deck.len() {
+        return;
+    }
+    let card = &state.deck[state.deck_index];
+    state.deck_index += 1;
+    state.players[player].hand.push(card.order);
+    state.events.push(EngineEvent::Draw {
+        player_index: player,
+        order: card.order,
+        suit_index: Some(card.suit_index),
+        rank: Some(card.rank),
+    });
+    if state.options.detrimental_characters
+        && state.players[player].hand.len() > 1
+        && state.players.iter().any(|p| p.is(Character::SlowWitted))
+    {
+        let hand = &state.players[player].hand;
+        let previous = &state.deck[hand[hand.len() - 2]];
+        state.events.push(EngineEvent::CardIdentity {
+            player_index: player,
+            order: previous.order,
+            suit_index: Some(previous.suit_index),
+            rank: Some(previous.rank),
+        });
+    }
+    if state.deck_index == state.deck.len() && !state.options.all_or_nothing {
+        // Each player gets one more turn, unless a Contrarian shortens the final round.
+        let final_turns = if state.options.detrimental_characters
+            && state.players.iter().any(|p| p.is(Character::Contrarian))
+        {
+            CONTRARIAN_FINAL_TURNS
+        } else {
+            int(state.players.len())
+        };
+        state.end_turn = Some(state.turn + final_turns + 1);
+    }
+}
+
+pub(crate) fn remove_card(state: &mut EngineState, player: usize, order: usize) {
+    let hand = &mut state.players[player].hand;
+    let index = hand
+        .iter()
+        .position(|&o| o == order)
+        .expect("validated hand card");
+    hand.remove(index);
+    if state.options.detrimental_characters && state.deck[order].insistent_touched {
+        for &remaining in hand.iter() {
+            state.deck[remaining].insistent_touched = false;
+        }
+        for player in &mut state.players {
+            if let Some(CharacterState::Insistent { cluing }) = &mut player.character_state {
+                *cluing = false;
+            }
+        }
+    }
+}
+
+fn needed_ranks(state: &EngineState, suit: usize) -> Vec<i32> {
+    let v = variant_for(state);
+    let stack = state.stacks[suit];
+    let direction = state.play_stack_directions[suit];
+    if v.has_reversed_suits() {
+        return match direction {
+            StackDirection::Undecided => {
+                if stack.is_none() {
+                    vec![MIN_RANK, MAX_RANK, START_CARD_RANK]
+                } else {
+                    vec![MIN_RANK + 1, MAX_RANK - 1]
+                }
+            }
+            StackDirection::Up => vec![stack.map_or(MIN_RANK, |rank| rank + 1)],
+            // Only a reversed suit outside "Up or Down" goes down from an empty stack.
+            StackDirection::Down => vec![stack.map_or(MAX_RANK, |rank| rank - 1)],
+            StackDirection::Finished => vec![],
+        };
+    }
+    if v.sudoku {
+        return if direction == StackDirection::Finished {
+            vec![]
+        } else if let Some(stack) = stack {
+            vec![stack % v.stack_size + 1]
+        } else {
+            v.ranks
+                .iter()
+                .copied()
+                .filter(|r| !state.stack_starts.contains(&Some(*r)))
+                .collect()
+        };
+    }
+    match stack {
+        Some(MAX_RANK) => vec![],
+        _ => vec![stack.map_or(MIN_RANK, |rank| rank + 1)],
+    }
+}
+
+pub(crate) fn try_play(state: &mut EngineState, order: usize) -> bool {
+    let v = variant_for(state);
+    let card = &state.deck[order];
+    let suit = card.suit_index;
+    let rank = card.rank;
+    let stack = state.stacks[suit];
+    let direction = state.play_stack_directions[suit];
+    if v.sudoku {
+        if let (Some(stack), Some(start)) = (stack, state.stack_starts[suit]) {
+            if direction == StackDirection::Finished
+                || rank != next_sudoku_rank(stack, v.stack_size)
+            {
+                return false;
+            }
+            if rank == previous_sudoku_rank(start, v.stack_size) {
+                state.play_stack_directions[suit] = StackDirection::Finished;
+            }
+        } else {
+            if state.stack_starts.contains(&Some(rank)) {
+                return false;
+            }
+            state.stack_starts[suit] = Some(rank);
+        }
+        return true;
+    }
+    if !needed_ranks(state, suit).contains(&rank) {
+        return false;
+    }
+    if v.has_reversed_suits() {
+        if direction == StackDirection::Undecided {
+            if rank == MIN_RANK || rank == MIN_RANK + 1 {
+                state.play_stack_directions[suit] = StackDirection::Up;
+            } else if rank == MAX_RANK - 1 || rank == MAX_RANK {
+                state.play_stack_directions[suit] = StackDirection::Down;
+            }
+        } else if (direction == StackDirection::Up && rank == MAX_RANK)
+            || (direction == StackDirection::Down && rank == MIN_RANK)
+        {
+            state.play_stack_directions[suit] = StackDirection::Finished;
+        }
+    }
+    true
+}
+
+pub(crate) fn follower_misplays(state: &EngineState, player: usize, card: &EngineCard) -> bool {
+    if !state.options.detrimental_characters || !state.players[player].is(Character::Follower) {
+        return false;
+    }
+    let v = variant_for(state);
+    let size = int(v.ranks.len());
+    let reached = state
+        .stacks
+        .iter()
+        .enumerate()
+        .filter(|&(suit, &stack)| match (stack, state.stack_starts[suit]) {
+            (Some(stack), Some(start)) if v.sudoku => {
+                (stack - start + size) % size >= (card.rank - start + size) % size
+            }
+            _ if v.sudoku => false,
+            _ => stack.is_some_and(|stack| stack >= card.rank),
+        })
+        .count();
+    reached < FOLLOWER_MIN_STACKS
+}
+
+fn available_ranks(state: &EngineState, suit: usize) -> HashSet<i32> {
+    state
+        .deck
+        .iter()
+        .filter(|c| c.suit_index == suit && !c.discarded)
+        .map(|c| c.rank)
+        .collect()
+}
+fn reversible_walk(available: &HashSet<i32>, up_or_down: bool, down: bool) -> i32 {
+    if !(available.contains(&if down { MAX_RANK } else { MIN_RANK })
+        || (up_or_down && available.contains(&START_CARD_RANK)))
+    {
+        return 0;
+    }
+    let mut score = 1;
+    let mut rank = if down { MAX_RANK - 1 } else { MIN_RANK + 1 };
+    while (MIN_RANK..=MAX_RANK).contains(&rank) {
+        if !available.contains(&rank) {
+            break;
+        }
+        score += 1;
+        rank += if down { -1 } else { 1 };
+    }
+    score
+}
+/// The rank after `rank` on a sudoku stack of `size` ranks, which wraps from the top to the bottom.
+fn next_sudoku_rank(rank: i32, size: i32) -> i32 {
+    (rank - MIN_RANK + 1) % size + MIN_RANK
+}
+/// The rank before `rank` on a sudoku stack of `size` ranks, which wraps from the bottom to the top.
+fn previous_sudoku_rank(rank: i32, size: i32) -> i32 {
+    (rank - MIN_RANK + size - 1) % size + MIN_RANK
+}
+/// The index of a sudoku slot, which counts up from zero.
+fn slot(value: i32) -> usize {
+    usize::try_from(value).expect("sudoku slots are not negative")
+}
+fn sudoku_scores(available: &HashSet<i32>, size: i32) -> Vec<i32> {
+    let mut scores = vec![size; slot(size)];
+    let mut last_dead = None;
+    for position in 0..size {
+        if !available.contains(&(position + MIN_RANK)) {
+            for write in last_dead.map_or(0, |dead| dead + 1)..position {
+                scores[slot(write)] = position - write;
+            }
+            scores[slot(position)] = 0;
+            last_dead = Some(position);
+        }
+    }
+    if let Some(dead) = last_dead {
+        for write in dead + 1..size {
+            scores[slot(write)] = (scores[0] + size - write).min(size);
+        }
+    }
+    scores
+}
+fn best_assignment(scores: &[Vec<i32>], free: &[i32], index: usize) -> i32 {
+    if index == scores.len() {
+        return 0;
+    }
+    free.iter()
+        .map(|rank| {
+            let remaining: Vec<i32> = free.iter().copied().filter(|r| r != rank).collect();
+            scores[index][slot(*rank - MIN_RANK)] + best_assignment(scores, &remaining, index + 1)
+        })
+        .max()
+        .unwrap_or(0)
+}
+pub fn calculate_max_score(state: &EngineState) -> i32 {
+    let v = variant_for(state);
+    if v.sudoku && !v.has_reversed_suits() {
+        let mut independent = 0;
+        let mut unassigned = vec![];
+        for (suit, &start) in state.stack_starts.iter().enumerate() {
+            let scores = sudoku_scores(&available_ranks(state, suit), v.stack_size);
+            if scores.iter().all(|s| *s == v.stack_size) {
+                independent += v.stack_size;
+            } else if let Some(start) = start {
+                independent += scores[slot(start - 1)];
+            } else {
+                unassigned.push(scores);
+            }
+        }
+        let free: Vec<i32> = v
+            .ranks
+            .iter()
+            .copied()
+            .filter(|r| !state.stack_starts.contains(&Some(*r)))
+            .collect();
+        return independent + best_assignment(&unassigned, &free, 0);
+    }
+    let mut score = 0;
+    for (suit, &direction) in state.play_stack_directions.iter().enumerate() {
+        let available = available_ranks(state, suit);
+        if v.has_reversed_suits() {
+            let up = reversible_walk(&available, v.up_or_down, false);
+            let down = reversible_walk(&available, v.up_or_down, true);
+            score += match direction {
+                StackDirection::Undecided => up.max(down),
+                StackDirection::Up => up,
+                StackDirection::Down => down,
+                StackDirection::Finished => v.stack_size,
+            };
+        } else {
+            for rank in MIN_RANK..=MAX_RANK {
+                if !available.contains(&rank) {
+                    break;
+                }
+                score += 1;
+            }
+        }
+    }
+    score
+}
+pub fn has_remaining_play(state: &EngineState) -> bool {
+    state.stacks.iter().enumerate().any(|(suit, _)| {
+        let ranks = needed_ranks(state, suit);
+        state.deck.iter().any(|card| {
+            card.suit_index == suit
+                && ranks.contains(&card.rank)
+                && !card.discarded
+                && !card.cannot_be_played
+        })
+    })
+}

@@ -1,23 +1,30 @@
-import { assertDefined } from "complete-common";
+import { SECOND_IN_MILLISECONDS, assertDefined } from "complete-common";
 
 type ProgressCallback = (numLoaded: number, size: number) => void;
 type FinishedCallback = () => void;
 type FailedCallback = (filePath: string) => void;
 
-// The list of all game-related images to preload. All of these files should have a ".png"
-// extension.
+/** How many times to retry an image that failed to load before giving up on it. */
+const MAX_IMAGE_RETRIES = 2;
+
+/** The delay before the first retry, which doubles with each retry after it. */
+const IMAGE_RETRY_BASE_DELAY_MILLISECONDS = SECOND_IN_MILLISECONDS;
+
+/**
+ * The list of all game-related images to preload. All of these files should have a ".png"
+ * extension.
+ */
 const FILE_IDS = [
-  "checkbox-on",
-  "checkbox-off",
-  "checkbox-on-disabled",
-  "checkbox-off-disabled",
   "crown",
   "critical",
   "dda",
   "exclamation-mark",
   "eyes",
+  "flashlight",
+  "ghost",
   "home",
   "note",
+  "note-pencil",
   "question-mark",
   "question-mark2",
   "replay",
@@ -46,18 +53,14 @@ export class Loader {
   finished = false;
   failedFiles = new Set<string>();
   imageMap = new Map<string, HTMLImageElement>();
-  progressCallback: ProgressCallback | null = null;
-  finishedCallback: FinishedCallback | null = null;
-  failedCallback: FailedCallback | null = null;
-
-  get failed(): boolean {
-    return this.failedFiles.size > 0;
-  }
+  progressCallback: ProgressCallback | undefined = undefined;
+  finishedCallback: FinishedCallback | undefined = undefined;
+  failedCallback: FailedCallback | undefined = undefined;
 
   constructor() {
     // Build a map of image identifiers to URL paths.
-    for (const fileID of FILE_IDS) {
-      this.filePathMap.set(fileID, `/public/img/${fileID}.png`);
+    for (const fileId of FILE_IDS) {
+      this.filePathMap.set(fileId, `/public/img/${fileId}.png`);
     }
 
     // Add files to the map that do not have a ".png" extension.
@@ -66,32 +69,26 @@ export class Loader {
     this.start();
   }
 
-  start(): void {
-    for (const [fileID, filePath] of this.filePathMap) {
-      this.loadImage(fileID, filePath);
-    }
-
-    this.progress();
-  }
-
-  private loadImage(fileID: string, filePath: string, retryCount = 0): void {
+  private loadImage(fileId: string, filePath: string, retryCount = 0): void {
     const img = new Image();
     img.addEventListener("load", () => {
       this.numLoaded++;
       this.progress();
-      if (this.numLoaded === this.filePathMap.size) {
-        this.finished = true;
-        this.finishedCallback?.();
+      if (this.numLoaded !== this.filePathMap.size) {
+        return;
       }
+
+      this.finished = true;
+      this.finishedCallback?.();
     });
     img.addEventListener("error", () => {
-      if (retryCount < 2) {
+      if (retryCount < MAX_IMAGE_RETRIES) {
         // Retry transient transport failures without counting the image as loaded.
         setTimeout(
           () => {
-            this.loadImage(fileID, filePath, retryCount + 1);
+            this.loadImage(fileId, filePath, retryCount + 1);
           },
-          1000 * 2 ** retryCount,
+          IMAGE_RETRY_BASE_DELAY_MILLISECONDS * 2 ** retryCount,
         );
         return;
       }
@@ -99,12 +96,24 @@ export class Loader {
       this.failedFiles.add(filePath);
       this.failedCallback?.(filePath);
     });
-    this.imageMap.set(fileID, img);
+    this.imageMap.set(fileId, img);
     img.src = filePath;
   }
 
+  get failed(): boolean {
+    return this.failedFiles.size > 0;
+  }
+
+  start(): void {
+    for (const [fileId, filePath] of this.filePathMap) {
+      this.loadImage(fileId, filePath);
+    }
+
+    this.progress();
+  }
+
   progress(): void {
-    if (this.progressCallback !== null) {
+    if (this.progressCallback !== undefined) {
       this.progressCallback(this.numLoaded, this.filePathMap.size);
     }
   }

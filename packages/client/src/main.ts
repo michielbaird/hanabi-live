@@ -2,40 +2,27 @@
 // and then bundled together as a single JavaScript file to serve to end-users.
 
 import { DOMAIN, OLD_DOMAIN } from "@hanabi-live/data";
-import jquery from "jquery";
-import { globals } from "./Globals";
-import { Loader } from "./Loader";
-import * as chat from "./chat";
-import { initErrorListener } from "./errors";
-import * as gameChat from "./game/chat";
-import * as game from "./game/main";
-import * as analysis from "./game/ui/analysis";
-import { backToLobby } from "./game/ui/backToLobby";
-import * as lobbyCreateGame from "./lobby/createGame";
-import * as lobbyHistory from "./lobby/history";
-import { lobbyIdleInit } from "./lobby/lobbyIdleInit";
-import { lobbyKeyboardInit } from "./lobby/lobbyKeyboardInit";
-import { lobbyTutorialInit } from "./lobby/lobbyTutorialInit";
-import * as lobbyLogin from "./lobby/login";
-import * as lobbyNav from "./lobby/nav";
-import * as playerSettings from "./lobby/playerSettings";
-import * as lobbyPregame from "./lobby/pregame";
-import { Screen } from "./lobby/types/Screen";
-import * as lobbyWatchReplay from "./lobby/watchReplay";
-import * as modals from "./modals";
-import * as sounds from "./sounds";
-import * as theme from "./theme";
-import * as tooltips from "./tooltips";
-import { setBrowserAddressBarPath } from "./utils";
-
-// Initialize jQuery:
-// https://stackoverflow.com/questions/56457935/typescript-error-property-x-does-not-exist-on-type-window
-declare global {
-  interface Window {
-    $: JQueryStatic;
-  }
-}
-window.$ = jquery; // eslint-disable-line unicorn/prefer-global-this
+import { mountApp } from "./App.tsx";
+import { globals } from "./Globals.ts";
+import { Loader } from "./Loader.ts";
+import * as chat from "./chat.ts";
+import { HISTORY_HASH, PATH } from "./constants.ts";
+import { initErrorListener } from "./errors.ts";
+import * as gameChat from "./game/chat.ts";
+import * as game from "./game/main.ts";
+import { backToLobby } from "./game/ui/backToLobby.ts";
+import * as lobbyHistory from "./lobby/history.ts";
+import { getOtherScoresSeed } from "./lobby/historyHash.ts";
+import { lobbyIdleInit } from "./lobby/lobbyIdleInit.ts";
+import { lobbyKeyboardInit } from "./lobby/lobbyKeyboardInit.ts";
+import * as lobbyLogin from "./lobby/login.ts";
+import * as lobbyPregame from "./lobby/pregame/pregame.ts";
+import { Screen } from "./lobby/types/Screen.ts";
+import * as modals from "./modals.ts";
+import * as sounds from "./sounds.ts";
+import { store } from "./store.ts";
+import * as tooltips from "./tooltips.ts";
+import { setBrowserAddressBarPath } from "./utils.ts";
 
 // Manually redirect users that are going to wrong URLs.
 if (
@@ -50,92 +37,70 @@ if (
 
 initErrorListener();
 
-$(document).ready(() => {
+/** Starts the client once the page has loaded. */
+function init() {
   globalThis.addEventListener("popstate", () => {
-    if (globalThis.location.pathname !== "/lobby") {
+    if (globalThis.location.pathname !== PATH.LOBBY) {
       globalThis.location.reload();
       return;
     }
 
     const { hash } = globalThis.location;
-    if (globals.currentScreen === Screen.Game) {
+    if (store.getState().session.screen === Screen.Game) {
       backToLobby();
-      setBrowserAddressBarPath("/lobby", hash);
-    } else if (globals.currentScreen === Screen.PreGame) {
+      setBrowserAddressBarPath(PATH.LOBBY, hash);
+    } else if (store.getState().session.screen === Screen.PreGame) {
       lobbyPregame.hide(false);
-      globals.conn!.send("tableUnattend", { tableID: globals.tableID });
-      globals.tableID = -1;
+      globals.connection.send("tableUnattend", {
+        tableId: globals.joinedTableId,
+      });
+      globals.tableId = undefined;
     }
 
-    if (hash.startsWith("#history")) {
-      if (
-        hash === "#history"
-        && globals.currentScreen === Screen.HistoryFriends
-      ) {
-        lobbyHistory.hideFriends();
-      } else {
-        lobbyHistory.show();
-      }
-      if (hash === "#history-friends") {
-        lobbyHistory.showFriends();
-      } else if (hash.startsWith("#history-other-scores-")) {
-        const match = /^#history-other-scores-(friends-)?(.+)$/u.exec(hash);
-        if (match !== null && match[2] !== undefined) {
-          const friends = match[1] !== undefined;
-          if (friends) {
-            lobbyHistory.showFriends();
-          }
-          lobbyHistory.showOtherScoresFromURL(
-            decodeURIComponent(match[2]),
-            friends,
-          );
-        }
+    if (hash.startsWith(HISTORY_HASH)) {
+      lobbyHistory.show();
+      const seed = getOtherScoresSeed(hash);
+      if (seed !== undefined) {
+        lobbyHistory.showOtherScores(seed);
       }
     } else if (
-      globals.currentScreen === Screen.History
-      || globals.currentScreen === Screen.HistoryFriends
-      || globals.currentScreen === Screen.HistoryOtherScores
+      store.getState().session.screen === Screen.History
+      || store.getState().session.screen === Screen.HistoryOtherScores
     ) {
       lobbyHistory.hide();
     }
   });
 
   // Set an event handler for when the entire window loses focus.
-  $(globalThis).blur(() => {
-    if (globals.currentScreen === Screen.Game && globals.ui !== null) {
+  globalThis.addEventListener("blur", () => {
+    if (
+      store.getState().session.screen === Screen.Game
+      && globals.ui !== undefined
+    ) {
       globals.ui.focusLost();
     }
   });
 
   // Now that the page has loaded, initialize and define the functionality of various UI elements.
   modals.init();
+  mountApp();
   chat.init();
   game.init();
   gameChat.init();
   tooltips.initGame();
-  lobbyCreateGame.init();
-  lobbyHistory.init();
   lobbyIdleInit();
   lobbyKeyboardInit();
-  lobbyLogin.init();
-  lobbyNav.init();
-  playerSettings.init();
-  theme.init();
-  analysis.initSettings();
-  lobbyTutorialInit();
-  lobbyWatchReplay.init();
   sounds.init();
 
   // Start preloading some images that we will need for when a game starts.
-  globals.imageLoader = new Loader();
-
-  // For debugging graphics.
-  /*
-  $('body').click((event) => {
-    console.log(`Cursor position: ${event.clientX}, ${event.clientY}`);
-  });
-  */
+  globals.loader = new Loader();
 
   // Now that the UI is initialized, automatically login if the user has cached credentials.
   lobbyLogin.automaticLogin();
-});
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", init);
+} else {
+  init();
+}

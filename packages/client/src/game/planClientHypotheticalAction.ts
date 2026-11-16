@@ -1,0 +1,42 @@
+import type {
+  HypotheticalActionIntent,
+  HypotheticalGameAction,
+  PlanHypotheticalActionContext,
+} from "@hanabi-live/game";
+import { getInitialCardState, planHypotheticalAction } from "@hanabi-live/game";
+
+/** Adapts the client's available card views to the hypothetical planner. */
+export function planClientHypotheticalAction(
+  intent: HypotheticalActionIntent,
+  context: PlanHypotheticalActionContext,
+): readonly HypotheticalGameAction[] | undefined {
+  const { gameState, metadata, variant, cardIdentities, cardViews } = context;
+  if (
+    (intent.type === "play" || intent.type === "discard")
+    && metadata.options.deckPlays
+    && gameState.cardsRemainingInTheDeck === 1
+    && gameState.deck.length === cardIdentities.length - 1
+    && intent.order === gameState.deck.length
+    && cardViews.every((view) => view.state.order !== intent.order)
+  ) {
+    // The bottom card is not drawn yet, so it has no view. Supply only the planner's data.
+    return planHypotheticalAction(intent, {
+      ...context,
+      cardViews: [
+        ...cardViews,
+        {
+          state: getInitialCardState(
+            intent.order,
+            variant,
+            metadata.options.numPlayers,
+          ),
+          isStackBase: false,
+          visibleSuitIndex: undefined,
+          visibleRank: undefined,
+        },
+      ],
+    });
+  }
+
+  return planHypotheticalAction(intent, context);
+}

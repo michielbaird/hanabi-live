@@ -1,0 +1,957 @@
+use super::*;
+use crate::accounts::{normalize_username, test_support::TestDb};
+use serde_json::{Value, json};
+
+fn caller(id: i32, name: &str) -> Identity {
+    Identity {
+        user: UserId::new(id).unwrap(),
+        name: name.into(),
+        normalized_name: normalize_username(name),
+        ip: "127.0.0.1".into(),
+        bot: false,
+    }
+}
+
+/// Changes one setting the way a `settings` command does, after the same check.
+async fn set_setting(pool: &PgPool, id: UserId, name: &str, value: &Value) -> Result<()> {
+    let change =
+        hanabi_protocol::decode::<hanabi_protocol::SettingsChange>(&json!({ name: value }))?;
+    set_settings(pool, id, &change, &[]).await
+}
+
+fn self_data(effects: &[Effect], command: &str) -> Value {
+    effects
+        .iter()
+        .find_map(|effect| match effect {
+            Effect::Publish(Publication::ToSelf(message)) if message.command() == command => {
+                Some(message.data().clone())
+            }
+            Effect::Reply(reply) if reply.request == command => Some(reply.data.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("Missing {command} in {effects:?}"))
+}
+
+#[tokio::test]
+async fn uptime_is_private_before_history_or_discord_publication_postgres() {
+    let Some(db) = TestDb::create().await else {
+        return;
+    };
+    let user = db.user("Alice").await;
+    let who = caller(user, "Alice");
+    let before: i64 = sqlx::query_scalar!("SELECT COUNT(*) AS \"v!\" FROM chat_log")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    let history_before = lobby_history(&db.pool, 100).await.unwrap();
+    for table in [None, Some(hanabi_protocol::TableId::new(42).unwrap())] {
+        let message = crate::actors::client_message(
+            "chat",
+            &table.map_or_else(
+                || json!({"text":"/UpTiMe"}),
+                |table| json!({"text":"/UpTiMe","tableId":table}),
+            ),
+        )
+        .unwrap();
+        let effects = dispatch(&db.pool, "secret", &who, &[], None, message)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            effects.as_slice(),
+            [Effect::RuntimeChat {
+                command: RuntimeCommand::Uptime,
+                ..
+            }]
+        ));
+    }
+    assert!(matches!(classify_chat("/UpTiMe"), Classification::Private));
+    assert!(
+        external_command(&db.pool, "/uptime")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        sqlx::query_scalar!("SELECT COUNT(*) AS \"v!\" FROM chat_log")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap(),
+        before
+    );
+    sqlx::query!(
+        "INSERT INTO chat_log(user_id,source,message) VALUES($1,'user','/UpTiMe')",
+        user
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(lobby_history(&db.pool, 100).await.unwrap(), history_before);
+    db.close().await;
+}
+
+async fn run(
+    pool: &PgPool,
+    caller: &Identity,
+    online: &[OnlineUser],
+    command: &str,
+    data: Value,
+) -> Vec<Effect> {
+    dispatch(
+        pool,
+        "synthetic-lobby-secret",
+        caller,
+        online,
+        None,
+        crate::actors::client_message(command, &data).unwrap(),
+    )
+    .await
+    .unwrap()
+    .unwrap()
+}
+
+/// Runs a lobby command that is refused, and returns the refusal.
+async fn refusal(
+    pool: &PgPool,
+    caller: &Identity,
+    online: &[OnlineUser],
+    command: &str,
+    data: Value,
+) -> String {
+    let error = dispatch(
+        pool,
+        "synthetic-lobby-secret",
+        caller,
+        online,
+        None,
+        crate::actors::client_message(command, &data).unwrap(),
+    )
+    .await
+    .expect_err("The command was not refused");
+    match crate::errors::CommandError::from(error) {
+        crate::errors::CommandError::Rejected { message, .. } => message,
+        error => panic!("The command failed instead of being refused: {error}"),
+    }
+}
+
+#[tokio::test]
+async fn lobby_relationships_atomic_settings_and_parameterization_postgres() {
+    let Some(db) = TestDb::create().await else {
+        return;
+    };
+    let a = db.user("Alice").await;
+    let b = db.user("Bob").await;
+    let who = caller(a, "Alice");
+    let data = json!({"username":"bób"});
+    let result = run(&db.pool, &who, &[], "friendAdd", data.clone()).await;
+    assert_eq!(self_data(&result, "friends"), json!({"friends":["Bob"]}));
+    let repeated = refusal(&db.pool, &who, &[], "friendAdd", data.clone()).await;
+    assert!(repeated.contains("already"));
+    let _ = run(&db.pool, &who, &[], "friendRemove", data.clone()).await;
+    assert_eq!(
+        friends(&db.pool, UserId::new(a).unwrap()).await.unwrap(),
+        Vec::<hanabi_protocol::Username>::new()
+    );
+    let (one, two) = tokio::join!(
+        relationships::change_friend(
+            &db.pool,
+            UserId::new(a).unwrap(),
+            UserId::new(b).unwrap(),
+            true
+        ),
+        relationships::change_friend(
+            &db.pool,
+            UserId::new(a).unwrap(),
+            UserId::new(b).unwrap(),
+            true
+        )
+    );
+    assert_ne!(one.unwrap(), two.unwrap());
+    let result = run(
+        &db.pool,
+        &who,
+        &[],
+        "settings",
+        json!({"settings":{"hGroupConventions":true}}),
+    )
+    .await;
+    assert!(matches!(
+        result.as_slice(),
+        [Effect::Publish(Publication::HGroup(true))]
+    ));
+    assert_eq!(
+        serde_json::to_value(
+            get_settings(&db.pool, UserId::new(a).unwrap())
+                .await
+                .unwrap()
+        )
+        .unwrap()["hGroupConventions"],
+        true
+    );
+    let result = run(
+        &db.pool,
+        &who,
+        &[],
+        "settings",
+        json!({"settings":{"hGroupLevel":5}}),
+    )
+    .await;
+    assert!(matches!(
+        result.as_slice(),
+        [Effect::Publish(Publication::HGroupLevel(Some(level)))] if level.get() == 5
+    ));
+    let result = run(
+        &db.pool,
+        &who,
+        &[],
+        "settings",
+        json!({"settings":{},"cleared":["hGroupLevel"]}),
+    )
+    .await;
+    assert!(matches!(
+        result.as_slice(),
+        [Effect::Publish(Publication::HGroupLevel(None))]
+    ));
+    assert!(
+        serde_json::to_value(
+            get_settings(&db.pool, UserId::new(a).unwrap())
+                .await
+                .unwrap()
+        )
+        .unwrap()
+        .get("hGroupLevel")
+        .is_none()
+    );
+    assert!(
+        set_setting(&db.pool, UserId::new(a).unwrap(), "hGroupLevel", &json!(0))
+            .await
+            .is_err()
+    );
+    let too_high = json!(hanabi_protocol::MAX_H_GROUP_LEVEL + 1);
+    assert!(
+        set_setting(&db.pool, UserId::new(a).unwrap(), "hGroupLevel", &too_high)
+            .await
+            .is_err()
+    );
+    assert!(
+        set_setting(&db.pool, UserId::new(a).unwrap(), "volume", &json!(101))
+            .await
+            .is_err()
+    );
+    assert!(
+        set_setting(&db.pool, UserId::new(a).unwrap(), "volume", &json!(2.1))
+            .await
+            .is_err()
+    );
+    assert!(
+        set_setting(
+            &db.pool,
+            UserId::new(a).unwrap(),
+            "soundTimer",
+            &json!("TRUE")
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        set_setting(
+            &db.pool,
+            UserId::new(a).unwrap(),
+            "createTable",
+            &json!({"maxPlayers": 7})
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        set_setting(
+            &db.pool,
+            UserId::new(a).unwrap(),
+            "volume=0; DROP TABLE users;--",
+            &json!(0)
+        )
+        .await
+        .is_err()
+    );
+    let (sound_timer, volume) = (json!(false), json!(25));
+    let (one, two) = tokio::join!(
+        set_setting(
+            &db.pool,
+            UserId::new(b).unwrap(),
+            "soundTimer",
+            &sound_timer
+        ),
+        set_setting(&db.pool, UserId::new(b).unwrap(), "volume", &volume)
+    );
+    one.unwrap();
+    two.unwrap();
+    // Concurrent changes to different settings are both kept.
+    let settings = serde_json::to_value(
+        get_settings(&db.pool, UserId::new(b).unwrap())
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(settings["soundTimer"], false);
+    assert_eq!(settings["volume"], 25);
+    let result = run(
+        &db.pool,
+        &who,
+        &[],
+        "userInactive",
+        json!({"inactive":true}),
+    )
+    .await;
+    assert!(matches!(
+        result.first(),
+        Some(Effect::Publish(Publication::Inactive(true)))
+    ));
+    db.close().await;
+}
+
+#[tokio::test]
+async fn blocked_players_cannot_message_each_other_postgres() {
+    let Some(db) = TestDb::create().await else {
+        return;
+    };
+    let a = db.user("Alice").await;
+    let b = db.user("Bob").await;
+    let alice = caller(a, "Alice");
+    let bob = caller(b, "Bob");
+    let online_user = |id, name: &str| OnlineUser {
+        identity: Arc::new(caller(id, name)),
+        generation: 1,
+    };
+    let online = vec![online_user(a, "Alice"), online_user(b, "Bob")];
+    let notice_of = |effects: &[Effect]| {
+        self_data(effects, "chat")["text"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    let bob_name = json!({"username":"bob"});
+
+    let blocked = run(&db.pool, &alice, &[], "blockAdd", bob_name.clone()).await;
+    assert!(notice_of(&blocked).contains("Successfully blocked"));
+    assert_eq!(self_data(&blocked, "blocked"), json!({"blocked":["Bob"]}));
+    let repeated = refusal(&db.pool, &alice, &[], "blockAdd", bob_name.clone()).await;
+    assert!(repeated.contains("already blocked"));
+    let own = refusal(
+        &db.pool,
+        &alice,
+        &[],
+        "blockAdd",
+        json!({"username":"Alice"}),
+    )
+    .await;
+    assert!(own.contains("cannot block yourself"));
+
+    // Messages are refused in both directions, and nothing is stored.
+    for (from, to) in [(&alice, "Bob"), (&bob, "Alice")] {
+        let result = refusal(
+            &db.pool,
+            from,
+            &online,
+            "chatPm",
+            json!({"text":"hello","recipient":to}),
+        )
+        .await;
+        assert!(result.contains("cannot send a private message"));
+    }
+    let stored: i64 = sqlx::query_scalar!("SELECT COUNT(*) AS \"v!\" FROM chat_log_pm")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(stored, 0);
+
+    let unblocked = run(&db.pool, &alice, &[], "blockRemove", bob_name.clone()).await;
+    assert!(notice_of(&unblocked).contains("Successfully unblocked"));
+    assert_eq!(self_data(&unblocked, "blocked"), json!({"blocked":[]}));
+    let missing = refusal(&db.pool, &alice, &[], "blockRemove", bob_name).await;
+    assert!(missing.contains("not blocked"));
+    let result = run(
+        &db.pool,
+        &bob,
+        &online,
+        "chatPm",
+        json!({"text":"hello again","recipient":"Alice"}),
+    )
+    .await;
+    assert_eq!(self_data(&result, "chat")["text"], "hello again");
+    db.close().await;
+}
+
+#[tokio::test]
+async fn lobby_private_messages_and_command_privacy_postgres() {
+    let Some(db) = TestDb::create().await else {
+        return;
+    };
+    let a = db.user("Alice").await;
+    let b = db.user("Bob").await;
+    let c = db.user("Carol").await;
+    let who = caller(a, "Alice");
+    let target = OnlineUser {
+        identity: Arc::new(caller(b, "Bob")),
+        generation: 29,
+    };
+    let online = vec![target];
+    let effects = run(
+        &db.pool,
+        &who,
+        &online,
+        "chatPm",
+        json!({"text":" <secret> ","recipient":"bób"}),
+    )
+    .await;
+    let message = self_data(&effects, "chat");
+    assert_eq!(message["text"], "<secret>");
+    assert_eq!(message["kind"]["recipient"], "Bob");
+    assert!(message.get("chatId").is_none());
+    assert_eq!(effects.len(), 2);
+    assert!(effects.iter().all(|effect| match effect {
+        Effect::Publish(Publication::ToSelf(_)) => true,
+        Effect::Publish(Publication::ToUser { id, .. }) => *id == UserId::new(b).unwrap(),
+        _ => false,
+    }));
+    assert!(effects.iter().any(
+        |e| matches!(e,Effect::Publish(Publication::ToUser {id,generation:29,..}) if *id==UserId::new(b).unwrap())
+    ));
+    let stored = sqlx::query!("SELECT datetime_sent FROM chat_log_pm")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        message["sentAt"],
+        hanabi_protocol::Timestamp::from(stored.datetime_sent).as_str()
+    );
+    sqlx::query!(
+        "INSERT INTO chat_log_pm(user_id,recipient_id,message) VALUES($1,$2,'not Alice')",
+        b,
+        c
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    let result = run(
+        &db.pool,
+        &who,
+        &[],
+        "chatPmHistory",
+        json!({"limit":1,"recipient":"BOB"}),
+    )
+    .await;
+    let history = self_data(&result, "chatPmHistory");
+    assert_eq!(history["messages"].as_array().unwrap().len(), 1);
+    assert_eq!(history["messages"][0]["text"], "<secret>");
+    let carol = caller(c, "Carol");
+    let result = run(
+        &db.pool,
+        &carol,
+        &[],
+        "chatPmHistory",
+        json!({"limit":10,"recipient":"Alice"}),
+    )
+    .await;
+    assert_eq!(self_data(&result, "chatPmHistory")["messages"], json!([]));
+    for text in [
+        "/not-a-command private",
+        "/token extra",
+        "/help",
+        "/seed",
+        "/id",
+    ] {
+        let result = run(&db.pool, &who, &[], "chat", json!({"text":text})).await;
+        assert!(
+            result
+                .iter()
+                .all(|effect| matches!(effect, Effect::Publish(Publication::ToSelf(_))))
+        );
+    }
+    let result = run(
+        &db.pool,
+        &who,
+        &[],
+        "chat",
+        json!({"text":"/ToKeN","tableId":42}),
+    )
+    .await;
+    assert!(
+        self_data(&result, "chat")["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("Identity token")
+    );
+    assert!(
+        dispatch(
+            &db.pool,
+            "synthetic-lobby-secret",
+            &who,
+            &[],
+            None,
+            crate::actors::client_message("chat", &json!({"text":"not lobby","tableId":42}))
+                .unwrap()
+        )
+        .await
+        .unwrap()
+        .is_none()
+    );
+    assert!(
+        dispatch(
+            &db.pool,
+            "synthetic-lobby-secret",
+            &who,
+            &[],
+            None,
+            crate::actors::client_message("chat", &json!({"text":"/findvariant","tableId":42}))
+                .unwrap()
+        )
+        .await
+        .unwrap()
+        .is_none()
+    );
+    assert_eq!(
+        sqlx::query_scalar!("SELECT COUNT(*) AS \"v!\" FROM chat_log WHERE source='user'")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap(),
+        0
+    );
+    let result = run(&db.pool, &who, &[], "chat", json!({"text":"/rules"})).await;
+    assert_eq!(
+        result
+            .iter()
+            .filter(|e| matches!(e, Effect::Publish(Publication::Broadcast(_))))
+            .count(),
+        2
+    );
+    let result = run(&db.pool, &who, &[], "chat", json!({"text":"<plain>"})).await;
+    assert!(
+        result.iter().any(
+            |e| matches!(e,Effect::Publish(Publication::Broadcast(message)) if message.data()["text"]=="<plain>")
+        )
+    );
+    let before: i64 = sqlx::query_scalar!("SELECT COUNT(*) AS \"v!\" FROM chat_log")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    sqlx::query!("INSERT INTO muted_ips(ip) VALUES('127.0.0.1')")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    let result = refusal(
+        &db.pool,
+        &who,
+        &online,
+        "chatPm",
+        json!({"text":"muted","recipient":"Bob"}),
+    )
+    .await;
+    assert!(result.contains("muted"));
+    let result = refusal(&db.pool, &who, &[], "chat", json!({"text":"muted"})).await;
+    assert!(result.contains("muted"));
+    assert_eq!(
+        sqlx::query_scalar!("SELECT COUNT(*) AS \"v!\" FROM chat_log")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap(),
+        before
+    );
+    sqlx::query!("INSERT INTO chat_log(user_id,source,message) VALUES($1,'user','/token legacy-secret'),($1,'user','/unknown secret')", a).execute(&db.pool).await.unwrap();
+    let history = lobby_history(&db.pool, 100).await.unwrap();
+    assert!(!history.iter().any(|r| r.text.contains("secret")));
+    db.close().await;
+}
+
+async fn game(db: &TestDb, user: i32, seed: &str, score: i16) -> i32 {
+    let id = sqlx::query_scalar!("INSERT INTO games(name,num_players,variant_id,timed,time_base,time_per_turn,
+            speedrun,deck_plays,empty_clues,one_extra_card,one_less_card,
+            all_or_nothing,detrimental_characters,seed,score,num_turns,end_condition,datetime_started,datetime_finished)
+         VALUES('test',2,0,false,NULL,NULL,false,false,false,false,false,false,false,$1,$2,30,1,NOW(),NOW())
+         RETURNING id", seed, score).fetch_one(&db.pool).await.unwrap();
+    sqlx::query!(
+        "INSERT INTO game_participants(game_id,user_id,seat)
+         VALUES($1,$2,0)",
+        id,
+        user
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    id
+}
+
+#[tokio::test]
+async fn lobby_history_pages_include_only_own_games_postgres() {
+    let Some(db) = TestDb::create().await else {
+        return;
+    };
+    let a = db.user("Alice").await;
+    let b = db.user("Bob").await;
+    let d = db.user("Donald").await;
+    let own = game(&db, a, "p2v0s1", 20).await;
+    let other = game(&db, b, "p2v0s2", 20).await;
+    let shared = game(&db, a, "p2v0s4", 20).await;
+    sqlx::query!(
+        "INSERT INTO game_participants(game_id,user_id,seat) VALUES($1,$2,1)",
+        shared,
+        b
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    relationships::change_friend(
+        &db.pool,
+        UserId::new(a).unwrap(),
+        UserId::new(b).unwrap(),
+        true,
+    )
+    .await
+    .unwrap();
+    sqlx::query!(
+        "UPDATE games SET datetime_finished='2026-11-04T00:00:00Z' WHERE id=ANY($1)",
+        &[own, other, shared][..]
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        history_ids(&db.pool, UserId::new(a).unwrap(), 0, 10)
+            .await
+            .unwrap(),
+        vec![shared, own]
+    );
+    assert_eq!(
+        history_ids(&db.pool, UserId::new(a).unwrap(), 1, 1)
+            .await
+            .unwrap(),
+        vec![own]
+    );
+    assert_eq!(
+        history_ids(&db.pool, UserId::new(a).unwrap(), 99, 10)
+            .await
+            .unwrap(),
+        Vec::<i32>::new()
+    );
+    assert_eq!(
+        history_ids(&db.pool, UserId::new(d).unwrap(), 0, 10)
+            .await
+            .unwrap(),
+        Vec::<i32>::new()
+    );
+    db.close().await;
+}
+
+#[tokio::test]
+async fn lobby_directed_linked_seeds_and_histories_postgres() {
+    let Some(db) = TestDb::create().await else {
+        return;
+    };
+    let a = db.user("Alice").await;
+    let b = db.user("Bob").await;
+    let c = db.user("Carol").await;
+    let who = caller(a, "Alice");
+    let ga = game(&db, a, "p2v0s1", 20).await;
+    let gb = game(&db, b, "p2v0s1", 25).await;
+    let _gc = game(&db, c, "p2v0s2", 15).await;
+    // A game with a rule option comes after the games without one, even with a higher score.
+    let gd = game(&db, b, "p2v0s1", 25).await;
+    sqlx::query!("UPDATE games SET deck_plays=TRUE WHERE id=$1", gd)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    let _ = run(&db.pool, &who, &[], "linkAdd", json!({"username":"Bob"})).await;
+    let _ = run(
+        &db.pool,
+        &caller(b, "Bob"),
+        &[],
+        "linkAdd",
+        json!({"username":"Carol"}),
+    )
+    .await;
+    assert_eq!(
+        blocked_seeds(&db.pool, &[UserId::new(a).unwrap()], "p2v0s")
+            .await
+            .unwrap(),
+        vec!["p2v0s1"]
+    );
+    assert_eq!(
+        blocked_seeds(&db.pool, &[UserId::new(c).unwrap()], "p2v0s")
+            .await
+            .unwrap(),
+        vec!["p2v0s2"]
+    );
+    assert_eq!(
+        blocked_seeds(&db.pool, &[UserId::new(a).unwrap()], "p3v0s")
+            .await
+            .unwrap(),
+        Vec::<String>::new()
+    );
+    assert!(
+        self_data(
+            &run(&db.pool, &who, &[], "linkList", json!({})).await,
+            "chat"
+        )["text"]
+            .as_str()
+            .unwrap()
+            .ends_with("Bob")
+    );
+    let result = run(
+        &db.pool,
+        &who,
+        &[],
+        "gameHistory",
+        json!({"offset":0,"limit":10}),
+    )
+    .await;
+    let history = self_data(&result, "gameHistory");
+    assert_eq!(history["games"][0]["gameId"], ga);
+    assert_eq!(history["games"][0]["options"]["variantId"], 0);
+    assert_eq!(history["games"][0]["playerNames"], json!(["Alice"]));
+    // A page holds at least one game and at most `MAX_PAGE_LIMIT`, from a start that is not
+    // negative.
+    for page in [
+        json!({"offset":0,"limit":0}),
+        json!({"offset":0,"limit":hanabi_protocol::MAX_PAGE_LIMIT + 1}),
+        json!({"offset":-1,"limit":1}),
+    ] {
+        assert!(ClientRequest::decode("gameHistory", &page).is_err());
+        let mut other = page;
+        other["seed"] = "p2v0s1".into();
+        assert!(ClientRequest::decode("seedGames", &other).is_err());
+    }
+    let result = run(
+        &db.pool,
+        &who,
+        &[],
+        "seedGames",
+        json!({"seed":"p2v0s1","offset":0,"limit":10}),
+    )
+    .await;
+    let history = self_data(&result, "seedGames");
+    assert_eq!(history["games"][0]["gameId"], gb);
+    assert_eq!(history["games"][1]["gameId"], ga);
+    assert_eq!(history["games"][2]["gameId"], gd);
+    assert_eq!(history["total"], 3);
+    // Later pages continue in the same order, and count every game on the seed.
+    let result = run(
+        &db.pool,
+        &who,
+        &[],
+        "seedGames",
+        json!({"seed":"p2v0s1","offset":1,"limit":1}),
+    )
+    .await;
+    let history = self_data(&result, "seedGames");
+    assert_eq!(history["games"].as_array().unwrap().len(), 1);
+    assert_eq!(history["games"][0]["gameId"], ga);
+    assert_eq!(history["total"], 3);
+    sqlx::query!(
+        "INSERT INTO game_tags(game_id,user_id,tag) VALUES($1,$2,$3)",
+        ga,
+        a,
+        "x'; delete from users; --"
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    let result = run(
+        &db.pool,
+        &who,
+        &[],
+        "tagSearch",
+        json!({"tag":"x'; delete from users; --"}),
+    )
+    .await;
+    assert!(
+        self_data(&result, "chat")["text"]
+            .as_str()
+            .unwrap()
+            .ends_with(&ga.to_string())
+    );
+    assert_eq!(
+        sqlx::query_scalar!("SELECT COUNT(*) AS \"v!\" FROM users")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap(),
+        3
+    );
+    let _ = run(&db.pool, &who, &[], "linkRemove", json!({"username":"Bob"})).await;
+    assert!(
+        self_data(
+            &run(&db.pool, &who, &[], "linkList", json!({})).await,
+            "chat"
+        )["text"]
+            .as_str()
+            .unwrap()
+            .contains("do not have")
+    );
+    db.close().await;
+}
+
+#[tokio::test]
+async fn every_setting_round_trips_and_only_changes_are_stored_postgres() {
+    let Some(db) = TestDb::create().await else {
+        return;
+    };
+    let id = db.user("Alice").await;
+    let defaults = serde_json::to_value(
+        get_settings(&db.pool, UserId::new(id).unwrap())
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(defaults, json!(settings::defaults()));
+    let stored = || async {
+        sqlx::query_scalar!("SELECT settings FROM users WHERE id=$1", id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap()
+    };
+    assert_eq!(stored().await, json!({}), "Defaults are not stored");
+    for (name, default) in settings::defaults() {
+        let expected = match &default {
+            Value::Bool(flag) => json!(!flag),
+            Value::Number(number) if number.is_f64() => json!(7.5),
+            Value::Number(_) => json!(2),
+            _ if name == "soundMove" => json!("none"),
+            _ if name == "createTable" => {
+                let mut changed = default.clone();
+                changed["options"]["variantId"] = json!(3);
+                changed["options"]["timeControl"] = json!({"baseSeconds": 60, "perTurnSeconds": 5});
+                changed
+            }
+            _ => json!("Rainbow (6 Suits)"),
+        };
+        assert_ne!(default, expected, "{name} must change");
+        set_setting(&db.pool, UserId::new(id).unwrap(), &name, &expected)
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(
+                get_settings(&db.pool, UserId::new(id).unwrap())
+                    .await
+                    .unwrap()
+            )
+            .unwrap()[&name],
+            expected,
+            "{name}"
+        );
+        assert_eq!(stored().await[&name], expected, "{name} was not stored");
+    }
+    // Choosing the default again removes the stored value.
+    set_setting(&db.pool, UserId::new(id).unwrap(), "volume", &json!(50))
+        .await
+        .unwrap();
+    assert!(stored().await.get("volume").is_none());
+    assert_eq!(
+        serde_json::to_value(
+            get_settings(&db.pool, UserId::new(id).unwrap())
+                .await
+                .unwrap()
+        )
+        .unwrap()["volume"],
+        50
+    );
+    db.close().await;
+}
+
+#[tokio::test]
+async fn settings_outside_the_wire_contract_are_not_sent_or_saved_postgres() {
+    let Some(db) = TestDb::create().await else {
+        return;
+    };
+    let id = db.user("Alice").await;
+    sqlx::query!(
+        "UPDATE users SET settings=$2 WHERE id=$1",
+        id,
+        json!({"createTable":{"maxPlayers":7},"volume":70,"removedSetting":true})
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    let settings = get_settings(&db.pool, UserId::new(id).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(
+        settings.create_table,
+        hanabi_protocol::CreateTableSettings::default()
+    );
+    assert_eq!(settings.volume, hanabi_protocol::Volume::new(70).unwrap());
+    // Older servers named the variant of the table that the form starts from.
+    for (name, variant) in [("Rainbow (6 Suits)", Some(3)), ("Removed Variant", None)] {
+        sqlx::query!(
+            "UPDATE users SET settings=$2 WHERE id=$1",
+            id,
+            json!({"createTable":{"options":{"variantName":name,"speedrun":true}}})
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        let options = get_settings(&db.pool, UserId::new(id).unwrap())
+            .await
+            .unwrap()
+            .create_table
+            .options;
+        assert!(options.speedrun);
+        assert_eq!(
+            options.variant_id,
+            variant.map_or(hanabi_protocol::DEFAULT_VARIANT_ID, |id| {
+                hanabi_protocol::VariantId::new(id).unwrap()
+            })
+        );
+    }
+    // Older servers kept a clock for an untimed table, beside the options or with `timed`. Only a
+    // timed table keeps its clock now.
+    let clock = |base: i64| json!({"baseSeconds": base, "perTurnSeconds": 20});
+    for (stored, base) in [
+        (
+            json!({"options":{"timeControl":clock(300)},"timeControl":clock(180)}),
+            Some(300),
+        ),
+        (json!({"options":{},"timeControl":clock(180)}), None),
+        (
+            json!({"options":{"timeControl":clock(300)},"timed":true}),
+            Some(300),
+        ),
+        (
+            json!({"options":{"timeControl":clock(300)},"timed":false}),
+            None,
+        ),
+    ] {
+        sqlx::query!(
+            "UPDATE users SET settings=$2 WHERE id=$1",
+            id,
+            json!({"createTable":stored})
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        let table = get_settings(&db.pool, UserId::new(id).unwrap())
+            .await
+            .unwrap()
+            .create_table;
+        assert_eq!(
+            table
+                .options
+                .time_control
+                .map(|time| time.base_seconds.get()),
+            base
+        );
+    }
+    for (name, value) in [
+        ("createTable", json!({"maxPlayers": 7})),
+        ("soundMove", json!(2)),
+        (
+            "createTable",
+            json!({"options": {"variantId": "No Variant"}}),
+        ),
+    ] {
+        assert!(
+            set_setting(&db.pool, UserId::new(id).unwrap(), name, &value)
+                .await
+                .is_err(),
+            "{name}={value} was accepted"
+        );
+    }
+    db.close().await;
+}

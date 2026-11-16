@@ -1,49 +1,87 @@
-import type { Rank, SuitIndex } from "@hanabi-live/game";
+import { replayGameSchema } from "@hanabi-live/data";
+import type { EndCondition } from "@hanabi-live/game";
 import {
   DEFAULT_PLAYER_NAMES,
+  endConditionSchema,
+  getVariantById,
   MAX_PLAYERS,
   MIN_PLAYERS,
-  getVariant,
-  getVariantByID,
 } from "@hanabi-live/game";
 import { assertDefined, parseIntSafe } from "complete-common";
-import { isEqual } from "lodash";
+import equal from "fast-deep-equal";
+import * as z from "zod";
 
-interface DeckCard {
-  suitIndex: SuitIndex;
-  rank: Rank;
+/** A game in the replay format, generated from the server's contract. */
+export type GameJson = z.input<typeof replayGameSchema>;
+/** A deck card as parsing gives it, with the suit that a missing one defaults to. */
+type DeckCard = NonNullable<z.output<typeof replayGameSchema>["deck"]>[number];
+type Action = NonNullable<GameJson["actions"]>[number];
+
+// Compressed games in shared links store these numbers.
+/* eslint-disable complete/no-number-enums */
+/** The type of an action in a compressed game. */
+enum CompactType {
+  Play = 0,
+  Discard = 1,
+  ColorClue = 2,
+  RankClue = 3,
+  GameOver = 4,
+}
+/* eslint-enable complete/no-number-enums */
+
+/**
+ * An action with numbers for its type and value, which is the form that a compressed game holds.
+ */
+interface CompactAction {
+  readonly type: CompactType;
+  readonly target: number | undefined;
+  readonly value: number | undefined;
 }
 
-interface Action {
-  type: number;
-  target: number;
-  value?: number;
-}
-
-interface Options {
-  variant: string | undefined;
-}
+const actionSchema = replayGameSchema
+  .unwrap()
+  .shape.actions.unwrap()
+  .unwrap().element;
+const deckCardSchema = replayGameSchema
+  .unwrap()
+  .shape.deck.unwrap()
+  .unwrap().element;
 
 interface MinMax {
   min: number;
   max: number;
 }
 
-export interface GameJSON {
-  players: readonly string[];
-  deck: readonly DeckCard[];
-  actions: readonly Action[];
-  options: Options;
-  characters: readonly string[];
-  id: number;
-  notes: readonly string[];
-  seed: string;
-}
+/**
+ * The number of comma-separated parts of a compressed game: the players and deck, the actions, the
+ * variant ID, and the seed.
+ */
+const COMPRESSED_PARTS = 4;
+
+/** The seed is the last part. */
+const SEED_PART = COMPRESSED_PARTS - 1;
+
+/** How often a hyphen is inserted so that a long compressed game wraps when it is posted. */
+const HYPHEN_INTERVAL = 20;
+
+/** The length of the min and max digits that start a compressed deck or list of actions. */
+const RANGE_HEADER_LENGTH = 2;
+
+/** The length of a compressed action: one character for its type and value, one for its target. */
+const COMPRESSED_ACTION_LENGTH = 2;
 
 const BASE62 = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
+/** A compressed game over stores its end condition as its position in this list. */
+const END_CONDITIONS: readonly EndCondition[] = endConditionSchema.options;
+
+/** The end condition that a compressed action names, or undefined when it names none. */
+function endCondition(index: number | undefined): EndCondition | undefined {
+  return index === undefined ? undefined : END_CONDITIONS[index];
+}
+
 /**
- * Compresses a string representing a `GameJSON` object. Returns undefined if the compression fails.
+ * Compresses a string representing a `GameJson` object. Returns undefined if the compression fails.
  *
  * The resulting string is composed of four substrings separated by commas:
  * - The first substring represents the number of players and the deck.
@@ -54,48 +92,52 @@ const BASE62 = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
  * Hyphens are added to the first three substrings to make URL text wrap when posting. The seed is
  * appended verbatim so that meaningful seed hyphens are preserved.
  */
-export function shrink(JSONString: string): string | undefined {
-  let gameDataJSON: GameJSON;
-  try {
-    gameDataJSON = JSON.parse(JSONString) as GameJSON;
-  } catch {
+export function shrink(jsonString: string): string | undefined {
+  const gameDataJson = parseGameJson(jsonString);
+  if (gameDataJson === undefined) {
     return undefined;
   }
 
-  const compressed = gameJSONCompress(gameDataJSON);
+  const compressed = gameJsonCompress(gameDataJson);
   if (compressed === undefined) {
     return undefined;
   }
 
   // Check if compression succeeded.
   const decompressed = expand(compressed);
-  if (decompressed === undefined) {
-    return undefined;
-  }
+  return decompressed === undefined
+    || !equal(gameDataJson, parseGameJson(decompressed))
+    ? undefined
+    : compressed;
+}
+
+function parseGameJson(jsonString: string) {
   try {
-    const decompressedJSON = JSON.parse(decompressed) as GameJSON;
-    if (!isEqual(gameDataJSON, decompressedJSON)) {
-      return undefined;
-    }
+    const result = replayGameSchema.safeParse(JSON.parse(jsonString));
+    return result.success ? result.data : undefined;
   } catch {
     return undefined;
   }
-
-  return compressed;
 }
 
-/** Decompresses a string into a `GameJSON` object. Returns undefined if decompression fails. */
+/** Decompresses a string into a `GameJson` object. Returns undefined if decompression fails. */
 export function expand(data: string): string | undefined {
   const parts = data.split(",");
-  const seed = parts[3] ?? "";
-  if (parts.length < 3 || parts.length > 4 || !/^[\d\-A-Za-z]*$/u.test(seed)) {
+  const seed = parts[SEED_PART];
+  if (
+    seed === undefined
+    || parts.length !== COMPRESSED_PARTS
+    || !/^[\d\-A-Za-z]*$/u.test(seed)
+  ) {
     return undefined;
   }
   // Remove wrapping hyphens from the compressed data, never from the seed.
-  const normal = parts.slice(0, 3).join(",").replaceAll("-", "");
+  const normal = parts.slice(0, SEED_PART).join(",").replaceAll("-", "");
 
-  // The compressed string is composed of 3 substrings separated by commas.
-  const [playersAndDeck, actionsString, variantIDString] = normal.split(",", 3);
+  const [playersAndDeck, actionsString, variantIdString] = normal.split(
+    ",",
+    SEED_PART,
+  );
   assertDefined(
     playersAndDeck,
     "Failed to parse the players and deck from the compress hypothetical string.",
@@ -105,7 +147,7 @@ export function expand(data: string): string | undefined {
     "Failed to parse the actions from the compress hypothetical string.",
   );
   assertDefined(
-    variantIDString,
+    variantIdString,
     "Failed to parse the variant ID from the compress hypothetical string.",
   );
 
@@ -131,69 +173,66 @@ export function expand(data: string): string | undefined {
     return undefined;
   }
 
-  const variantID = parseIntSafe(variantIDString);
-  if (variantID === undefined) {
+  const variantId = parseIntSafe(variantIdString);
+  if (variantId === undefined) {
     return undefined;
   }
-  const variant = getVariantByID(variantID);
+  const variant = getVariantById(variantId);
 
-  const original: GameJSON = {
-    players,
-    deck,
-    actions,
+  const original: GameJson = {
+    playerNames: [...players],
+    deck: [...deck],
+    actions: [...actions],
     options: {
-      variant: variant.name,
+      variantId: variant.id,
     },
     characters: [],
-    id: 0,
     notes: [],
-    seed,
+    ...(seed !== "" && { seed }),
   };
 
   return JSON.stringify(original);
 }
 
-/** Compresses a `GameJSON` object into a string. Returns undefined if decompression fails. */
-function gameJSONCompress(data: GameJSON): string | undefined {
-  if (typeof data.seed !== "string" || !/^[\d\-A-Za-z]*$/u.test(data.seed)) {
+/** Compresses a `GameJson` object into a string. Returns undefined if decompression fails. */
+function gameJsonCompress(
+  data: z.output<typeof replayGameSchema>,
+): string | undefined {
+  // An empty last part is a game without a seed.
+  const seed = data.seed ?? "";
+  if (!/^[\d\-A-Za-z]*$/u.test(seed)) {
     return undefined;
   }
-  let out = "";
 
   // Number of players
-  const numberOfPlayers = data.players.length;
+  const numberOfPlayers = data.playerNames?.length ?? 0;
   if (numberOfPlayers < MIN_PLAYERS || numberOfPlayers > MAX_PLAYERS) {
     return undefined;
   }
-  out += data.players.length.toString();
+  let out = numberOfPlayers.toString();
 
   // Deck
-  const deck = compressDeck(data.deck);
+  const deck = compressDeck(data.deck ?? []);
   if (deck === undefined) {
     return undefined;
   }
   out += `${deck},`;
 
   // Actions
-  const actions = compressActions(data.actions);
+  const actions = compressActions(data.actions ?? []);
   out += `${actions},`;
 
   // Variant ID
-  if (data.options.variant === undefined) {
+  const variantId = data.options?.variantId;
+  if (variantId === undefined) {
     return undefined;
   }
+  out += variantId.toString();
 
-  try {
-    const variant = getVariant(data.options.variant);
-    out += variant.id.toString();
-  } catch {
-    return undefined;
-  }
+  // Add hyphens for URL posting (hyphens make the text wrap).
+  out = out.match(new RegExp(`.{1,${HYPHEN_INTERVAL}}`, "gu"))!.join("-");
 
-  // Add hyphens every 20 characters for URL posting (hyphens make the text wrap).
-  out = out.match(/.{1,20}/gu)!.join("-");
-
-  return `${out},${data.seed}`;
+  return `${out},${seed}`;
 }
 
 /**
@@ -202,8 +241,8 @@ function gameJSONCompress(data: GameJSON): string | undefined {
  * series of strings one characters long, each representing a `DeckCard`.
  */
 function compressDeck(deck: readonly DeckCard[]): string | undefined {
-  const rankRange = getRankMinMax(deck);
-  if (!isMinMaxValid(rankRange)) {
+  const rankRange = getMinMax(deck.map((card) => card.rank));
+  if (rankRange === undefined || !isMinMaxValid(rankRange)) {
     return undefined;
   }
 
@@ -243,10 +282,13 @@ function decompressDeck(src: string): readonly DeckCard[] | undefined {
     return undefined;
   }
 
-  let s = 2;
+  let s = RANGE_HEADER_LENGTH;
   while (s < src.length) {
     const compressedDeckCard = src.charAt(s);
     const deckCard = stringToDeckCard(compressedDeckCard, rankRange);
+    if (deckCard === undefined) {
+      return undefined;
+    }
     deck.push(deckCard);
     s++;
   }
@@ -267,16 +309,20 @@ function deckCardToString(card: DeckCard, rankRange: MinMax): string {
  * Converts a compressed string into a `DeckCard`. The string must be one character long,
  * representing `DeckCard.suitIndex` and `DeckCard.rank`.
  */
-function stringToDeckCard(src: string, rankRange: MinMax): DeckCard {
+function stringToDeckCard(
+  src: string,
+  rankRange: MinMax,
+): DeckCard | undefined {
   const r = rankRange.max - rankRange.min + 1;
   const index = BASE62.indexOf(src);
   const rank = (index % r) + 1;
   const suitIndex = Math.floor((index - rank + 1) / r);
 
-  return {
-    suitIndex: suitIndex as SuitIndex,
-    rank: rank as Rank,
-  };
+  const result = deckCardSchema.safeParse({
+    suitIndex,
+    rank,
+  });
+  return result.success ? result.data : undefined;
 }
 
 /**
@@ -285,14 +331,16 @@ function stringToDeckCard(src: string, rankRange: MinMax): DeckCard {
  * strings two characters long, each representing an `Action`.
  */
 function compressActions(actions: readonly Action[]): string {
+  const compactActions = actions.map(toCompactAction);
+
   // Find min/max values of Action.type.
-  const typeRange = getTypeMinMax(actions);
-  if (!isMinMaxValid(typeRange)) {
+  const typeRange = getMinMax(compactActions.map((action) => action.type));
+  if (typeRange === undefined || !isMinMaxValid(typeRange)) {
     // Empty actions still require min/max values.
     return "00";
   }
 
-  const actionStrings = actions.map((action) =>
+  const actionStrings = compactActions.map((action) =>
     actionToString(action, typeRange),
   );
   return `${typeRange.min}${typeRange.max}${actionStrings.join("")}`;
@@ -326,12 +374,15 @@ function decompressActions(src: string): readonly Action[] | undefined {
     return [];
   }
 
-  let s = 2;
+  let s = RANGE_HEADER_LENGTH;
   while (s < src.length) {
-    const compressedAction = src.slice(s, s + 2);
+    const compressedAction = src.slice(s, s + COMPRESSED_ACTION_LENGTH);
     const action = stringToAction(compressedAction, typeRange);
+    if (action === undefined) {
+      return undefined;
+    }
     actions.push(action);
-    s += 2;
+    s += COMPRESSED_ACTION_LENGTH;
   }
 
   return actions;
@@ -341,12 +392,19 @@ function decompressActions(src: string): readonly Action[] | undefined {
  * Converts an `Action` into a string. The returned string is two characters long, the first one
  * representing `Action.type` and `Action.value` and the second representing the `Action.target`.
  */
-function actionToString(action: Action, typeRange: MinMax): string {
+function actionToString(action: CompactAction, typeRange: MinMax): string {
   const r = typeRange.max - typeRange.min + 1;
-  const val = action.value === undefined ? 0 : action.value + 1;
-  const index = val * r + action.type - typeRange.min;
-  const char = BASE62.charAt(index);
-  return char + BASE62.charAt(action.target);
+  const index = encodeOptional(action.value) * r + action.type - typeRange.min;
+  return BASE62.charAt(index) + BASE62.charAt(encodeOptional(action.target));
+}
+
+/** A compressed action stores a number that may be absent as 0 when absent, or as one more. */
+function encodeOptional(value: number | undefined): number {
+  return value === undefined ? 0 : value + 1;
+}
+
+function decodeOptional(encoded: number): number | undefined {
+  return encoded === 0 ? undefined : encoded - 1;
 }
 
 /**
@@ -354,62 +412,147 @@ function actionToString(action: Action, typeRange: MinMax): string {
  * one representing `Action.type` and `Action.value` and the second representing the
  * `Action.target`.
  */
-function stringToAction(src: string, typeRange: MinMax): Action {
+function stringToAction(src: string, typeRange: MinMax): Action | undefined {
   const r = typeRange.max - typeRange.min + 1;
   const index = BASE62.indexOf(src.charAt(0));
   let type = index % r;
   const val = Math.floor((index - type) / r);
   type += typeRange.min;
   const target = BASE62.indexOf(src.charAt(1));
+  if (target === -1) {
+    return undefined;
+  }
+  const recordedType = z.enum(CompactType).safeParse(type);
+  if (!recordedType.success) {
+    return undefined;
+  }
 
-  return {
-    type,
-    target,
-    value: val === 0 ? undefined : val - 1,
-  };
+  return fromCompactAction({
+    type: recordedType.data,
+    target: decodeOptional(target),
+    value: decodeOptional(val),
+  });
+}
+
+/** The compact form of an action. */
+function toCompactAction(action: Action): CompactAction {
+  switch (action.type) {
+    case "play": {
+      return {
+        type: CompactType.Play,
+        target: action.order,
+        value: undefined,
+      };
+    }
+
+    case "discard": {
+      return {
+        type: CompactType.Discard,
+        target: action.order,
+        value: undefined,
+      };
+    }
+
+    case "clue": {
+      return {
+        type:
+          action.clue.type === "color"
+            ? CompactType.ColorClue
+            : CompactType.RankClue,
+        target: action.receiverIndex,
+        value:
+          action.clue.type === "color" ? action.clue.color : action.clue.rank,
+      };
+    }
+
+    case "gameOver": {
+      return {
+        type: CompactType.GameOver,
+        target: action.playerIndex,
+        value: END_CONDITIONS.indexOf(action.endCondition),
+      };
+    }
+  }
+}
+
+function fromCompactAction(action: CompactAction): Action | undefined {
+  const { target, value } = action;
+  let named: unknown;
+  switch (action.type) {
+    case CompactType.Play: {
+      named = {
+        type: "play",
+        order: target,
+      };
+      break;
+    }
+
+    case CompactType.Discard: {
+      named = {
+        type: "discard",
+        order: target,
+      };
+      break;
+    }
+
+    case CompactType.ColorClue: {
+      named = {
+        type: "clue",
+        receiverIndex: target,
+        clue: {
+          type: "color",
+          color: value,
+        },
+      };
+      break;
+    }
+
+    case CompactType.RankClue: {
+      named = {
+        type: "clue",
+        receiverIndex: target,
+        clue: {
+          type: "rank",
+          rank: value,
+        },
+      };
+      break;
+    }
+
+    case CompactType.GameOver: {
+      named = {
+        type: "gameOver",
+        endCondition: endCondition(value),
+        ...(target !== undefined && { playerIndex: target }),
+      };
+      break;
+    }
+  }
+  const result = actionSchema.safeParse(named);
+  return result.success ? result.data : undefined;
 }
 
 /** Returns a string array of hypothetical players (Alice, Bob, etc). */
 function getPlayers(size: number): readonly string[] {
-  if (size < MIN_PLAYERS || size > MAX_PLAYERS) {
-    return [];
-  }
-  return DEFAULT_PLAYER_NAMES.slice(0, size);
+  return size < MIN_PLAYERS || size > MAX_PLAYERS
+    ? []
+    : DEFAULT_PLAYER_NAMES.slice(0, size);
 }
 
-/**
- * Creates a `MinMax` object, containing the minimum and maximum values of `DeckCard.rank` found in
- * an array of `DeckCard`.
- */
-function getRankMinMax(deck: readonly DeckCard[]): MinMax {
-  const range: MinMax = {
-    min: -1,
-    max: -1,
-  };
-
-  for (const card of deck) {
-    range.min = range.min === -1 ? card.rank : Math.min(range.min, card.rank);
-    range.max = range.max === -1 ? card.rank : Math.max(range.max, card.rank);
+/** Returns the minimum and maximum of the values, or undefined if there are none. */
+function getMinMax(values: readonly number[]): MinMax | undefined {
+  const [first, ...rest] = values;
+  if (first === undefined) {
+    return undefined;
   }
 
-  return range;
-}
-
-/**
- * Creates a `MinMax` object, containing the minimum and maximum values of `Action.type` found in an
- * array of `Action`.
- */
-function getTypeMinMax(actions: readonly Action[]): MinMax {
   const range: MinMax = {
-    min: -1,
-    max: -1,
+    min: first,
+    max: first,
   };
-
-  for (const action of actions) {
-    range.min =
-      range.min === -1 ? action.type : Math.min(range.min, action.type);
-    range.max =
-      range.max === -1 ? action.type : Math.max(range.max, action.type);
+  for (const value of rest) {
+    range.min = Math.min(range.min, value);
+    range.max = Math.max(range.max, value);
   }
 
   return range;

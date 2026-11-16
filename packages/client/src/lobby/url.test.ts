@@ -1,21 +1,44 @@
-import type { ServerCommandWelcomeData } from "@hanabi-live/data";
-import { afterEach, describe, expect, jest, test } from "@jest/globals";
-import { globals } from "../Globals";
-import * as history from "./history";
-import type { GameJSON } from "./hypoCompress";
-import { expand } from "./hypoCompress";
-import { parseAndGoto } from "./url";
+import type { ServerEventData } from "@hanabi-live/data";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
-jest.mock("./history", () => ({
-  show: jest.fn(),
-  showFriends: jest.fn(),
-  showOtherScoresFromURL: jest.fn(),
+import { replayGameSchema, tableIdSchema } from "@hanabi-live/data";
+
+vi.mock("./history.ts", () => ({
+  show: vi.fn(),
+  showOtherScores: vi.fn(),
 }));
-jest.mock("../Globals", () => ({ globals: { conn: { send: jest.fn() } } }));
-jest.mock("../utils", () => ({ setBrowserAddressBarPath: jest.fn() }));
+vi.mock("../Globals.ts", () => ({
+  globals: {
+    connection: {
+      send: vi.fn(),
+    },
+  },
+}));
+vi.mock("../utils.ts", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  setBrowserAddressBarPath: vi.fn(),
+}));
+vi.mock("../modals.ts", () => ({ showWarning: vi.fn() }));
+const { globals } = await import("../Globals.ts");
+const modals = await import("../modals.ts");
+const history = await import("./history.ts");
+const { expand } = await import("./hypoCompress.ts");
+const { parseAndGoto, leaveTableLink } = await import("./url.ts");
+const { setBrowserAddressBarPath } = await import("../utils.ts");
+
+function welcome(
+  data: Partial<ServerEventData["welcome"]> = {},
+): ServerEventData["welcome"] {
+  return {
+    firstTimeUser: false,
+    playingAtTables: [],
+    spectatingAtTables: [],
+    ...data,
+  } as ServerEventData["welcome"];
+}
 
 describe("replay URL loading", () => {
-  const payload = "215abcde,00ba,0";
+  const payload = "215abcde,00ab,0,";
   const locationDescriptor = Object.getOwnPropertyDescriptor(
     globalThis,
     "location",
@@ -36,17 +59,25 @@ describe("replay URL loading", () => {
     } else {
       Object.defineProperty(globalThis, "localStorage", storageDescriptor);
     }
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   test.each([
-    ["shared-replay-json", ",p4v0s3", "p4v0s3", "shared"],
-    ["replay-json", ",legacy-1-p4v0s3", "legacy-1-p4v0s3", "solo"],
-    ["shared-replay-json", "", "", "shared"],
-    ["replay-json", ",", "", "solo"],
+    [
+      "shared-replay-json",
+      "p4v0s3",
+      "p4v0s3",
+      {
+        type: "shared",
+        joinExisting: false,
+        spoilerFree: false,
+      },
+    ],
+    ["replay-json", "p4v0e3", "p4v0e3", { type: "solo" }],
+    ["replay-json", "", undefined, { type: "solo" }],
   ])("%s preserves embedded seed %s", (route, suffix, seed, visibility) => {
-    const setItem = jest.fn();
-    const send = jest.spyOn(globals.conn!, "send");
+    const setItem = vi.fn();
+    const send = vi.spyOn(globals.connection, "send");
     Object.defineProperties(globalThis, {
       location: {
         configurable: true,
@@ -54,76 +85,222 @@ describe("replay URL loading", () => {
       },
       localStorage: {
         configurable: true,
-        value: { setItem },
+        value: {
+          setItem,
+        },
       },
     });
 
-    parseAndGoto({ firstTimeUser: false } as ServerCommandWelcomeData);
+    parseAndGoto(welcome());
 
-    const gameJSON = JSON.parse(expand(`${payload}${suffix}`)!) as GameJSON;
+    const gameJson = replayGameSchema.parse(
+      JSON.parse(expand(`${payload}${suffix}`)!),
+    );
     expect(send).toHaveBeenCalledWith("replayCreate", {
-      source: "json",
-      gameJSON: { ...gameJSON, seed },
+      source: {
+        type: "imported",
+        game: {
+          ...gameJson,
+          seed,
+        },
+      },
       visibility,
-      shadowingPlayerIndex: -1,
     });
     expect(setItem).toHaveBeenCalledWith(
-      "watchReplayJSON",
+      "watchReplayJson",
       expand(`${payload}${suffix}`),
     );
     expect(globalThis.location.hash).toBe("#42");
   });
 
-  test.each([
-    ["#history", false],
-    ["#history-friends", true],
-  ])("restores lobby history route %s", (hash, friends) => {
-    const show = jest.spyOn(history, "show");
-    const showFriends = jest.spyOn(history, "showFriends");
+  test("restores the personal history route", () => {
+    const show = vi.spyOn(history, "show");
     Object.defineProperty(globalThis, "location", {
       configurable: true,
-      value: new URL(`https://hanab.live/lobby${hash}`),
+      value: new URL("https://hanab.live/lobby#history"),
     });
 
-    parseAndGoto({ firstTimeUser: false } as ServerCommandWelcomeData);
+    parseAndGoto(welcome());
 
     expect(show).toHaveBeenCalledTimes(1);
-    expect(showFriends).toHaveBeenCalledTimes(friends ? 1 : 0);
+    expect(show).toHaveBeenCalledWith();
   });
 
   test("restores the other scores history route", () => {
-    const show = jest.spyOn(history, "show");
-    const showFriends = jest.spyOn(history, "showFriends");
-    const showOtherScores = jest.spyOn(history, "showOtherScoresFromURL");
-    const url = "https://hanab.live/lobby#history-other-scores-friends-p4v0s1";
+    const show = vi.spyOn(history, "show");
+    const showOtherScores = vi.spyOn(history, "showOtherScores");
+    const url = "https://hanab.live/lobby#history-other-scores-p4v0s1";
     Object.defineProperty(globalThis, "location", {
       configurable: true,
       value: new URL(url),
     });
 
-    parseAndGoto({ firstTimeUser: false } as ServerCommandWelcomeData);
+    parseAndGoto(welcome());
 
     expect(show).toHaveBeenCalledTimes(1);
-    expect(showFriends).toHaveBeenCalledTimes(1);
-    expect(showOtherScores).toHaveBeenCalledWith("p4v0s1", true);
+    expect(showOtherScores).toHaveBeenCalledWith("p4v0s1");
+    expect(show).toHaveBeenCalledWith(false);
   });
 
   test.each([
-    ["/game/123", -1],
+    ["/game/123", undefined],
     ["/game/123/shadow/0", 0],
     ["/game/123/shadow/2", 2],
   ])("route %s => seat %i", (pathname, shadowingPlayerIndex) => {
-    const send = jest.spyOn(globals.conn!, "send");
+    const send = vi.spyOn(globals.connection, "send");
     Object.defineProperty(globalThis, "location", {
       configurable: true,
       value: new URL(`https://hanab.live${pathname}`),
     });
 
-    parseAndGoto({ firstTimeUser: false } as ServerCommandWelcomeData);
+    parseAndGoto(welcome());
 
     expect(send).toHaveBeenCalledWith("tableSpectate", {
-      tableID: 123,
+      tableId: 123,
       shadowingPlayerIndex,
     });
+  });
+
+  const tableId = tableIdSchema.parse(123);
+
+  test.each([
+    ["/replay/456", { playingAtTables: [tableId] }],
+    ["/replay/456", { spectatingAtTables: [{ tableId }] }],
+  ])("route %s takes precedence over reconnecting", (pathname, data) => {
+    const send = vi.spyOn(globals.connection, "send");
+    Object.defineProperty(globalThis, "location", {
+      configurable: true,
+      value: new URL(`https://hanab.live${pathname}`),
+    });
+
+    parseAndGoto(welcome(data));
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenCalledWith(
+      "replayCreate",
+      expect.objectContaining({
+        source: {
+          type: "saved",
+          gameId: 456,
+        },
+        visibility: {
+          type: "solo",
+        },
+      }),
+    );
+  });
+
+  test.each([
+    [{}, "tableJoin", { tableId: 123 }],
+    [{ spectatingAtTables: [{ tableId }] }, "tableSpectate", { tableId }],
+    // A spectator who closed another table's page is still listed there.
+    [
+      {
+        spectatingAtTables: [
+          { tableId: tableIdSchema.parse(456) },
+          { tableId },
+        ],
+      },
+      "tableSpectate",
+      { tableId },
+    ],
+  ])("route /pre-game/123 with %o sends %s", (data, command, commandData) => {
+    const send = vi.spyOn(globals.connection, "send");
+    Object.defineProperties(globalThis, {
+      location: {
+        configurable: true,
+        value: new URL("https://hanab.live/pre-game/123"),
+      },
+      localStorage: {
+        configurable: true,
+        value: {
+          getItem: vi.fn(() => null),
+        },
+      },
+    });
+
+    parseAndGoto(welcome(data));
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenCalledWith(command, commandData);
+  });
+
+  test.each(["/lobby", "/game/123", "/game/123/shadow/0"])(
+    "route %s returns to an ongoing game",
+    (pathname) => {
+      const send = vi.spyOn(globals.connection, "send");
+      Object.defineProperty(globalThis, "location", {
+        configurable: true,
+        value: new URL(`https://hanab.live${pathname}`),
+      });
+
+      parseAndGoto(welcome({ playingAtTables: [tableId] }));
+
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(send).toHaveBeenCalledWith("tableReattend", { tableId });
+    },
+  );
+
+  test.each([
+    ["/game/123", true],
+    ["/game/123/shadow/1", true],
+    ["/pre-game/123", true],
+    ["/game/1234", false],
+    ["/replay/123", false],
+    ["/lobby", false],
+  ])("a gone table at %s leaves its link: %s", (pathname, leaves) => {
+    Object.defineProperty(globalThis, "location", {
+      configurable: true,
+      value: new URL(`https://hanab.live${pathname}`),
+    });
+
+    leaveTableLink(123);
+
+    expect(vi.mocked(setBrowserAddressBarPath).mock.calls).toStrictEqual(
+      leaves ? [["/lobby"]] : [],
+    );
+  });
+});
+
+describe("table creation URL", () => {
+  const locationDescriptor = Object.getOwnPropertyDescriptor(
+    globalThis,
+    "location",
+  );
+
+  afterEach(() => {
+    if (locationDescriptor === undefined) {
+      Reflect.deleteProperty(globalThis, "location");
+    } else {
+      Object.defineProperty(globalThis, "location", locationDescriptor);
+    }
+    vi.clearAllMocks();
+  });
+
+  function visit(variantName: string) {
+    Object.defineProperty(globalThis, "location", {
+      configurable: true,
+      value: new URL(
+        `https://hanab.live/create-table?variantName=${encodeURIComponent(variantName)}`,
+      ),
+    });
+    parseAndGoto(welcome({ username: "Alice" }));
+  }
+
+  test("names the variant by its ID", () => {
+    const send = vi.spyOn(globals.connection, "send");
+    visit("Rainbow (6 Suits)");
+    const [command, data] = send.mock.calls[0] ?? [];
+    expect(command).toBe("tableCreate");
+    expect(data).toHaveProperty("settings.options.variantId", 3);
+  });
+
+  test("warns about a variant that does not exist, with its name escaped", () => {
+    const send = vi.spyOn(globals.connection, "send");
+    visit("<img src=x onerror=alert(1)>");
+    expect(send).not.toHaveBeenCalled();
+    expect(modals.showWarning).toHaveBeenCalledWith(
+      'The variant of "&lt;img src=x onerror=alert(1)&gt;" does not exist.',
+    );
   });
 });

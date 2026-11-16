@@ -1,26 +1,50 @@
 // The reducer for replays and hypotheticals.
 
-import type { GameMetadata, HypotheticalStateAction } from "@hanabi-live/game";
+import type {
+  GameMetadata,
+  HypotheticalState,
+  HypotheticalStateAction,
+} from "@hanabi-live/game";
 import {
   hypotheticalStateReducer,
   initializeHypotheticalState,
 } from "@hanabi-live/game";
-import { assertDefined, assertNotNull } from "complete-common";
+import { assertDefined } from "complete-common";
 import type { Draft } from "immer";
-import { castDraft, original, produce } from "immer";
-import type { ReplayState } from "../types/ReplayState";
-import type { ReplayAction } from "../types/actions";
+import { castDraft, produce } from "immer";
+import type { ReplayState } from "../types/ReplayState.ts";
+import type { ReplayAction } from "../types/actions.ts";
+import { snapshot } from "./stateReducerHelpers.ts";
 
 export const replayReducer = produce(replayReducerFunction, {} as ReplayState);
 
 function replayReducerFunction(
   state: Draft<ReplayState>,
   action: ReplayAction,
-  finished: boolean,
   metadata: GameMetadata,
 ) {
+  if (action.type === "replayEnter") {
+    if (state.segment !== undefined) {
+      throw new Error(
+        `A "${action.type}" action was dispatched, but we are already in a replay.`,
+      );
+    }
+
+    if (typeof action.segment !== "number") {
+      throw new TypeError(
+        `The "${action.type}" action segment was not a number.`,
+      );
+    }
+    if (action.segment < 0) {
+      throw new Error(`The "${action.type}" action segment was less than 0.`);
+    }
+    state.segment = action.segment;
+    return;
+  }
+
   // Validate current state
-  if (!state.active && action.type !== "replayEnter") {
+  const { segment } = state;
+  if (segment === undefined) {
     throw new Error(
       `A "${action.type}" action was dispatched, but we are not in a replay.`,
     );
@@ -31,30 +55,8 @@ function replayReducerFunction(
     // Replay actions
     // --------------
 
-    case "replayEnter": {
-      if (state.active) {
-        throw new Error(
-          `A "${action.type}" action was dispatched, but we are already in a replay.`,
-        );
-      }
-      state.active = true;
-
-      if (typeof action.segment !== "number") {
-        throw new TypeError(
-          `The "${action.type}" action segment was not a number.`,
-        );
-      }
-      if (action.segment < 0) {
-        throw new Error(`The "${action.type}" action segment was less than 0.`);
-      }
-      state.segment = action.segment;
-
-      break;
-    }
-
     case "replayExit": {
-      state.active = false;
-      state.segment = 0;
+      state.segment = undefined;
 
       break;
     }
@@ -74,7 +76,7 @@ function replayReducerFunction(
     }
 
     case "replaySharedSegment": {
-      assertNotNull(
+      assertDefined(
         state.shared,
         `A "${action.type}" action was dispatched, but we are not in a shared replay.`,
       );
@@ -99,7 +101,7 @@ function replayReducerFunction(
     }
 
     case "replayUseSharedSegments": {
-      assertNotNull(
+      assertDefined(
         state.shared,
         `A "${action.type}" action was dispatched, but we are not in a shared replay.`,
       );
@@ -109,20 +111,30 @@ function replayReducerFunction(
       // If we are the replay leader and we are re-enabling shared segments, we also want to update
       // the shared segment to our current segment.
       if (state.shared.amLeader && state.shared.useSharedSegments) {
-        state.shared.segment = state.segment;
+        state.shared.segment = segment;
       }
 
       break;
     }
 
     case "replayLeader": {
-      assertNotNull(
+      assertDefined(
         state.shared,
         `A "${action.type}" action was dispatched, but we are not in a shared replay.`,
       );
 
-      state.shared.leader = action.name;
-      state.shared.amLeader = action.name === metadata.ourUsername;
+      state.shared.leader = action.username;
+      state.shared.amLeader = action.username === metadata.ourUsername;
+      break;
+    }
+
+    case "restartDeclined": {
+      assertDefined(
+        state.shared,
+        `A "${action.type}" action was dispatched, but we are not in a shared replay.`,
+      );
+
+      state.shared.restartDeclined = castDraft(action.restartDeclined);
       break;
     }
 
@@ -130,72 +142,121 @@ function replayReducerFunction(
     // Hypothetical actions
     // --------------------
 
-    case "hypoStart": {
-      if (state.hypothetical !== null) {
+    case "hypotheticalStart": {
+      if (getHypothetical(state, action.shared) !== undefined) {
         throw new Error(
           `A "${action.type}" action was dispatched with a non-null hypothetical state.`,
         );
       }
-      if (state.shared !== null) {
-        // Bring us to the current shared replay turn, if we are not already there
-        state.segment = state.shared.segment;
-        state.shared.useSharedSegments = true;
-      }
 
-      const ongoing = state.states[state.segment];
+      // The leader's hypothetical starts on the shared segment, even if we are looking at a
+      // different segment.
+      let startSegment = segment;
+      if (action.shared && state.shared !== undefined) {
+        startSegment = state.shared.segment;
+        if (state.shared.useSharedSegments) {
+          state.segment = startSegment;
+        }
+      }
+      const ongoing = state.states[startSegment];
       assertDefined(
         ongoing,
-        `Failed to get the game state for segment: ${state.segment}`,
+        `Failed to get the game state for segment: ${startSegment}`,
       );
 
-      const originalOngoing = original(ongoing);
-      state.hypothetical = castDraft(
-        initializeHypotheticalState(
-          originalOngoing,
-          action.showDrawnCards,
-          action.actions,
-          finished,
-          metadata,
-        ),
+      const hypothetical = initializeHypotheticalState(
+        snapshot(ongoing),
+        action.showDrawnCards,
+        action.actions,
+        metadata,
       );
+      setHypothetical(state, action.shared, castDraft(hypothetical));
 
       break;
     }
 
-    case "hypoEnd": {
-      assertNotNull(
-        state.hypothetical,
-        `A "${action.type}" action was dispatched with a null hypothetical state.`,
+    case "hypotheticalEnd": {
+      assertDefined(
+        getHypothetical(state, action.shared),
+        `A "${action.type}" action was dispatched with a undefined hypothetical state.`,
       );
 
-      state.hypothetical = null;
+      setHypothetical(state, action.shared, undefined);
       break;
     }
 
-    case "hypoBack":
-    case "hypoShowDrawnCards":
-    case "hypoAction": {
-      assertNotNull(
-        state.hypothetical,
-        `A "${action.type}" action was dispatched with a null hypothetical state.`,
+    case "hypotheticalBack":
+    case "hypotheticalShowDrawnCards":
+    case "hypotheticalActions": {
+      const hypotheticalDraft = getHypothetical(state, action.shared);
+      assertDefined(
+        hypotheticalDraft,
+        `A "${action.type}" action was dispatched with a undefined hypothetical state.`,
       );
 
-      const hypothetical = original(state.hypothetical);
-      let coreAction: HypotheticalStateAction;
-      if (action.type === "hypoAction") {
-        coreAction = action.action;
-      } else if (action.type === "hypoBack") {
-        coreAction = { type: "back" };
+      let hypothetical: HypotheticalState = snapshot(hypotheticalDraft);
+      let coreActions: readonly HypotheticalStateAction[];
+      if (action.type === "hypotheticalActions") {
+        coreActions = action.actions;
+      } else if (action.type === "hypotheticalBack") {
+        coreActions = [{ type: "back" }];
       } else {
-        coreAction = {
-          type: "showDrawnCards",
-          showDrawnCards: action.showDrawnCards,
-        };
+        coreActions = [
+          {
+            type: "showDrawnCards",
+            showDrawnCards: action.showDrawnCards,
+          },
+        ];
       }
-      state.hypothetical = castDraft(
-        hypotheticalStateReducer(hypothetical, coreAction, finished, metadata),
-      );
+      for (const coreAction of coreActions) {
+        hypothetical = hypotheticalStateReducer(
+          hypothetical,
+          coreAction,
+          metadata,
+        );
+      }
+      setHypothetical(state, action.shared, castDraft(hypothetical));
       break;
     }
   }
+
+  // We show our own hypothetical first. We only show the leader's hypothetical while we use the
+  // shared segments.
+  state.hypothetical =
+    state.ownHypothetical
+    ?? (state.shared?.useSharedSegments === true
+      ? state.shared.hypothetical
+      : undefined);
+}
+
+function getHypothetical(
+  state: Draft<ReplayState>,
+  shared: boolean,
+): Draft<HypotheticalState> | undefined {
+  if (!shared) {
+    return state.ownHypothetical;
+  }
+
+  assertDefined(
+    state.shared,
+    "A shared hypothetical action was dispatched, but we are not in a shared replay.",
+  );
+  return state.shared.hypothetical;
+}
+
+function setHypothetical(
+  state: Draft<ReplayState>,
+  shared: boolean,
+  hypothetical: Draft<HypotheticalState> | undefined,
+) {
+  if (!shared) {
+    state.ownHypothetical = hypothetical;
+    return;
+  }
+
+  assertDefined(
+    state.shared,
+    "A shared hypothetical action was dispatched, but we are not in a shared replay.",
+  );
+  state.shared.hypothetical = hypothetical;
 }

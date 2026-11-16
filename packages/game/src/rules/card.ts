@@ -1,23 +1,23 @@
 import { eRange, filterMap } from "complete-common";
-import { START_CARD_RANK } from "../constants";
-import { CardStatus } from "../enums/CardStatus";
-import type { CardState } from "../interfaces/CardState";
-import type { GameState } from "../interfaces/GameState";
-import type { Variant } from "../interfaces/Variant";
-import type { Rank } from "../types/Rank";
-import type { SuitIndex } from "../types/SuitIndex";
+import { CardStatus } from "../enums/CardStatus.ts";
+import { START_CARD_RANK } from "../generated/protocol.ts";
+import type { CardState } from "../interfaces/CardState.ts";
+import type { GameState } from "../interfaces/GameState.ts";
+import type { Variant } from "../interfaces/Variant.ts";
+import type { Rank } from "../types/Rank.ts";
+import type { SuitIndex } from "../types/SuitIndex.ts";
 import {
   getDiscardHelpers,
   getNumCopiesOfCard,
   getNumDiscardedCopiesOfCard,
-} from "./deck";
-import { getNextPlayableRanks } from "./playStacks";
+} from "./deck.ts";
+import { getNextPlayableRanks } from "./playStacks.ts";
 import {
   reversibleIsCardCritical,
   reversibleIsCardNeededForMaxScore,
-} from "./variants/reversible";
-import { sudokuIsCardNeededForMaxScore } from "./variants/sudoku";
-import { hasReversedSuits } from "./variants/variantIdentity";
+} from "./variants/reversible.ts";
+import { sudokuIsCardNeededForMaxScore } from "./variants/sudoku.ts";
+import { hasReversedSuits } from "./variants/variantIdentity.ts";
 
 export function getCardName(
   suitIndex: SuitIndex,
@@ -38,15 +38,15 @@ export function getCardName(
  * maximum score. This mirrors the server function "Card.NeedsToBePlayed()".
  */
 export function isCardNeededForMaxScore(
-  suitIndex: SuitIndex | -1,
-  rank: Rank | -1,
+  suitIndex: SuitIndex | undefined,
+  rank: Rank | undefined,
   deck: readonly CardState[],
   playStacks: GameState["playStacks"],
   playStackDirections: GameState["playStackDirections"],
   playStackStarts: GameState["playStackStarts"],
   variant: Variant,
 ): boolean {
-  if (suitIndex === -1 || rank === -1) {
+  if (suitIndex === undefined || rank === undefined) {
     return false;
   }
 
@@ -119,11 +119,9 @@ export function getCardStatus(
   );
 
   if (cardNeedsToBePlayed) {
-    if (isCardCritical(suitIndex, rank, deck, playStackDirections, variant)) {
-      return CardStatus.Critical;
-    }
-
-    return CardStatus.NeedsToBePlayed;
+    return isCardCritical(suitIndex, rank, deck, playStackDirections, variant)
+      ? CardStatus.Critical
+      : CardStatus.NeedsToBePlayed;
   }
 
   return CardStatus.Trash;
@@ -131,13 +129,13 @@ export function getCardStatus(
 
 /** This does not mirror any function on the server. */
 export function isCardCritical(
-  suitIndex: SuitIndex | -1,
-  rank: Rank | -1,
+  suitIndex: SuitIndex | undefined,
+  rank: Rank | undefined,
   deck: readonly CardState[],
   playStackDirections: GameState["playStackDirections"],
   variant: Variant,
 ): boolean {
-  if (suitIndex === -1 || rank === -1) {
+  if (suitIndex === undefined || rank === undefined) {
     return false;
   }
 
@@ -204,31 +202,33 @@ export function isCardPotentiallyPlayable(
 
 export function canCardPossiblyBeFromCluesOnly(
   card: CardState,
-  suitIndex: SuitIndex | null,
-  rank: Rank | null,
+  suitIndex: SuitIndex | undefined,
+  rank: Rank | undefined,
 ): boolean {
-  if (suitIndex === null && rank === null) {
+  return (
     // We have nothing to check.
-    return true;
-  }
-  return card.possibleCardsFromClues.some(
-    ([s, r]) =>
-      (suitIndex === null || suitIndex === s) && (rank === null || rank === r),
+    (suitIndex === undefined && rank === undefined)
+    || card.possibleCardsFromClues.some(
+      ([s, r]) =>
+        (suitIndex === undefined || suitIndex === s)
+        && (rank === undefined || rank === r),
+    )
   );
 }
 
 export function canCardPossiblyBeFromEmpathy(
   card: CardState,
-  suitIndex: SuitIndex | null,
-  rank: Rank | null,
+  suitIndex: SuitIndex | undefined,
+  rank: Rank | undefined,
 ): boolean {
-  if (suitIndex === null && rank === null) {
+  return (
     // We have nothing to check.
-    return true;
-  }
-  return card.possibleCardsForEmpathy.some(
-    ([s, r]) =>
-      (suitIndex === null || suitIndex === s) && (rank === null || rank === r),
+    (suitIndex === undefined && rank === undefined)
+    || card.possibleCardsForEmpathy.some(
+      ([s, r]) =>
+        (suitIndex === undefined || suitIndex === s)
+        && (rank === undefined || rank === r),
+    )
   );
 }
 
@@ -242,7 +242,7 @@ export function isAllCardPossibilitiesTrash(
   empathy: boolean,
 ): boolean {
   // If we fully know the card already, just check if it's playable.
-  if (!empathy && card.rank !== null && card.suitIndex !== null) {
+  if (!empathy && card.rank !== undefined && card.suitIndex !== undefined) {
     return !isCardNeededForMaxScore(
       card.suitIndex,
       card.rank,

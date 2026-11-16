@@ -1,44 +1,9 @@
-import type {
-  CardOrder,
-  PlayerIndex,
-  RankClueNumber,
-  SuitIndex,
-} from "@hanabi-live/game";
-import type { CompositionTypeSatisfiesEnum } from "complete-common";
-import type { ActionType } from "./ActionType";
+import type { ClientRequestData } from "@hanabi-live/data";
 
-/** A message sent to the server that represents the in-game action that we just took. */
-export type ClientAction =
-  | ClientActionPlay
-  | ClientActionDiscard
-  | ClientActionColorClue
-  | ClientActionRankClue;
+/** An in-game action that we just took: the "playerAction" command's action. */
+export type ClientAction = ClientRequestData["playerAction"]["action"];
 
-type _Test = CompositionTypeSatisfiesEnum<
-  ClientAction,
-  Exclude<ActionType, ActionType.GameOver>
->;
+export type ClientActionClue = Extract<ClientAction, { type: "clue" }>;
 
-interface ClientActionPlay {
-  type: ActionType.Play;
-  target: CardOrder;
-}
-
-interface ClientActionDiscard {
-  type: ActionType.Discard;
-  target: CardOrder;
-}
-
-export interface ClientActionColorClue {
-  type: ActionType.ColorClue;
-  target: PlayerIndex;
-  value: SuitIndex;
-}
-
-export interface ClientActionRankClue {
-  type: ActionType.RankClue;
-  target: PlayerIndex;
-  value: RankClueNumber;
-}
-
-export type ClientActionClue = ClientActionColorClue | ClientActionRankClue;
+/** A clue's type and value, as a clue action gives it. */
+export type ClientClue = ClientActionClue["clue"];

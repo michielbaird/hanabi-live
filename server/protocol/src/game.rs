@@ -1,0 +1,521 @@
+//! A game in progress: its clocks, events, notes, and the data that loads it.
+
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::wildcard_imports,
+        reason = "the payloads use the crate's shared constants, types, and schema helpers"
+    )
+)]
+use super::*;
+
+/// Every player's clock.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Clock {
+    pub table_id: TableId,
+    #[serde(flatten)]
+    pub clock: ClockState,
+}
+
+/// Every player's clock, in the `clock` message and in a game's state.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ClockState {
+    /// Each player's clock, in seat order.
+    #[schemars(length(min = MIN_PLAYERS, max = MAX_PLAYERS))]
+    pub player_times_ms: Vec<PlayerClock>,
+    /// Absent when the game has no active player.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_player_index: Option<PlayerIndex>,
+    /// How long the current turn has taken. 0 when no turn is running, such as while the game is
+    /// paused.
+    pub turn_elapsed_ms: Milliseconds,
+}
+
+/// Whether each player has loaded the game, in seat order. Only a game in progress sends it.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Connections {
+    pub table_id: TableId,
+    #[schemars(with = "PlayerConnections")]
+    pub connections: Vec<bool>,
+}
+
+/// Sent when an ongoing game is about to end because nobody has taken a turn for too long.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct IdleWarning {
+    pub table_id: TableId,
+    /// How long until the game ends, unless someone takes a turn or keeps it going. At most
+    /// `IDLE_WARNING_MS`.
+    pub idle_remaining_ms: Milliseconds,
+}
+
+/// Whether the game is paused, as one player sees it.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Pause {
+    pub table_id: TableId,
+    #[serde(flatten)]
+    pub pause: PauseState,
+}
+
+/// Whether the game is paused, as one player sees it, in the `pause` message and in a game's
+/// state.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PauseState {
+    /// The seat that paused the game. Absent when the game is not paused.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pausing_player_index: Option<PlayerIndex>,
+    /// Whether the recipient asked to pause the game at their next turn.
+    pub queued: bool,
+}
+
+/// The votes to end the game, as one player sees them.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Votes {
+    pub table_id: TableId,
+    #[serde(flatten)]
+    pub votes: VoteState,
+}
+
+/// The votes to end the game, as one player sees them, in the `votes` message and in a game's
+/// state. A player sees only their own vote, so that the votes of others do not tell them what
+/// their teammates think of the game.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VoteState {
+    /// Whether the recipient voted.
+    pub voted: bool,
+    /// How many votes end the game.
+    pub num_votes_needed: VoteCount,
+}
+
+/// A card's suit and rank.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CardIdentity {
+    pub suit_index: SuitIndex,
+    pub rank: CardRank,
+}
+
+/// Sent when a game ends: its players and spectators now watch its shared replay.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GameFinished {
+    pub table_id: TableId,
+    pub finished_at: Timestamp,
+    /// Every card's identity, by card order. The client rebuilds the game as a replay, which needs
+    /// the cards that were hidden from it.
+    #[schemars(length(max = MAX_DECK_SIZE))]
+    pub deck: Vec<CardIdentity>,
+    /// Every event of the game, with nothing hidden. A player saw some clues without their type
+    /// or value, as in a "Duck" variant, and the replay shows them in full.
+    pub events: Vec<GameEvent>,
+    /// Every player's and spectator's notes, which the recipient may now all see.
+    pub notes: Vec<AuthorNotes>,
+    /// How the recipient views the shared replay, as `GameInit.mode` would show it.
+    pub view: SharedReplayView,
+    pub shared_replay: SharedReplayState,
+}
+
+/// Sent when the recipient enters a table's screen: its pregame or its game.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TableJoined {
+    pub table_id: TableId,
+    pub stage: TableStage,
+}
+
+/// What the recipient enters at a table: its pregame, a game that started just now, a game in
+/// progress, or the replay of a finished game.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum TableStage {
+    Pregame,
+    JustStarted,
+    Playing,
+    Replay,
+}
+
+/// One author's notes on every card.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AuthorNotes {
+    pub username: Username,
+    #[schemars(with = "Notes")]
+    pub notes: Vec<String>,
+    pub spectator: bool,
+}
+
+/// One author's note on a single card.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AuthorNote {
+    pub username: Username,
+    pub text: String,
+    pub spectator: bool,
+}
+
+/// A note that someone else changed, sent to the spectators who may see it.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Note {
+    pub table_id: TableId,
+    pub order: CardOrder,
+    pub note: AuthorNote,
+}
+
+/// The type of a clue.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum ClueType {
+    Color,
+    Rank,
+}
+
+/// A clue's type and value: a color clue names one of the variant's clue colors, and a rank clue
+/// names a rank.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
+pub enum Clue {
+    Color { color: ColorIndex },
+    Rank { rank: ClueRank },
+}
+
+/// A clue as the recipient of an event sees it: its type, and its value unless the variant hides
+/// the value from them, as "Cow & Pig" does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
+pub enum VisibleClue {
+    Color {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        color: Option<ColorIndex>,
+    },
+    Rank {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        rank: Option<ClueRank>,
+    },
+}
+
+impl From<Clue> for VisibleClue {
+    fn from(clue: Clue) -> Self {
+        match clue {
+            Clue::Color { color } => Self::Color { color: Some(color) },
+            Clue::Rank { rank } => Self::Rank { rank: Some(rank) },
+        }
+    }
+}
+
+impl From<ClueType> for VisibleClue {
+    /// A clue whose value the recipient may not see.
+    fn from(clue_type: ClueType) -> Self {
+        match clue_type {
+            ClueType::Color => Self::Color { color: None },
+            ClueType::Rank => Self::Rank { rank: None },
+        }
+    }
+}
+
+/// A card that a player draws, plays, discards, misplays, or learns.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CardEvent {
+    pub player_index: PlayerIndex,
+    pub order: CardOrder,
+    /// Absent when the recipient may not see the card.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub identity: Option<CardIdentity>,
+}
+
+/// The start of a turn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TurnEvent {
+    pub turn: Turn,
+    /// Absent once the game has ended.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_player_index: Option<PlayerIndex>,
+}
+
+/// A clue that a player gives.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ClueEvent {
+    /// Absent when the recipient may not see even the clue's type, as in a "Duck" variant or for a
+    /// clue from a Quacker.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clue: Option<VisibleClue>,
+    /// The player who gives the clue.
+    pub player_index: PlayerIndex,
+    /// The player who receives the clue.
+    pub receiver_index: PlayerIndex,
+    /// The orders of the cards the clue touched.
+    #[schemars(length(max = MAX_HAND_SIZE))]
+    pub orders: Vec<CardOrder>,
+    /// Whether the cards that the clue does not touch learn nothing from it. Only a hypothetical's
+    /// clue can set it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub ignore_negative: bool,
+}
+
+/// The end of a game.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GameOverEvent {
+    pub end_condition: EndCondition,
+    /// The player who ended the game, such as the one who timed out. Absent when no player did.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub player_index: Option<PlayerIndex>,
+    /// The players who voted to end the game. Empty when a vote did not end it.
+    #[schemars(length(max = MAX_PLAYERS))]
+    pub voters: Vec<PlayerIndex>,
+}
+
+/// Every player's time when a game ends.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PlayerTimesEvent {
+    /// Each player's clock, in seat order.
+    #[schemars(length(min = MIN_PLAYERS, max = MAX_PLAYERS))]
+    pub player_times_ms: Vec<PlayerClock>,
+    pub duration_ms: Milliseconds,
+}
+
+/// One game event as a particular recipient sees it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum GameEvent {
+    Draw(CardEvent),
+    Play(CardEvent),
+    CardIdentity(CardEvent),
+    Discard(CardEvent),
+    /// A play that fails, which discards the card and adds a strike.
+    Misplay(CardEvent),
+    Clue(ClueEvent),
+    Turn(TurnEvent),
+    GameOver(GameOverEvent),
+    PlayerTimes(PlayerTimesEvent),
+}
+
+/// The events of one action, such as a play, the draw after it, and the next turn. A client applies
+/// them together, as one move.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GameEventMessage {
+    pub table_id: TableId,
+    #[schemars(length(min = 1))]
+    pub events: Vec<GameEvent>,
+}
+
+/// What a client shows of a game after its setup (`GameInit`), as the recipient may see it: the
+/// events so far, and the state around them. It answers `gameStateLoad`. It is an event, not the
+/// reply's data, so that it arrives before the table's later messages, which build on it.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GameState {
+    pub table_id: TableId,
+    pub events: Vec<GameEvent>,
+    /// The notes that the recipient may see: everyone's for spectators and replay viewers, and
+    /// their own for a player.
+    pub notes: Vec<AuthorNotes>,
+    pub spectators: Vec<Spectator>,
+    pub phase: GamePhase,
+}
+
+/// The parts of a game's state that only a game in progress or only a replay has.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum GamePhase {
+    /// A game in progress.
+    Playing {
+        clock: ClockState,
+        pause: PauseState,
+        #[schemars(with = "PlayerConnections")]
+        connections: Vec<bool>,
+        /// Present for a player of the game.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        votes: Option<VoteState>,
+        /// How long until the game ends because nobody took a turn, as in `idleWarning`. Present
+        /// only after the table was warned.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        idle_remaining_ms: Option<Milliseconds>,
+    },
+    /// A finished game.
+    Replay {
+        /// Every card's identity, by card order.
+        #[schemars(length(max = MAX_DECK_SIZE))]
+        deck: Vec<CardIdentity>,
+        /// Present for a shared replay.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        shared_replay: Option<SharedReplayState>,
+    },
+}
+
+/// A player's detrimental character, in a game and in the replay format, with the value that some
+/// characters are assigned. Every player has one when detrimental characters are on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum CharacterAssignment {
+    /// A character without an assigned value.
+    Plain { character_id: CharacterId },
+    /// A character that is assigned a clue color, such as Fuming. The color is an index into the
+    /// variant's clue colors.
+    Color {
+        character_id: CharacterId,
+        color: ColorIndex,
+    },
+    /// A character that is assigned a rank, such as Awkward.
+    Rank {
+        character_id: CharacterId,
+        rank: ClueRank,
+    },
+}
+
+impl CharacterAssignment {
+    pub const fn character_id(self) -> CharacterId {
+        match self {
+            Self::Plain { character_id }
+            | Self::Color { character_id, .. }
+            | Self::Rank { character_id, .. } => character_id,
+        }
+    }
+}
+
+/// How the recipient takes part in a game, and what that needs. `ourPlayerIndex` is the seat that
+/// the recipient sees the game from.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum ViewMode {
+    /// A player of a game in progress.
+    Playing { our_player_index: PlayerIndex },
+    /// A spectator of a game in progress who does not view it from a seat.
+    Spectating {},
+    /// A spectator of a game in progress who views it from a player's seat.
+    Shadowing { our_player_index: PlayerIndex },
+    /// A viewer of a finished game, alone.
+    SoloReplay {
+        /// Absent when the game is not saved, such as an imported one.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        game_id: Option<GameId>,
+        /// The seat that the recipient played in or shadows, if any.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        our_player_index: Option<PlayerIndex>,
+    },
+    /// A viewer of a finished game, with others.
+    SharedReplay(SharedReplayView),
+}
+
+impl ViewMode {
+    /// The seat that the recipient sees the game from, if any.
+    pub const fn our_player_index(&self) -> Option<PlayerIndex> {
+        match self {
+            Self::Playing { our_player_index } | Self::Shadowing { our_player_index } => {
+                Some(*our_player_index)
+            }
+            Self::SoloReplay {
+                our_player_index, ..
+            }
+            | Self::SharedReplay(SharedReplayView {
+                our_player_index, ..
+            }) => *our_player_index,
+            Self::Spectating {} => None,
+        }
+    }
+}
+
+/// Everything a client needs to draw a game, before its events arrive. It is the reply to
+/// `gameInitLoad`.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GameInit {
+    #[schemars(length(min = MIN_PLAYERS, max = MAX_PLAYERS))]
+    pub player_names: Vec<Username>,
+    pub mode: ViewMode,
+    /// Whether the table chose its deal, so that the deck does not count down to a new seed.
+    pub custom_deal: bool,
+    /// Absent for a game with its own deck instead of a seed, such as an imported one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seed: Option<Seed>,
+    pub started_at: Timestamp,
+    /// Absent while the game is in progress.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<Timestamp>,
+    pub options: GameOptions,
+    /// Each player's character, in seat order, when detrimental characters are on. Empty otherwise.
+    #[schemars(length(max = MAX_PLAYERS))]
+    pub characters: Vec<CharacterAssignment>,
+}
+
+/// How the recipient views a shared replay. It does not change while they watch it. What
+/// changes is in `SharedReplayState`.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SharedReplayView {
+    /// Absent when the game is not saved, such as an imported one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub game_id: Option<GameId>,
+    /// The seat that the recipient played in or shadows, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub our_player_index: Option<PlayerIndex>,
+    /// Whether the shared replay hides what happens later in the game.
+    pub spoiler_free: bool,
+    /// Whether the recipient played the game of this shared replay at this table, so that they can
+    /// play it again: the leader by restarting, and the other players by saying if they are ready.
+    pub can_play_again: bool,
+    /// When the replay began: when the game ended, for a review of a game just played, or when the
+    /// table was created, for a replay of an older game. `GameInit.startedAt` is when the game began.
+    pub replay_started_at: Timestamp,
+}
+
+/// The parts of a shared replay that change while people watch it, in a game's state and in
+/// `gameFinished`. They are not in the reply to `gameInitLoad`: a reply can arrive after a newer
+/// `replayAction`, and would then undo it.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SharedReplayState {
+    /// The table's owner, who leads the replay.
+    pub owner: UserRef,
+    pub turn: Turn,
+    pub efficiency_modifier: EfficiencyModifier,
+    /// The seats of the players who will not play again if the leader restarts.
+    #[schemars(length(max = MAX_PLAYERS))]
+    pub restart_decliners: Vec<PlayerIndex>,
+    /// The hypothetical that the replay plays through, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hypothetical: Option<ActiveHypothetical>,
+}
+
+/// How a game ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum EndCondition {
+    Normal,
+    Strikeout,
+    Timeout,
+    TerminatedByPlayer,
+    SpeedrunFail,
+    IdleTimeout,
+    CharacterSoftlock,
+    AllOrNothingFail,
+    AllOrNothingSoftlock,
+    TerminatedByVote,
+}

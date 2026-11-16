@@ -1,25 +1,33 @@
 /* eslint-disable no-param-reassign */
 
-import { assertNotNull } from "complete-common";
+import { assertDefined } from "complete-common";
 import type { Draft } from "immer";
 import { produce } from "immer";
-import { EndCondition } from "../enums/EndCondition";
-import { getVariant } from "../gameData";
-import type { GameMetadata } from "../interfaces/GameMetadata";
-import type { GameState } from "../interfaces/GameState";
-import type { TurnState } from "../interfaces/TurnState";
-import { isInitialDealFinished } from "../rules/deck";
+import { getVariantById } from "../gameData.ts";
+import type { GameMetadata } from "../interfaces/GameMetadata.ts";
+import type { GameState } from "../interfaces/GameState.ts";
+import type { TurnState } from "../interfaces/TurnState.ts";
+import { isInitialDealFinished } from "../rules/deck.ts";
 import {
   getEndTurn,
   getNextPlayerIndex,
   shouldEndTurnAfterClue,
   shouldEndTurnAfterDraw,
   shouldPlayOrderInvert,
-} from "../rules/turn";
-import type { GameAction } from "../types/gameActions";
-import { getCharacterNameForPlayer } from "./reducerHelpers";
+} from "../rules/turn.ts";
+import type { GameAction } from "../types/gameActions.ts";
+import { getCharacterNameForPlayer } from "./reducerHelpers.ts";
 
-export const turnReducer = produce(turnReducerFunction, {} as TurnState);
+export function turnReducer(
+  turn: TurnState,
+  action: GameAction,
+  gameState: GameState,
+  metadata: GameMetadata,
+): TurnState {
+  return produce(turn, (draft) => {
+    turnReducerFunction(draft, action, gameState, metadata);
+  });
+}
 
 function turnReducerFunction(
   turn: Draft<TurnState>,
@@ -27,7 +35,7 @@ function turnReducerFunction(
   gameState: GameState,
   metadata: GameMetadata,
 ) {
-  const variant = getVariant(metadata.options.variantName);
+  const variant = getVariantById(metadata.options.variantId);
   const characterName = getCharacterNameForPlayer(
     turn.currentPlayerIndex,
     metadata.characterAssignments,
@@ -38,7 +46,7 @@ function turnReducerFunction(
       turn.cardsPlayedOrDiscardedThisTurn++;
 
       if (gameState.cardsRemainingInTheDeck === 0) {
-        if (turn.segment !== null) {
+        if (turn.segment !== undefined) {
           turn.segment++;
         }
 
@@ -53,14 +61,15 @@ function turnReducerFunction(
       break;
     }
 
-    case "discard": {
+    case "discard":
+    case "misplay": {
       turn.cardsPlayedOrDiscardedThisTurn++;
-      if (!action.failed) {
+      if (action.type === "discard") {
         turn.cardsDiscardedThisTurn++;
       }
 
       if (gameState.cardsRemainingInTheDeck === 0) {
-        if (turn.segment !== null) {
+        if (turn.segment !== undefined) {
           turn.segment++;
         }
 
@@ -88,7 +97,7 @@ function turnReducerFunction(
     case "clue": {
       turn.cluesGivenThisTurn++;
 
-      assertNotNull(
+      assertDefined(
         turn.segment,
         `A "${action.type}" action happened before all of the initial cards were dealt.`,
       );
@@ -107,7 +116,7 @@ function turnReducerFunction(
     }
 
     case "draw": {
-      if (turn.segment === null) {
+      if (turn.segment === undefined) {
         // If the initial deal is still going on.
         if (
           isInitialDealFinished(gameState.cardsRemainingInTheDeck, metadata)
@@ -143,14 +152,14 @@ function turnReducerFunction(
     }
 
     case "gameOver": {
-      assertNotNull(
+      assertDefined(
         turn.segment,
         `A "${action.type}" action happened before all of the initial cards were dealt.`,
       );
 
-      // Setting the current player index to null signifies that the game is over and will prevent
-      // any name frames from being highlighted on subsequent segments.
-      turn.currentPlayerIndex = null; // eslint-disable-line unicorn/no-null
+      // Setting the current player index to undefined signifies that the game is over and will
+      // prevent any name frames from being highlighted on subsequent segments.
+      turn.currentPlayerIndex = undefined;
 
       // For some types of game overs, we want the explanation text to appear on its own replay
       // segment. The types of "gameOver" that do not have to do with the previous action should be
@@ -158,10 +167,10 @@ function turnReducerFunction(
       // on the same segment as the final action. Any new end conditions must also be updated in the
       // "shouldStoreSegment()" function in "stateReducer.ts".
       if (
-        action.endCondition === EndCondition.Timeout
-        || action.endCondition === EndCondition.TerminatedByPlayer
-        || action.endCondition === EndCondition.TerminatedByVote
-        || action.endCondition === EndCondition.IdleTimeout
+        action.endCondition === "timeout"
+        || action.endCondition === "terminatedByPlayer"
+        || action.endCondition === "terminatedByVote"
+        || action.endCondition === "idleTimeout"
       ) {
         turn.segment++;
       }
@@ -170,7 +179,7 @@ function turnReducerFunction(
     }
 
     case "playerTimes": {
-      assertNotNull(
+      assertDefined(
         turn.segment,
         `A "${action.type}" action happened before all of the initial cards were dealt.`,
       );
@@ -206,7 +215,7 @@ function nextTurn(
     state.playOrderInverted,
   );
 
-  if (deckSize === 0 && state.endTurnNum === null) {
+  if (deckSize === 0 && state.endTurnNum === undefined) {
     state.endTurnNum = getEndTurn(state.turnNum, metadata);
   }
 

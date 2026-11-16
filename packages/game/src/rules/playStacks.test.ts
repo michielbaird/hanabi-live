@@ -1,16 +1,14 @@
-/* eslint-disable unicorn/no-null */
-
-import { describe, expect, test } from "@jest/globals";
+import { describe, expect, test } from "bun:test";
 import type { Tuple } from "complete-common";
 import { eRange, newArray } from "complete-common";
-import { START_CARD_RANK } from "../constants";
-import { StackDirection } from "../enums/StackDirection";
-import { getDefaultVariant, getVariant } from "../gameData";
-import { getInitialCardState } from "../reducers/initialStates/initialCardState";
-import type { CardOrder } from "../types/CardOrder";
-import type { NumSuits } from "../types/NumSuits";
-import type { Rank } from "../types/Rank";
-import { getNextPlayableRanks, getStackDirection } from "./playStacks";
+import { StackDirection } from "../enums/StackDirection.ts";
+import { getDefaultVariant, getVariant } from "../gameData.ts";
+import { START_CARD_RANK } from "../generated/protocol.ts";
+import { getInitialCardState } from "../reducers/initialStates/initialCardState.ts";
+import type { CardOrder } from "../types/CardOrder.ts";
+import type { NumSuits } from "../types/NumSuits.ts";
+import type { Rank } from "../types/Rank.ts";
+import { getNextPlayableRanks, getStackDirection } from "./playStacks.ts";
 
 const NUM_PLAYERS = 2;
 const DEFAULT_VARIANT = getDefaultVariant();
@@ -19,12 +17,12 @@ const REVERSED_VARIANT = getVariant("Reversed (6 Suits)");
 
 const DEFAULT_PLAY_STACK_STARTS = newArray(
   DEFAULT_VARIANT.suits.length,
-  null,
-) as Tuple<Rank | null, NumSuits>;
+  undefined,
+) as Tuple<Rank | undefined, NumSuits>;
 const DEFAULT_PLAY_STACK_STARTS_REVERSED = newArray(
   REVERSED_VARIANT.suits.length,
-  null,
-) as Tuple<Rank | null, NumSuits>;
+  undefined,
+) as Tuple<Rank | undefined, NumSuits>;
 
 describe("direction", () => {
   test("returns Up for No Variant, not finished", () => {

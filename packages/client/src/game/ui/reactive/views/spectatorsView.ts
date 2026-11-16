@@ -1,14 +1,14 @@
 import type { Spectator } from "@hanabi-live/data";
-import { assertDefined } from "complete-common";
-import * as tooltips from "../../../../tooltips";
-import { escapeHtml } from "../../../../utils";
-import { globals } from "../../UIGlobals";
+import * as tooltips from "../../../../tooltips.ts";
+import { isZenShown } from "../../../zen.ts";
+import { globals } from "../../UiGlobals.ts";
+import { getSpectatorsTooltip } from "../../spectatorsTooltip.ts";
 
 export function onSpectatorsChanged(data: {
   spectators: Spectator[];
   finished: boolean;
 }): void {
-  if (!data.finished && globals.lobby.zenModeEnabled) {
+  if (isZenShown(data.finished)) {
     globals.elements.spectatorsLabel?.visible(false);
     globals.elements.spectatorsNumLabel?.visible(false);
     return;
@@ -23,47 +23,10 @@ export function onSpectatorsChanged(data: {
       data.spectators.length.toString(),
     );
 
-    // Build the string that shows all the names.
-    let nameEntries = "";
-    for (const spectator of data.spectators) {
-      const name = escapeHtml(spectator.name);
-      let nameEntry = "<li>";
-      if (spectator.name === globals.metadata.ourUsername) {
-        nameEntry += `<span class="name-me">${name}</span>`;
-      } else if (globals.lobby.friends.includes(spectator.name)) {
-        nameEntry += `<span class="friend">${name}</span>`;
-      } else {
-        nameEntry += name;
-      }
-
-      // Spectators can also be shadowing a specific player. However, only show this in ongoing
-      // games. (Perspective shifts in replays are inconsequential.)
-      if (
-        spectator.shadowingPlayerIndex !== undefined
-        && spectator.shadowingPlayerIndex !== -1
-        && !data.finished
-      ) {
-        const playerName =
-          globals.metadata.playerNames[spectator.shadowingPlayerIndex];
-        assertDefined(
-          playerName,
-          `Failed to find the player name at index: ${spectator.shadowingPlayerIndex}`,
-        );
-
-        if (playerName !== spectator.name) {
-          // eslint-disable-next-line complete/require-ascii
-          nameEntry += ` (🕵️ <em>${escapeHtml(playerName)}</em>)`;
-        }
-      }
-      nameEntry += "</li>";
-      nameEntries += nameEntry;
-    }
-    let content = "<strong>";
-    content += globals.state.finished ? "Shared Replay Viewers" : "Spectators";
-    content += `:</strong><ol class="game-tooltips-ol">${nameEntries}</ol>`;
-    tooltips.setInstanceContent("#tooltip-spectators", content);
+    const content = getSpectatorsTooltip(data.spectators, data.finished);
+    tooltips.setContent("spectators", content);
   } else {
-    tooltips.close("#tooltip-spectators");
+    tooltips.close("spectators");
   }
 
   globals.layers.UI.batchDraw();

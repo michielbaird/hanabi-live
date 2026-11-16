@@ -1,24 +1,28 @@
 import { isCardDiscarded, isCardPlayed } from "@hanabi-live/game";
 import type Konva from "konva";
-import * as tooltips from "../../tooltips";
-import type { HanabiCard } from "./HanabiCard";
-import { HanabiCardClick } from "./HanabiCardClick";
-import { mouseDownSpeedrun } from "./HanabiCardClickSpeedrun";
-import { HanabiCardDblTap, HanabiCardTap } from "./HanabiCardTouchActions";
-import type { LayoutChild } from "./LayoutChild";
-import { globals } from "./UIGlobals";
-import * as arrows from "./arrows";
-import { DOUBLE_TAP_DELAY_SECONDS } from "./constants";
-import * as cursor from "./cursor";
-import * as konvaTooltips from "./konvaTooltips";
-import * as notes from "./notes";
+import { store } from "../../store.ts";
+import * as tooltips from "../../tooltips.ts";
+import type { HanabiCard } from "./HanabiCard.ts";
+import { HanabiCardClick } from "./HanabiCardClick.ts";
+import { mouseDownSpeedrun } from "./HanabiCardClickSpeedrun.ts";
+import { HanabiCardDblTap, HanabiCardTap } from "./HanabiCardTouchActions.ts";
+import type { LayoutChild } from "./LayoutChild.ts";
+import { globals } from "./UiGlobals.ts";
+import * as arrows from "./arrows.ts";
+import { showClueMatches } from "./clueLog/mountClueLog.tsx";
+import {
+  DOUBLE_TAP_DELAY_MILLISECONDS,
+  LEFT_MOUSE_BUTTON_HELD,
+} from "./constants.ts";
+import * as cursor from "./cursor.ts";
+import * as konvaTooltips from "./konvaTooltips.ts";
+import * as notes from "./notes.ts";
 
 export function registerMouseHandlers(this: HanabiCard): void {
   // https://konvajs.org/docs/events/Binding_Events.html
   this.on("mouseenter", mouseEnter);
   this.on("mouseleave", mouseLeave);
   this.on("touchstart", touchStart);
-  this.on("touchend", mouseLeave);
   this.on("click", HanabiCardClick);
   this.on("tap", HanabiCardTap);
   this.on("dbltap", HanabiCardDblTap);
@@ -39,8 +43,7 @@ function mouseEnter(this: HanabiCard) {
 
   // When we hover over a card, the relevant positive and negative clues will be highlighted in the
   // clue log.
-  globals.elements.clueLog!.showMatches(this.state.order);
-  globals.layers.UI.batchDraw();
+  showClueMatches(this.order);
 
   // When we hover over a card, the cursor can change.
   this.setCursor();
@@ -53,8 +56,7 @@ function mouseLeave(this: HanabiCard) {
   checkHideNoteTooltip(this);
 
   // When we stop hovering over a card, the clue log will return to normal.
-  globals.elements.clueLog!.showMatches(null);
-  globals.layers.UI.batchDraw();
+  showClueMatches(undefined);
 
   // When we stop hovering over a card, the cursor should change back to normal.
   cursor.set("default");
@@ -80,14 +82,27 @@ function touchStart(
     // it will appear like the second tap of a double tap. Do not worry about this if we actually
     // double-tapped.
     this.wasRecentlyTapped = true;
-    if (globals.editingNote !== null) {
-      tooltips.close(globals.editingNote);
-      tooltips.close(`#tooltip-${this.tooltipName}`);
+    if (globals.editingNote === undefined) {
+      return;
     }
-  }, DOUBLE_TAP_DELAY_SECONDS);
+
+    tooltips.close(globals.editingNote);
+    tooltips.close(this.tooltipName);
+  }, DOUBLE_TAP_DELAY_MILLISECONDS);
 
   // Do all of the same things that would occur if we hovered over the card.
   mouseEnter.call(this);
+
+  // Konva sends "touchend" to the shape under the finger when it lifts, so a touch that slides off
+  // the card would otherwise leave its note tooltip and Empathy on. Konva also ignores
+  // "touchcancel".
+  const touchEnd = () => {
+    globalThis.removeEventListener("touchend", touchEnd);
+    globalThis.removeEventListener("touchcancel", touchEnd);
+    mouseLeave.call(this);
+  };
+  globalThis.addEventListener("touchend", touchEnd);
+  globalThis.addEventListener("touchcancel", touchEnd);
 
   // During replay hypo, skip the starting player.
   if (checkForHypoEmpathy(this)) {
@@ -111,21 +126,21 @@ function mouseDown(
   }
 
   const editMode =
-    globals.elements.editCardsButton !== null
-    && globals.elements.editCardsButton.pressed
-    && globals.state.replay.hypothetical !== null;
+    globals.elements.editCardsCheckbox !== undefined
+    && globals.elements.editCardsCheckbox.checked
+    && globals.state.replay.hypothetical !== undefined;
   // Empathy
   if (
-    event.evt.buttons === 1 // Only enable Empathy for left-clicks
+    !editMode
+    && event.evt.buttons === LEFT_MOUSE_BUTTON_HELD // Only enable Empathy for left-clicks
     && shouldShowEmpathy(this, event)
-    && !editMode
     && !checkForHypoEmpathy(this)
   ) {
     setEmpathyOnHand(this, true);
   }
 
   // Dragging
-  if (event.evt.buttons === 1) {
+  if (event.evt.buttons === LEFT_MOUSE_BUTTON_HELD) {
     // Only enable dragging for left-clicks.
     dragStart(this);
   }
@@ -150,7 +165,7 @@ function mouseUp(this: HanabiCard) {
 // -----------
 
 function checkShowNoteTooltip(card: HanabiCard) {
-  if (globals.editingNote !== null) {
+  if (globals.editingNote !== undefined) {
     // Do not open any more note tooltips if the user is currently editing a note
     return;
   }
@@ -164,9 +179,8 @@ function checkShowNoteTooltip(card: HanabiCard) {
   }
 
   // If we are spectating and there is a new note, mark it as seen.
-  if (card.noteIndicator.rotated) {
-    card.noteIndicator.rotated = false;
-    card.noteIndicator.rotate(-15);
+  if (card.noteIndicator.tilted) {
+    card.noteIndicator.setTilted(false);
     globals.layers.card.batchDraw();
   }
 
@@ -184,9 +198,9 @@ function getCursorType(card: HanabiCard) {
   }
 
   if (
-    globals.elements.editCardsButton !== null
-    && globals.elements.editCardsButton.pressed
-    && globals.state.replay.hypothetical !== null
+    globals.elements.editCardsCheckbox !== undefined
+    && globals.elements.editCardsCheckbox.checked
+    && globals.state.replay.hypothetical !== undefined
   ) {
     return "edit";
   }
@@ -204,19 +218,18 @@ function getCursorType(card: HanabiCard) {
 
 // The look cursor should show if Empathy can be used on the card.
 function shouldShowLookCursor(card: HanabiCard) {
-  // It is not possible to use Empathy on a stack base.
-  if (card.isStackBase) {
-    return false;
-  }
-
-  // If the card wouldn't be possible to click anyway, don't show the cursor.
-  if (card.layout.isListening() === false) {
+  if (
+    // It is not possible to use Empathy on a stack base.
+    card.isStackBase
+    // If the card wouldn't be possible to click anyway, don't show the cursor.
+    || card.layout.isListening() === false
+  ) {
     return false;
   }
 
   // If we are in an in-game replay or we are not a player in an ongoing game, always show the
   // cursor.
-  if (globals.state.replay.active || !globals.state.playing) {
+  if (globals.state.replay.segment !== undefined || !globals.state.playing) {
     return true;
   }
 
@@ -243,7 +256,7 @@ function shouldShowLookCursor(card: HanabiCard) {
 }
 
 function checkHideNoteTooltip(card: HanabiCard) {
-  const tooltip = `#tooltip-${card.tooltipName}`;
+  const tooltip = card.tooltipName;
 
   // Do not close the tooltip if we are currently editing a note.
   if (globals.editingNote === tooltip) {
@@ -255,7 +268,8 @@ function checkHideNoteTooltip(card: HanabiCard) {
 
 function useSpeedrunClickHandlers() {
   return (
-    (globals.options.speedrun || globals.lobby.settings.speedrunMode)
+    (globals.options.speedrun
+      || store.getState().session.settings.speedrunFeatures)
     && globals.state.playing
   );
 }
@@ -291,11 +305,7 @@ export function setEmpathyOnHand(card: HanabiCard, enabled: boolean): void {
 
   // Only enable empathy when the card's UI parent is its actual hand.
   const hand = globals.elements.playerHands[card.state.location];
-  if (
-    hand === undefined
-    || (card.layout.parent as unknown) !== hand
-    || hand.children.length === 0
-  ) {
+  if (hand === undefined || (card.layout.parent as unknown) !== hand) {
     return;
   }
 
@@ -304,15 +314,19 @@ export function setEmpathyOnHand(card: HanabiCard, enabled: boolean): void {
 
 // Handle things relating to dragging a card. We cannot use the "dragstart" mouse event since that
 // will only fire after the element has moved at least one pixel. Ideally, we would have a check to
-// only make a card draggable with a left click. However, checking for "event.evt.buttons !== 1"
-// will break iPads.
+// only make a card draggable with a left click. However, checking for `LEFT_MOUSE_BUTTON_HELD` will
+// break iPads.
 function dragStart(card: HanabiCard) {
   if (!card.layout.draggable() || card.layout.isListening() === false) {
     return;
   }
 
   card.dragging = true;
-  globals.store!.dispatch({ type: "dragStart", card });
+
+  // The note tooltip would cover the card and the place that it is dragged to.
+  checkHideNoteTooltip(card);
+
+  raiseCardLayer();
 
   // Enable the dragging raise effect.
   card.setRaiseAndShadowOffset();
@@ -324,11 +338,37 @@ function dragStart(card: HanabiCard) {
   // temporarily remove all rotation (for the duration of the drag). The rotation will be
   // automatically reset if the card tweens back to the hand.
   if (
-    globals.state.replay.hypothetical !== null
+    globals.state.replay.hypothetical !== undefined
     && card.layout.parent !== null
-    && globals.lobby.settings.keldonMode
+    && store.getState().session.settings.keldonMode
   ) {
-    card.layout.rotation(-card.layout.parent.rotation());
+    const { parent } = card.layout;
+    const rotation = card.layout.rotation();
+    const { x, y } = card.layout.position();
+    card.layout.rotation(-parent.rotation());
+
+    // Releasing the card without moving it fires no "dragend", so nothing lays out the hand again.
+    // (The straightened card also leaves the pointer, so the card does not get the release either.)
+    globalThis.addEventListener(
+      "pointerup",
+      () => {
+        const position = card.layout.position();
+        if (
+          card.layout.parent !== parent
+          || position.x !== x
+          || position.y !== y
+        ) {
+          return;
+        }
+
+        card.layout.rotation(rotation);
+        globals.layers.card.batchDraw();
+      },
+      {
+        capture: true,
+        once: true,
+      },
+    );
   }
 
   // Hide any visible arrows on the rest of a hand when the card begins to be dragged.
@@ -337,7 +377,7 @@ function dragStart(card: HanabiCard) {
     return;
   }
   let hideArrows = false;
-  for (const layoutChild of hand.children.toArray() as LayoutChild[]) {
+  for (const layoutChild of [...hand.children] as LayoutChild[]) {
     for (const arrow of globals.elements.arrows) {
       if (arrow.pointingTo === layoutChild.card) {
         hideArrows = true;
@@ -357,6 +397,24 @@ function dragStart(card: HanabiCard) {
   hand.moveToTop();
 }
 
+// Draw the cards above everything else for the duration of the drag: the other layers (such as the
+// dialogs and the arrows), whose canvases have no z-index. The card is not always under the pointer
+// when it is released (see the rotation above), so restore the order on any release.
+function raiseCardLayer() {
+  const canvas = globals.layers.card.getNativeCanvasElement();
+  canvas.style.zIndex = "1";
+  globalThis.addEventListener(
+    "pointerup",
+    () => {
+      canvas.style.zIndex = "";
+    },
+    {
+      capture: true,
+      once: true,
+    },
+  );
+}
+
 // Handle things relating to dragging a card. We cannot use the "dragend" mouse event since that
 // will only fire after the element has moved at least one pixel.
 function dragEnd(card: HanabiCard) {
@@ -374,10 +432,10 @@ function dragEnd(card: HanabiCard) {
 }
 
 function checkForHypoEmpathy(card: HanabiCard): boolean {
-  if (globals.state.replay.hypothetical !== null) {
+  if (globals.state.replay.hypothetical !== undefined) {
     const { startingPlayerIndex } = globals.state.replay.hypothetical;
     if (
-      startingPlayerIndex === null
+      startingPlayerIndex === undefined
       || startingPlayerIndex >= globals.elements.playerHands.length
       || globals.elements.playerHands[startingPlayerIndex] === undefined
     ) {
@@ -391,7 +449,7 @@ function checkForHypoEmpathy(card: HanabiCard): boolean {
     ) {
       const child =
         globals.elements.playerHands[startingPlayerIndex].children[i]!;
-      const currentCard: HanabiCard = child.children[0] as HanabiCard;
+      const currentCard = (child as unknown as LayoutChild).card;
       if (currentCard._id === card._id) {
         return true;
       }

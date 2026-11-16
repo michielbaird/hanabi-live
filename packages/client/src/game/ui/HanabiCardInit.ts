@@ -1,32 +1,102 @@
 // Initialization functions for the HanabiCard object.
 
 import type { Suit, Variant } from "@hanabi-live/game";
-import { START_CARD_RANK, hasReversedSuits } from "@hanabi-live/game";
+import {
+  DEFAULT_CARD_RANKS,
+  START_CARD_RANK,
+  hasReversedSuits,
+} from "@hanabi-live/game";
 import { assertDefined } from "complete-common";
 import Konva from "konva";
-import type * as KonvaContext from "konva/types/Context";
-import type * as KonvaUtil from "konva/types/Util";
-import type { Arrow } from "konva/types/shapes/Arrow";
-import type { RectConfig } from "konva/types/shapes/Rect";
-import type { Pips } from "../types/Pips";
-import { globals } from "./UIGlobals";
+import type * as KonvaContext from "konva/lib/Context";
+import type * as KonvaUtil from "konva/lib/Util";
+import type { RectConfig } from "konva/lib/shapes/Rect";
+import { globals as lobbyGlobals } from "../../Globals.ts";
+import { START_CARD_RANK_LABEL } from "../../constants.ts";
+import type { Pips } from "../types/Pips.ts";
+import { globals } from "./UiGlobals.ts";
 import {
+  ARROW_STROKE_WIDTH,
   BOTTOM_LEFT_X,
   BOTTOM_LEFT_Y,
+  CARD_CENTER,
   CARD_H,
+  CARD_SHADOW_OFFSET,
   CARD_W,
   CHOP_MOVE_COLOR,
   CLUED_COLOR,
+  CORNER_ELEMENT_OFFSET,
   DISCARD_PERMISSION_COLOR,
   FINESSE_COLOR,
+  HALF_TURN_DEGREES,
   OFF_BLACK,
+  RANK_FONT_FAMILY,
   SMALL_ICON_SIZE,
+  TEXT_SHADOW,
   TOP_LEFT_X,
   TOP_LEFT_Y,
-} from "./constants";
-import { NoteIndicator } from "./controls/NoteIndicator";
-import { RankPip } from "./controls/RankPip";
-import { drawPip } from "./drawPip";
+} from "./constants.ts";
+import { NoteIndicator } from "./controls/NoteIndicator.ts";
+import { RankPip } from "./controls/RankPip.ts";
+import { drawWithKonva3Shadow } from "./controls/konva3Shadow.ts";
+import { outlinedArrow } from "./controls/outlinedArrow.ts";
+import { SUIT_PIP_SCALE, drawPip, getSuitPipRingPosition } from "./drawPip.ts";
+
+/** The opacity of the shadow under a card and under the pips drawn on it. */
+const CARD_SHADOW_OPACITY = 0.4;
+
+/**
+ * The size of the large icons drawn over the middle of a card, such as a question mark. Based on
+ * the card's width, but used for both the icon's width and height.
+ */
+const LARGE_ICON_SIZE = 0.8 * CARD_W;
+
+/** The left edge of most of the large icons drawn over the middle of a card. */
+const LARGE_ICON_X = 0.15 * CARD_W;
+
+/** The left edge of a large icon that is centered horizontally on a card. */
+const LARGE_ICON_CENTERED_X = (CARD_W - LARGE_ICON_SIZE) / 2;
+
+/** The top edge of the large icons drawn over the middle of a card. */
+const LARGE_ICON_Y = 0.2 * CARD_H;
+
+/**
+ * The opacity of the ghost drawn over a card, so that the pips under it stay visible. It matches
+ * the trash can, whose image is half transparent.
+ */
+const GHOST_OPACITY = 0.5;
+
+/** The size of the trash can drawn over a card that can no longer be played. */
+const TRASHCAN_SIZE = {
+  w: 0.7 * CARD_W,
+  h: 0.6 * CARD_H,
+} as const;
+
+/** The top edge of the wrench drawn over a card, which sits lower than the other large icons. */
+const WRENCH_Y = 0.33 * CARD_H;
+
+/** The top-left corner of the note indicator, as fractions of the card size. */
+const NOTE_INDICATOR_POSITION = {
+  x: 0.78,
+  y: 0.03,
+} as const;
+
+/**
+ * The arrow on a card of a reversed suit, which points up or down to show the direction that the
+ * suit is played in.
+ */
+const DIRECTION_ARROW = {
+  /** The horizontal position of the arrow's shaft, near the right edge of the card. */
+  x: 0.815 * CARD_W,
+  /** How far above its group's origin the arrow starts. */
+  offsetY: 0.14 * CARD_H,
+  /** The length of the arrow. */
+  h: 0.25 * CARD_H,
+  /** The length of the arrowhead, which also sets the thickness of its strokes. */
+  pointerLength: 0.05 * CARD_W,
+  /** How much wider the arrowhead is than it is long. */
+  pointerWidthRatio: 1.5,
+} as const;
 
 export function image(getBareName: () => string): Konva.Image {
   // Create the "bare" card image, which is the main card graphic. If the card is not revealed, it
@@ -35,14 +105,14 @@ export function image(getBareName: () => string): Konva.Image {
   const bare = new Konva.Image({
     width: CARD_W,
     height: CARD_H,
-    image: null as unknown as ImageBitmapSource,
+    image: undefined,
     shadowEnabled: false,
     shadowColor: "black",
     shadowOffset: {
-      x: Math.floor(0.04 * CARD_W),
-      y: Math.floor(0.04 * CARD_W),
+      x: CARD_SHADOW_OFFSET,
+      y: CARD_SHADOW_OFFSET,
     },
-    shadowOpacity: 0.4,
+    shadowOpacity: CARD_SHADOW_OPACITY,
     listening: true, // As the main card element, this must be listening in order for events to fire
   });
   (bare as Konva.Shape).sceneFunc((ctx: KonvaContext.Context) => {
@@ -57,11 +127,88 @@ export function image(getBareName: () => string): Konva.Image {
   return bare;
 }
 
-const borderCornerRadius = 6;
-const borderStrokeWidth = 20;
-const borderStrokeWidthInside = borderStrokeWidth * 0.6;
-const borderOffset = 2;
-const borderOutsideColor = OFF_BLACK;
+const BORDER_CORNER_RADIUS = 6;
+const BORDER_STROKE_WIDTH = 20;
+const BORDER_STROKE_WIDTH_INSIDE = BORDER_STROKE_WIDTH * 0.6;
+const BORDER_OFFSET = 2;
+const BORDER_OUTSIDE_COLOR = OFF_BLACK;
+
+/** The width and height of the box that each rank pip is centered in. */
+const RANK_PIP_SIZE = Math.floor(CARD_H * 0.1);
+
+/** The rank pip's digits are larger than its box so that they are easy to read. */
+const RANK_PIP_FONT_SIZE = 63;
+
+/**
+ * The outline around the X over a suit pip that has been ruled out, which keeps it readable on any
+ * card. It is drawn centered on the edge, so this is twice its visible width.
+ */
+const PIP_OUTLINE_WIDTH = 6;
+
+/** The outline around a rank pip's digit. */
+const RANK_PIP_OUTLINE_WIDTH = 3;
+
+/** The drop shadow under a rank pip, which is omitted in speedrun games. */
+const RANK_PIP_SHADOW = {
+  shadowColor: "black",
+  shadowOffsetX: 5,
+  shadowOffsetY: 5,
+  shadowOpacity: CARD_SHADOW_OPACITY,
+  shadowForStrokeEnabled: true,
+} as const;
+
+/** The outline around a suit pip. */
+const SUIT_PIP_STROKE_WIDTH = 5;
+
+/** The drop shadow under a suit pip, which is omitted in speedrun games. */
+const SUIT_PIP_SHADOW = {
+  shadowColor: "black",
+  shadowOffsetX: 15,
+  shadowOffsetY: 15,
+  shadowOpacity: CARD_SHADOW_OPACITY,
+  shadowForStrokeEnabled: true,
+} as const;
+
+/** The size of the X over a suit pip that has been ruled out, in the pip's units. */
+const SUIT_PIP_X_SIZE = 50;
+
+/** The size of the X over a rank pip that has been ruled out. */
+const RANK_PIP_X_SIZE = 13;
+
+/**
+ * The center of the X over a rank pip that has been ruled out, relative to the top-left corner of
+ * the pip's box. The digit is larger than its box, so its middle is below the middle of the box. It
+ * has always been drawn half a pixel right of the middle of the box.
+ */
+const RANK_PIP_X_CENTER = {
+  x: (RANK_PIP_SIZE + 1) / 2,
+  y: 27,
+} as const;
+
+/** The row of rank pips along the bottom of a card, as fractions of the card height. */
+const RANK_PIP_ROW = {
+  y: 0.81,
+  h: 0.15,
+} as const;
+
+/** The outline around the X over a rank pip that has been ruled out. */
+const RANK_PIP_X_STROKE_WIDTH = 2;
+
+/**
+ * Where the rank pips go along the bottom of a card, as fractions of the card width. The pips of a
+ * variant with the usual five ranks are spread further apart than those of a variant with a start
+ * card.
+ */
+const RANK_PIP_X = {
+  defaultRanks: {
+    start: -0.14,
+    spacing: 0.19,
+  },
+  otherRanks: {
+    start: 0.05,
+    spacing: 0.15,
+  },
+} as const;
 
 function makeBorder(color: string) {
   const border = new Konva.Group({
@@ -70,10 +217,10 @@ function makeBorder(color: string) {
   });
 
   const borderOutside = new Konva.Rect(
-    getBorderConfig(borderStrokeWidth, borderOutsideColor),
+    getBorderConfig(BORDER_STROKE_WIDTH, BORDER_OUTSIDE_COLOR),
   );
   const borderInside = new Konva.Rect(
-    getBorderConfig(borderStrokeWidthInside, color),
+    getBorderConfig(BORDER_STROKE_WIDTH_INSIDE, color),
   );
 
   border.add(borderOutside);
@@ -84,9 +231,9 @@ function makeBorder(color: string) {
 
 function getBorderConfig(strokeWidth: number, stroke: string): RectConfig {
   return {
-    width: CARD_W - borderOffset,
-    height: CARD_H - borderOffset,
-    cornerRadius: borderCornerRadius,
+    width: CARD_W - BORDER_OFFSET,
+    height: CARD_H - BORDER_OFFSET,
+    cornerRadius: BORDER_CORNER_RADIUS,
     strokeWidth,
     stroke,
     listening: false,
@@ -111,60 +258,44 @@ export function discardPermissionBorder(): Konva.Group {
 
 export function directionArrow(
   variant: Variant,
-): { arrow: Konva.Group; arrowBase: Arrow } | null {
+): { arrow: Konva.Group; arrowBase: Konva.Shape } | undefined {
   if (!hasReversedSuits(variant)) {
-    return null;
+    return undefined;
   }
 
   const arrow = new Konva.Group({
-    x: 0.815 * CARD_W,
+    x: DIRECTION_ARROW.x,
     visible: false,
     offset: {
       x: 0,
-      y: 0.14 * CARD_H,
+      y: DIRECTION_ARROW.offsetY,
     },
     listening: false,
   });
 
-  const arrowHeight = 0.25;
-  const pointerLength = 0.05 * CARD_W;
+  const { pointerLength } = DIRECTION_ARROW;
+  const pointerWidth = pointerLength * DIRECTION_ARROW.pointerWidthRatio;
 
-  const border = new Konva.Arrow({
-    points: [0, 0, 0, arrowHeight * CARD_H],
+  const arrowBase = outlinedArrow({
+    points: [0, 0, 0, DIRECTION_ARROW.h],
     pointerLength,
-    pointerWidth: pointerLength * 1.5,
-    fill: "black",
-    stroke: "black",
-    strokeWidth: pointerLength * 2,
-    listening: false,
-  });
-  arrow.add(border);
-
-  const edge = new Konva.Line({
-    points: [-pointerLength, 0, pointerLength, 0],
-    fill: "black",
-    stroke: "black",
-    strokeWidth: pointerLength * 0.75,
-    listening: false,
-  });
-  arrow.add(edge);
-
-  const arrowBase = new Konva.Arrow({
-    points: [0, 0, 0, arrowHeight * CARD_H],
-    pointerLength,
-    pointerWidth: pointerLength * 1.5,
-    fill: "white",
-    stroke: "white", // This should match the color of the suit; it will be manually set later on
-    strokeWidth: pointerLength * 1.25,
+    pointerWidth,
+    bodyWidth: pointerLength * ARROW_STROKE_WIDTH.BODY,
+    outlineWidth: pointerLength * ARROW_STROKE_WIDTH.OUTLINE,
+    fill: "white", // This should match the color of the suit; it will be manually set later on
     listening: false,
   });
   arrow.add(arrowBase);
 
-  return { arrow, arrowBase };
+  return {
+    arrow,
+    arrowBase,
+  };
 }
 
-// Cache the pip objects to save time on the multiple cards.
-let cachedVariant: Variant | null = null;
+// Cache the pip objects to save time on the multiple cards. Speedruns draw them without shadows.
+let cachedVariant: Variant | undefined;
+let cachedSpeedrun: boolean | undefined;
 let cachedPips: {
   suitPipsMap: Map<number, Konva.Shape>;
   suitPipsPositiveMap: Map<number, Konva.Shape>;
@@ -185,43 +316,26 @@ function makeCachedPips(variant: Variant) {
 
   for (const [suitIndex, suit] of variant.suits.entries()) {
     // Set the pip at the middle of the card.
-    const x = Math.floor(CARD_W * 0.5);
-    const y = Math.floor(CARD_H * 0.5);
+    const { x, y } = CARD_CENTER;
 
-    /** The scale numbers are magic. */
     const scale = {
-      x: 0.4,
-      y: 0.4,
+      x: SUIT_PIP_SCALE,
+      y: SUIT_PIP_SCALE,
     };
 
-    // Transform polar to Cartesian coordinates.
-    const offsetBase = CARD_W * 0.7;
-    const offsetTrig = (-suitIndex / variant.suits.length + 0.25) * Math.PI * 2;
+    // A Konva offset moves the shape in the opposite direction.
+    const position = getSuitPipRingPosition(suitIndex, variant.suits.length);
     const offset = {
-      x: Math.floor(offsetBase * Math.cos(offsetTrig)),
-      y: Math.floor(offsetBase * Math.sin(offsetTrig)),
+      x: -position.x,
+      y: -position.y,
     };
-    let { fill } = suit;
-    if (suit.fill === "multi") {
-      fill = "";
-    }
 
-    const suitPip = getNewColorPip(
-      x,
-      y,
-      scale,
-      offset,
-      fill,
-      suit,
-      variant,
-      false,
-    );
+    const suitPip = getNewColorPip(x, y, scale, offset, suit, variant, false);
     const suitPipPositive = getNewColorPip(
       x,
       y,
       scale,
       offset,
-      fill,
       suit,
       variant,
       true,
@@ -237,15 +351,19 @@ function makeCachedPips(variant: Variant) {
       offset,
       fill: "black",
       stroke: "white",
-      strokeWidth: 6,
+      strokeWidth: PIP_OUTLINE_WIDTH,
       opacity: 1,
       visible: false,
       sceneFunc: (ctx, shape) => {
-        const width = 50;
-        const xx = Math.floor(CARD_W * 0.25 - width * 0.5);
-        const xy = Math.floor(CARD_H * 0.25 - width * 0.05);
-        ctx.translate(-1.4 * width, -2 * width);
-        drawX(ctx, shape, xx, xy, 50, width);
+        // Center the X on the pip.
+        drawX(
+          ctx,
+          shape,
+          -SUIT_PIP_X_SIZE / 2,
+          0,
+          SUIT_PIP_X_SIZE,
+          SUIT_PIP_X_SIZE,
+        );
       },
       listening: false,
     });
@@ -256,32 +374,34 @@ function makeCachedPips(variant: Variant) {
   const rankPipsMap = new Map<number, RankPip>();
   const rankPipsXMap = new Map<number, Konva.Shape>();
   for (const rank of variant.ranks) {
-    const x =
-      variant.ranks.length === 5
-        ? Math.floor(CARD_W * (rank * 0.19 - 0.14))
-        : Math.floor(
-            CARD_W * ((rank === START_CARD_RANK ? 0 : rank) * 0.15 + 0.05),
-          );
+    const fractionX =
+      variant.ranks.length === DEFAULT_CARD_RANKS.length
+        ? rank * RANK_PIP_X.defaultRanks.spacing + RANK_PIP_X.defaultRanks.start
+        : (rank === START_CARD_RANK ? 0 : rank) * RANK_PIP_X.otherRanks.spacing
+          + RANK_PIP_X.otherRanks.start;
+    const x = Math.floor(CARD_W * fractionX);
     const y = 0;
     const rankPip = new RankPip({
       x,
       y,
-      fontFamily: "Arial",
+      fontFamily: RANK_FONT_FAMILY,
       fontStyle: "bold",
-      fontSize: 63,
+      fontSize: RANK_PIP_FONT_SIZE,
       align: "center",
-      text: rank === START_CARD_RANK ? "s" : rank.toString(),
-      width: Math.floor(CARD_H * 0.1),
-      height: Math.floor(CARD_H * 0.1),
+      text:
+        rank === START_CARD_RANK
+          ? START_CARD_RANK_LABEL.toLowerCase()
+          : rank.toString(),
+      // Konva draws nothing when a glyph is wider than its box, which happens with fonts wider than
+      // Arial. Leave room for them, offset so that the digit stays centered on the same spot.
+      width: RANK_PIP_SIZE * 2,
+      offsetX: RANK_PIP_SIZE / 2,
+      height: RANK_PIP_SIZE,
       fill: "white",
       stroke: "black",
-      strokeWidth: 3,
+      strokeWidth: RANK_PIP_OUTLINE_WIDTH,
       shadowEnabled: !globals.options.speedrun,
-      shadowColor: "black",
-      shadowOffsetX: 5,
-      shadowOffsetY: 5,
-      shadowOpacity: 0.4,
-      shadowForStrokeEnabled: true,
+      ...RANK_PIP_SHADOW,
       listening: false,
     });
     rankPipsMap.set(rank, rankPip);
@@ -289,17 +409,21 @@ function makeCachedPips(variant: Variant) {
     /** The X that will show when a certain rank can be ruled out. */
     const rankPipX = new Konva.Shape({
       x,
-      y: Math.floor(CARD_H * 0.02),
+      y: 0,
       fill: "black",
       stroke: "black",
-      strokeWidth: 2,
+      strokeWidth: RANK_PIP_X_STROKE_WIDTH,
       opacity: 1,
       visible: false,
       sceneFunc: (ctx, shape) => {
-        const width = 13;
-        const xx = Math.floor(CARD_W * 0.05);
-        const xy = Math.floor(CARD_H * 0.047);
-        drawX(ctx, shape, xx, xy, 13, width);
+        drawX(
+          ctx,
+          shape,
+          RANK_PIP_X_CENTER.x - RANK_PIP_X_SIZE / 2,
+          RANK_PIP_X_CENTER.y,
+          RANK_PIP_X_SIZE,
+          RANK_PIP_X_SIZE,
+        );
       },
       listening: false,
     });
@@ -316,10 +440,14 @@ function makeCachedPips(variant: Variant) {
   };
 
   cachedVariant = variant;
+  cachedSpeedrun = globals.options.speedrun;
 }
 
 export function pips(variant: Variant): Pips {
-  if (cachedVariant !== variant) {
+  if (
+    cachedVariant !== variant
+    || cachedSpeedrun !== globals.options.speedrun
+  ) {
     makeCachedPips(variant);
   }
 
@@ -338,9 +466,9 @@ export function pips(variant: Variant): Pips {
 
   const rankPips = new Konva.Group({
     x: 0,
-    y: Math.floor(CARD_H * 0.81),
+    y: Math.floor(CARD_H * RANK_PIP_ROW.y),
     width: CARD_W,
-    height: Math.floor(CARD_H * 0.15),
+    height: Math.floor(CARD_H * RANK_PIP_ROW.h),
     visible: false,
     listening: false,
   });
@@ -386,31 +514,46 @@ export function pips(variant: Variant): Pips {
   };
 }
 
+/**
+ * Returns where an indicator in the bottom-left corner of a card goes. If the card has triangles on
+ * its corners that show the color composition, the images would overlap, so the indicator moves
+ * upwards and inwards.
+ */
+function bottomLeftPosition(offsetCornerElements: boolean): {
+  x: number;
+  y: number;
+} {
+  const offset = offsetCornerElements ? CORNER_ELEMENT_OFFSET : 0;
+  return {
+    x: BOTTOM_LEFT_X + offset * CARD_W,
+    y: BOTTOM_LEFT_Y - offset * CARD_H,
+  };
+}
+
 export function note(
   offsetCornerElements: boolean,
   shouldShowIndicator: () => boolean,
 ): NoteIndicator {
   // Define the note indicator image.
-  const noteX = 0.78;
-  const noteY = 0.03;
   const noteIndicator = new NoteIndicator({
     // If the cards have triangles on the corners that show the color composition, the images will
     // overlap. Thus, we move it downwards if this is the case.
-    x: (offsetCornerElements ? noteX - 0.05 : noteX) * CARD_W,
-    y: (offsetCornerElements ? noteY + 0.05 : noteY) * CARD_H,
+    x:
+      (offsetCornerElements
+        ? NOTE_INDICATOR_POSITION.x - CORNER_ELEMENT_OFFSET
+        : NOTE_INDICATOR_POSITION.x) * CARD_W,
+    y:
+      (offsetCornerElements
+        ? NOTE_INDICATOR_POSITION.y + CORNER_ELEMENT_OFFSET
+        : NOTE_INDICATOR_POSITION.y) * CARD_H,
     align: "center",
-    image: globals.imageLoader!.get("note"),
+    image: lobbyGlobals.imageLoader.get("note"),
+    identitySourceImage: lobbyGlobals.imageLoader.get("note-pencil"),
     width: SMALL_ICON_SIZE,
     height: SMALL_ICON_SIZE,
-    rotation: 180,
+    rotation: HALF_TURN_DEGREES,
     shadowEnabled: !globals.options.speedrun,
-    shadowColor: "black",
-    shadowBlur: 10,
-    shadowOffset: {
-      x: 0,
-      y: 0,
-    },
-    shadowOpacity: 0.9,
+    ...TEXT_SHADOW,
     visible: shouldShowIndicator(),
     listening: false,
   });
@@ -425,23 +568,14 @@ export function note(
 export function criticalIndicator(offsetCornerElements: boolean): Konva.Image {
   // Define the critical indicator image.
   const indicator = new Konva.Image({
-    // If the cards have triangles on the corners that show the color composition, the images will
-    // overlap. Thus, we move it upwards if this is the case.
-    x: BOTTOM_LEFT_X + (offsetCornerElements ? 0.05 : 0) * CARD_W,
-    y: BOTTOM_LEFT_Y - (offsetCornerElements ? 0.05 : 0) * CARD_H,
+    ...bottomLeftPosition(offsetCornerElements),
     align: "center",
-    image: globals.imageLoader!.get("critical"),
+    image: lobbyGlobals.imageLoader.get("critical"),
     width: SMALL_ICON_SIZE,
     height: SMALL_ICON_SIZE,
-    rotation: 180,
+    rotation: HALF_TURN_DEGREES,
     shadowEnabled: !globals.options.speedrun,
-    shadowColor: "black",
-    shadowBlur: 10,
-    shadowOffset: {
-      x: 0,
-      y: 0,
-    },
-    shadowOpacity: 0.9,
+    ...TEXT_SHADOW,
     visible: false,
     listening: false,
   });
@@ -454,43 +588,55 @@ export function criticalIndicator(offsetCornerElements: boolean): Konva.Image {
 
 export function questionMark(): Konva.Image {
   return new Konva.Image({
-    x: 0.15 * CARD_W,
-    y: 0.2 * CARD_H,
-    width: 0.8 * CARD_W,
-    height: 0.8 * CARD_W,
-    image: globals.imageLoader!.get("question-mark2"),
+    x: LARGE_ICON_X,
+    y: LARGE_ICON_Y,
+    width: LARGE_ICON_SIZE,
+    height: LARGE_ICON_SIZE,
+    image: lobbyGlobals.imageLoader.get("question-mark2"),
     visible: false,
   });
 }
 
 export function exclamationMark(): Konva.Image {
   return new Konva.Image({
-    x: 0.15 * CARD_W,
-    y: 0.2 * CARD_H,
-    width: 0.8 * CARD_W,
-    height: 0.8 * CARD_W,
-    image: globals.imageLoader!.get("exclamation-mark"),
+    x: LARGE_ICON_X,
+    y: LARGE_ICON_Y,
+    width: LARGE_ICON_SIZE,
+    height: LARGE_ICON_SIZE,
+    image: lobbyGlobals.imageLoader.get("exclamation-mark"),
+    visible: false,
+  });
+}
+
+export function ghost(): Konva.Image {
+  return new Konva.Image({
+    x: LARGE_ICON_CENTERED_X,
+    y: LARGE_ICON_Y,
+    width: LARGE_ICON_SIZE,
+    height: LARGE_ICON_SIZE,
+    image: lobbyGlobals.imageLoader.get("ghost"),
+    opacity: GHOST_OPACITY,
     visible: false,
   });
 }
 
 export function trashcan(): Konva.Image {
   return new Konva.Image({
-    x: 0.15 * CARD_W,
-    y: 0.2 * CARD_H,
-    width: 0.7 * CARD_W,
-    height: 0.6 * CARD_H,
-    image: globals.imageLoader!.get("trashcan2"),
+    x: (CARD_W - TRASHCAN_SIZE.w) / 2,
+    y: LARGE_ICON_Y,
+    width: TRASHCAN_SIZE.w,
+    height: TRASHCAN_SIZE.h,
+    image: lobbyGlobals.imageLoader.get("trashcan2"),
     visible: false,
   });
 }
 
 export function wrench(): Konva.Image {
   return new Konva.Image({
-    x: 0.1 * CARD_W,
-    y: 0.33 * CARD_H,
-    width: 0.8 * CARD_W,
-    image: globals.imageLoader!.get("wrench"),
+    x: LARGE_ICON_CENTERED_X,
+    y: WRENCH_Y,
+    width: LARGE_ICON_SIZE,
+    image: lobbyGlobals.imageLoader.get("wrench"),
     visible: false,
     listening: false,
   });
@@ -502,7 +648,7 @@ export function ddaIndicatorTop(): Konva.Image {
     y: TOP_LEFT_Y,
     width: SMALL_ICON_SIZE,
     height: SMALL_ICON_SIZE,
-    image: globals.imageLoader!.get("dda"),
+    image: lobbyGlobals.imageLoader.get("dda"),
     visible: false,
     listening: false,
   });
@@ -510,12 +656,9 @@ export function ddaIndicatorTop(): Konva.Image {
 
 export function ddaIndicatorBottom(offsetCornerElements: boolean): Konva.Image {
   const indicator = new Konva.Image({
-    // If the cards have triangles on the corners that show the color composition, the images will
-    // overlap. Thus, we move it upwards if this is the case.
-    x: BOTTOM_LEFT_X + (offsetCornerElements ? 0.05 : 0) * CARD_W,
-    y: BOTTOM_LEFT_Y - (offsetCornerElements ? 0.05 : 0) * CARD_H,
+    ...bottomLeftPosition(offsetCornerElements),
     align: "center",
-    image: globals.imageLoader!.get("dda"),
+    image: lobbyGlobals.imageLoader.get("dda"),
     width: SMALL_ICON_SIZE,
     height: SMALL_ICON_SIZE,
     visible: false,
@@ -530,7 +673,7 @@ export function trashMiniIndicatorTop(): Konva.Image {
     y: TOP_LEFT_Y,
     width: SMALL_ICON_SIZE,
     height: SMALL_ICON_SIZE,
-    image: globals.imageLoader!.get("wastebasket"),
+    image: lobbyGlobals.imageLoader.get("wastebasket"),
     visible: false,
     listening: false,
   });
@@ -540,12 +683,9 @@ export function trashMiniIndicatorBottom(
   offsetCornerElements: boolean,
 ): Konva.Image {
   const indicator = new Konva.Image({
-    // If the cards have triangles on the corners that show the color composition, the images will
-    // overlap. Thus, we move it upwards if this is the case.
-    x: BOTTOM_LEFT_X + (offsetCornerElements ? 0.05 : 0) * CARD_W,
-    y: BOTTOM_LEFT_Y - (offsetCornerElements ? 0.05 : 0) * CARD_H,
+    ...bottomLeftPosition(offsetCornerElements),
     align: "center",
-    image: globals.imageLoader!.get("wastebasket"),
+    image: lobbyGlobals.imageLoader.get("wastebasket"),
     width: SMALL_ICON_SIZE,
     height: SMALL_ICON_SIZE,
     visible: false,
@@ -613,9 +753,9 @@ function scaleCardImage(
   ctx.drawImage(src, 0, 0, width, height);
 }
 
-function drawX(
+/** Traces the outline of an X. Its center is half of `width` right of `positionX`. */
+function traceX(
   ctx: KonvaContext.Context,
-  shape: Konva.Shape,
   positionX: number,
   positionY: number,
   size: number,
@@ -664,6 +804,17 @@ function drawX(
   x -= size;
   y -= size;
   ctx.lineTo(x, y);
+}
+
+function drawX(
+  ctx: KonvaContext.Context,
+  shape: Konva.Shape,
+  positionX: number,
+  positionY: number,
+  size: number,
+  width: number,
+) {
+  traceX(ctx, positionX, positionY, size, width);
   ctx.stroke();
   ctx.closePath();
   ctx.fillStrokeShape(shape);
@@ -674,64 +825,32 @@ function getNewColorPip(
   y: number,
   scale: { x: number; y: number },
   offset: { x: number; y: number },
-  fill: string,
   suit: Suit,
   variant: Variant,
   isPositive: boolean,
 ): Konva.Shape {
-  const suitPip = new Konva.Shape({
+  return new Konva.Shape({
     x,
     y,
     scale,
     offset,
-    fill,
     stroke: "black",
-    strokeWidth: 5,
+    strokeWidth: SUIT_PIP_STROKE_WIDTH,
     shadowEnabled: !globals.options.speedrun,
-    shadowColor: "black",
-    shadowOffsetX: 15,
-    shadowOffsetY: 15,
-    shadowOpacity: 0.4,
-    shadowForStrokeEnabled: true,
-    sceneFunc: (ctx: KonvaContext.Context) => {
-      drawPip(
-        ctx as unknown as CanvasRenderingContext2D,
-        suit,
-        variant,
-        false,
-        undefined,
-        undefined,
-        isPositive,
-      );
+    ...SUIT_PIP_SHADOW,
+    sceneFunc: (ctx: KonvaContext.Context, shape: Konva.Shape) => {
+      drawWithKonva3Shadow(shape, ctx, () => {
+        drawPip(
+          ctx as unknown as CanvasRenderingContext2D,
+          suit,
+          variant,
+          false,
+          undefined,
+          undefined,
+          isPositive,
+        );
+      });
     },
     listening: false,
   });
-
-  // Gradient numbers are magic.
-  if (suit.fill === "multi") {
-    suitPip.fillRadialGradientColorStops([
-      0.3,
-      suit.fillColors[0]!,
-      0.425,
-      suit.fillColors[1]!,
-      0.65,
-      suit.fillColors[2]!,
-      0.875,
-      suit.fillColors[3]!,
-      1,
-      suit.fillColors[4]!,
-    ]);
-    suitPip.fillRadialGradientStartPoint({
-      x: 75,
-      y: 140,
-    });
-    suitPip.fillRadialGradientEndPoint({
-      x: 75,
-      y: 140,
-    });
-    suitPip.fillRadialGradientStartRadius(0);
-    suitPip.fillRadialGradientEndRadius(Math.floor(CARD_W * 0.25));
-  }
-
-  return suitPip;
 }

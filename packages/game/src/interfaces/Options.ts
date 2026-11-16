@@ -1,39 +1,19 @@
-import { z } from "zod";
-import { DEFAULT_VARIANT_NAME } from "../constants";
-import { numPlayers } from "../types/NumPlayers";
-import { playerIndex } from "../types/PlayerIndex";
+import type { z } from "zod";
+import { MIN_PLAYERS, gameOptionsSchema } from "../generated/protocol.ts";
+import type { NumPlayers } from "../types/NumPlayers.ts";
+
+/** A game's options, as the server's wire contract defines them. */
+export type GameOptions = z.infer<typeof gameOptionsSchema>;
 
 /**
- * We use a Zod object instead of a class because this is sent over the wire and Zod cannot validate
- * class shapes.
+ * A game's options with its number of players. The wire leaves the player count out, because each
+ * game sends one player name for each seat.
  */
-export const options = z
-  .object({
-    numPlayers: numPlayers.default(2),
+export interface Options extends GameOptions {
+  readonly numPlayers: NumPlayers;
+}
 
-    /** Legacy field for games prior to April 2020. */
-    startingPlayer: playerIndex.default(0),
-
-    variantName: z.string().min(1).default(DEFAULT_VARIANT_NAME),
-    timed: z.boolean().default(false),
-    timeBase: z.number().default(0),
-    timePerTurn: z.number().int().default(0),
-    speedrun: z.boolean().default(false),
-    cardCycle: z.boolean().default(false),
-    deckPlays: z.boolean().default(false),
-    emptyClues: z.boolean().default(false),
-    oneExtraCard: z.boolean().default(false),
-    oneLessCard: z.boolean().default(false),
-    allOrNothing: z.boolean().default(false),
-    detrimentalCharacters: z.boolean().default(false),
-
-    tableName: z.string().min(1).optional(),
-    maxPlayers: numPlayers.optional(),
-  })
-  .strict()
-  .readonly();
-
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type
-export interface Options extends z.infer<typeof options> {}
-
-export const defaultOptions: Options = options.parse({});
+export const defaultOptions: Options = {
+  ...gameOptionsSchema.parse({}),
+  numPlayers: MIN_PLAYERS,
+};

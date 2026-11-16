@@ -7,9 +7,12 @@
   ],
 
   // The bot's worker is an ES module (see "analysisWorker.mts"), unlike the rest of the client.
-  "include": ["./src/**/*.ts", "./src/**/*.mts"],
+  "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.mts"],
 
   "compilerOptions": {
     "lib": ["DOM", "ES2023"],
+    "jsx": "react-jsx",
+    // Types for the CSS imports that Vite bundles.
+    "types": ["bun", "vite/client"],
   },
 }

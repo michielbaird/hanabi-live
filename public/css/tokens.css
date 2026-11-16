@@ -1,0 +1,290 @@
+/*
+  Breakpoints: media queries cannot use custom properties, so they use these values directly.
+  "scripts/lint/check-css.sh" fails on any other value, and on rules for "[data-theme]" outside of
+  this file.
+  "max-width": 1920px, 1440px, 1280px, 980px, 840px, 736px, 640px, 530px, and 410px
+  "max-height": 530px
+*/
+
+/*
+  The colors of both themes, the lobby cursors, and the stacking order. Rules use these variables instead of literal
+  values, so that the dark theme only has to change the values here. "packages/client/src/theme.ts" reads the canvas colors,
+  and "packages/client/src/tailwind.css" makes the general colors available to Tailwind.
+*/
+
+:root {
+  /* General colors */
+  --page-bg: #00420f;
+  --game-bg: #00420f;
+  --surface: #fff;
+  --surface-sunken: #f8f8f8;
+  --surface-panel: #fafafa;
+  --border: #e5e5e5;
+  --border-panel: #ececec;
+  /*
+    The lightest gray with normal-text contrast on "--surface-sunken". Text that should look fainter
+    can only be lighter in the dark theme.
+  */
+  --text: #707070;
+  --text-strong: #646464;
+  --text-label: var(--text);
+  --text-on-accent: #fff;
+  --text-faint: var(--text);
+  --link: blue;
+  --focus: #e89980;
+  --green: #308943;
+  --green-text: #308943;
+  --green-tint: #e6f2e8;
+  --button-bg: #666;
+  --button-hover-bg: #737373;
+  --button-active-bg: #595959;
+  --button-primary-bg: #b04a2b;
+  --button-primary-hover-bg: #b8502f;
+  --button-primary-active-bg: #a3431f;
+  --button-disabled-bg: #777;
+  --button-disabled-text: #f5f5f5;
+  --button-green: #449644;
+  --button-green-hover: #84c884;
+  --checkbox-checked: #666;
+  /* 3:1 contrast with "--surface-panel", so that an unchecked box is visible */
+  --checkbox-border: #8f8f8f;
+  --row-hover-bg: #e6e6e6;
+  --button-alt-bg: transparent;
+  /* Lights up like a row, and a step more when pressed. */
+  --button-alt-hover-bg: var(--row-hover-bg);
+  --button-alt-active-bg: #d9d9d9;
+  --name-me: #e69500;
+  --friend: hotpink;
+  --name-hover: #3350cb;
+  --error: red;
+  --help-icon-hover: #6666ff;
+  --dice-hover: #00cc00;
+
+  /* The header bar */
+  --header-bg: #444;
+  --header-border: none;
+  --header-text: #bbb;
+  --header-button-border: #999;
+  --header-button-hover-bg: rgba(153, 153, 153, 0.25);
+  --header-button-active-bg: rgba(153, 153, 153, 0.5);
+
+  --modal-border: #308943;
+
+  --table-header-text: #646464;
+  --table-sorted-bg: lightblue;
+  --pregame-player-border: black;
+  --menu-text: #555;
+  --menu-hover-bg: #eee;
+  --menu-hover-text: #222;
+  --chat-bg: transparent;
+  --game-chat-bg: black;
+  --game-chat-border: black;
+  --slider-track: #ddd;
+  --tooltip-border-width: 0px;
+  --tooltip-border-color: transparent;
+  --note-title-line: #777;
+  --morph-option-border: gray;
+  --morph-option-selected: orange;
+  --difficulty-hard: darkgoldenrod;
+  --difficulty-very-hard: darkred;
+
+  /* The arrow of a dropdown, in the color of "--text". An image cannot use a variable's color. */
+  --select-arrow: url("data:image/svg+xml;charset=utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='40' preserveAspectRatio='none' viewBox='0 0 40 40'%3E%3Cpath d='M9.4,12.3l10.4,10.4l10.4-10.4c0.2-0.2,0.5-0.4,0.9-0.4c0.3,0,0.6,0.1,0.9,0.4l3.3,3.3c0.2,0.2,0.4,0.5,0.4,0.9 c0,0.4-0.1,0.6-0.4,0.9L20.7,31.9c-0.2,0.2-0.5,0.4-0.9,0.4c-0.3,0-0.6-0.1-0.9-0.4L4.3,17.3c-0.2-0.2-0.4-0.5-0.4-0.9 c0-0.4,0.1-0.6,0.4-0.9l3.3-3.3c0.2-0.2,0.5-0.4,0.9-0.4S9.1,12.1,9.4,12.3z' fill='%23707070' /%3E%3C/svg%3E");
+
+  /* Covers the page behind a modal */
+  --modal-backdrop: rgba(0, 24, 5, 0.7);
+
+  /* The spinner on the public pages, and the backdrop behind it */
+  --spinner-backdrop: rgba(0, 0, 0, 0.3);
+  --spinner-red: #de3500;
+  --spinner-white: #fff;
+  --spinner-brown: rgba(151, 107, 93, 0.3);
+
+  /* Lobby table rows */
+  --lobby-table-joined: #f2f2ff;
+  --lobby-table-joined-hover: #e0e0ff;
+  --lobby-table-unstarted: #fffff0;
+  --lobby-table-unstarted-hover: #ffffe1;
+  --lobby-table-unstarted-password: #ffeaea;
+  --lobby-table-unstarted-password-hover: #ffd5d5;
+  --lobby-table-started: #e6ffee;
+  --lobby-table-started-hover: #cdffdd;
+  --lobby-table-replay: #fff0ff;
+  --lobby-table-replay-hover: #ffe1ff;
+
+  /* Login alert (based on the Bootstrap alert colors) */
+  --login-alert-bg: #f2dede;
+  --login-alert-border: #ebccd1;
+  --login-alert-text: #a94442;
+
+  /* Text on the wood background of the login screen */
+  --login-text: #f2f2f2;
+
+  /* The corner radius of panels, modals, tooltips, buttons, and form fields */
+  --radius: 6px;
+
+  /* The height of the header bar, which is fixed over the top of the page */
+  --header-height: 3.25em;
+
+  /* The lobby's custom cursors, with their hot spots */
+  --cursor-rejoin: url("/public/img/cursors/rejoin.svg") 12 12, pointer;
+  --cursor-join: url("/public/img/cursors/join.svg") 12 10, pointer;
+  --cursor-full: url("/public/img/cursors/full.svg") 12 12, pointer;
+  --cursor-spectate: url("/public/img/cursors/spectate.svg") 14 12, pointer;
+  --cursor-shadow: url("/public/img/cursors/shadow.svg") 12 12, pointer;
+  --cursor-un-shadow: url("/public/img/cursors/un-shadow.svg") 12 12, pointer;
+
+  /*
+    Stacking order, from back to front. Other "z-index" values only order the parts of one
+    component.
+  */
+  --z-spinner: 100;
+  --z-header: 10000;
+
+  /* The game canvas */
+  --canvas-action-log-number: #d3d3d3;
+  --canvas-current-player-text: #ffffcc;
+  --canvas-replay-shuttle: #d1d1d1;
+  --canvas-surface-area: #b3b3b3;
+  --canvas-loading-label-stroke: #747278;
+
+  /*
+    The redesigned game screen ("New UI"). It is dark in both themes, like the classic game screen
+    is always green felt, so the dark theme does not change these.
+  */
+  --game-screen-bg: #1d4630;
+
+  /*
+    The table behind the cards: green baize, lit from above the hands, so that it is lighter in the
+    middle and falls off to dark edges. "felt.webp" is the light and dark of a scan of snooker cloth
+    (CC0, TextureCan "Fabrics 0075"), and the game screen blends it over the green. It is faint, so
+    that it does not compete with the cards. Cards have a dark outline and a shadow, so that green
+    cards still stand out on it.
+  */
+  --game-screen-table:
+    url("/public/img/felt.webp"),
+    radial-gradient(
+      ellipse 140% 110% at 40% 38%,
+      transparent 35%,
+      rgb(0 0 0 / 55%) 100%
+    ),
+    radial-gradient(70% 60% at 40% 38%, #52a870 0%, #337a4c 50%, #24603b 100%);
+
+  /* A box on the table, such as your own hand: a lighter patch of the felt under it. */
+  --game-screen-zone: rgb(255 255 255 / 8%);
+  /* A readout on the table, such as the clue tokens: a well cut into the felt. */
+  --game-screen-well: rgb(0 0 0 / 30%);
+  /* A place to drop the held card, such as the discard pile: a well darker than the others. */
+  --game-screen-drop-zone: rgb(0 0 0 / 55%);
+
+  /*
+    The panels around the table, such as the bar along the bottom and the chat: darker felt, so that
+    the whole screen reads as one table.
+  */
+  --game-screen-panel: #173d29;
+  --game-screen-raised: #24563a;
+  --game-screen-line: #6c9c7e;
+  --game-screen-text: #eef1f3;
+  --game-screen-muted: #c3d8ca;
+  /* The chat's messages from the server, and its errors. They are light, so that they show on the panel. */
+  --game-screen-green-text: #6fcf7a;
+  --game-screen-error: #ff6b6b;
+  /*
+    The colors of the screen's modes: an accent, and the dark color of the mode's panels. Each one
+    belongs to its mode only: looking back during a game, looking at a finished game, or trying
+    moves in a hypothetical.
+  */
+  --game-screen-in-game-replay: #8fb2ff;
+  --game-screen-in-game-replay-panel: #1d2f57;
+  --game-screen-finished-replay: #cfd6e0;
+  --game-screen-finished-replay-panel: #2a2e35;
+  --game-screen-hypothetical: #f7a1c4;
+  --game-screen-hypothetical-panel: #4a2238;
+  /* The warm accent that marks the player whose turn it is. */
+  --game-screen-turn: #ffd04a;
+  /* The arrow that points at a card or a number: the yellow of the classic screen's arrow. */
+  --game-screen-arrow: #ffdf00;
+  /*
+    A warning that is not yet a limit: the team has one clue left, or the last discard makes a
+    "Double Discard" situation. It is a cooler yellow than the turn, and not the orange of clues.
+  */
+  --game-screen-caution: #ffeb3b;
+  --card-face-unknown: #cbd3da;
+  --card-ink: #1b242b;
+  --clue-border: #ff9f1c;
+  /* The borders of cards whose notes mark them as chop moved, finessed, or allowed to be discarded. */
+  --chop-move-border: #fffce6;
+  --finesse-border: #00e5ff;
+  --discard-permission-border: #a32626;
+  --critical: #d7363c;
+  /* The badge of a card that the next discard could lose, from the H-Group conventions setting. */
+  --double-discard: #4fd8e8;
+  /* A sticky note on a card that has a note: pale paper, and the darker back of its folded corner. */
+  --card-note: #fff1a6;
+  --card-note-fold: #e6cf5c;
+}
+
+:root[data-theme="dark"] {
+  --page-bg: #0b1410;
+  --surface: #1c1f22;
+  --surface-sunken: #23262a;
+  --surface-panel: var(--surface-sunken);
+  --border: #3a3f45;
+  --border-panel: var(--border);
+  --text: #e6e6e6;
+  --text-strong: var(--text);
+  --text-label: #a9a9a9;
+  --text-faint: #999;
+  --link: #7fb2ff;
+  --name-hover: var(--link);
+  --error: #ff6b6b;
+  --help-icon-hover: var(--link);
+  --focus: #7fb2ff;
+  --green: #2e7d32;
+  --green-text: #6fcf7a;
+  --green-tint: #1f3524;
+  /* Darker than in the light theme, so that white text has enough contrast */
+  --button-green: var(--green);
+  --button-green-hover: #256a29;
+  --checkbox-checked: var(--green);
+  --checkbox-border: #6b7178;
+  /* Lighter than the row, so that it lights up */
+  --row-hover-bg: #363b42;
+  --button-alt-bg: var(--surface-sunken);
+  --button-alt-active-bg: #424850;
+
+  --header-bg: #15181c;
+  --header-border: 1px solid var(--border);
+  --header-text: var(--text);
+
+  --modal-border: var(--border);
+
+  --table-header-text: var(--text-label);
+  --table-sorted-bg: #2c4356;
+  --pregame-player-border: var(--border);
+  --menu-text: var(--text);
+  --menu-hover-bg: var(--surface-sunken);
+  --menu-hover-text: #fff;
+  --chat-bg: var(--surface-sunken);
+  --game-chat-border: var(--border);
+  --slider-track: var(--border);
+  --select-arrow: url("data:image/svg+xml;charset=utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='40' preserveAspectRatio='none' viewBox='0 0 40 40'%3E%3Cpath d='M9.4,12.3l10.4,10.4l10.4-10.4c0.2-0.2,0.5-0.4,0.9-0.4c0.3,0,0.6,0.1,0.9,0.4l3.3,3.3c0.2,0.2,0.4,0.5,0.4,0.9 c0,0.4-0.1,0.6-0.4,0.9L20.7,31.9c-0.2,0.2-0.5,0.4-0.9,0.4c-0.3,0-0.6-0.1-0.9-0.4L4.3,17.3c-0.2-0.2-0.4-0.5-0.4-0.9 c0-0.4,0.1-0.6,0.4-0.9l3.3-3.3c0.2-0.2,0.5-0.4,0.9-0.4S9.1,12.1,9.4,12.3z' fill='%23e6e6e6' /%3E%3C/svg%3E");
+  --tooltip-border-width: 1px;
+  --tooltip-border-color: var(--border);
+  --note-title-line: var(--border);
+
+  --lobby-table-joined: #29294a;
+  --lobby-table-joined-hover: #33335a;
+  --lobby-table-unstarted: #3b3a24;
+  --lobby-table-unstarted-hover: #4b4a34;
+  --lobby-table-unstarted-password: #402626;
+  --lobby-table-unstarted-password-hover: #503636;
+  --lobby-table-started: #1d3a29;
+  --lobby-table-started-hover: #2d4a39;
+  --lobby-table-replay: #3a2740;
+  --lobby-table-replay-hover: #4a3750;
+
+  --login-alert-bg: #3a2020;
+  --login-alert-border: #5a3030;
+  --login-alert-text: #ffcccc;
+}

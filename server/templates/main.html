@@ -1,0 +1,154 @@
+{% extends "layout.html" %}{% block body %}
+
+<!-- Header & Login & Lobby -->
+<div
+  id="page-wrapper"
+  data-authenticated="{{ 'true' if authenticated else 'false' }}"
+  data-session-username="{{ sessionUsername|default('', true) }}"
+>
+  <!-- Header -->
+  <header id="header">
+    <h1 class="lobby-header">{% include "logo.html" %}</h1>
+    <nav id="nav"></nav>
+  </header>
+
+  <!-- Login -->
+  <div id="login">
+    <section id="main-login" class="container">
+      <header class="login-header">
+        <h2 class="align-center-v">
+          <img src="/public/img/logos/header.svg" class="login-logo" />
+        </h2>
+        <p id="title-sub">
+          A place to play <strong>Hanab</strong> online,<br />
+          a cooperative card game of logic and reasoning
+        </p>
+      </header>
+
+      <div class="row">
+        <!-- "LoginBox.tsx" replaces the wait with the form once the client loads. -->
+        <div id="login-box" class="col-8 off-2 login-box">
+          <section id="loading" class="box align-center">
+            <h3>Loading...</h3>
+            <p>{{ projectName }} is loading. Please wait!</p>
+            <img src="/public/img/ajax.gif" />
+          </section>
+
+          {% if isDev %}
+          <section id="client-bundle-error" class="box align-center hidden">
+            <h3>Client bundle not found</h3>
+            <p>
+              This appears to be a development installation of {{ projectName
+              }}. The client development server was not found. Start the server
+              with <code>bun run dev</code>, and then refresh the page.
+            </p>
+          </section>
+          {% endif %}
+        </div>
+      </div>
+
+      <br />
+
+      <div class="row">
+        <div class="col-8 off-2">
+          <p class="login-text">
+            This site has no affiliation with the card game Hanabi, no
+            affiliation with Antoine Bauza (the creator of Hanabi), and no
+            affiliation with any of the the real-life publishers of Hanabi (of
+            which there are many).
+          </p>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="col-8 off-2">
+          <p class="login-text">
+            This website is free of charge, has no advertisements, and is not
+            monetized in any way. Since this website is inspired by Hanabi, we
+            urge you to purchase a physical copy of that game if you enjoy
+            playing the variants of it online.
+          </p>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="col-8 off-2">
+          <p class="login-text">
+            Discord is a voice and text chat application that you can run in a
+            browser.<br />
+            If the server is down, you can probably find out why in
+            <a href="https://discord.gg/FADvkJp">the Discord server</a>.
+          </p>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="col-12 align-center">
+          <a href="https://discord.gg/FADvkJp">
+            <img id="title-discord" src="/public/img/discord.png" />
+          </a>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- The tutorial for new users (see "Tutorial.tsx") -->
+  <div id="tutorial" class="hidden"></div>
+
+  <!-- The lobby (see "Lobby.tsx") -->
+  <div id="lobby" class="container max hidden"></div>
+</div>
+
+<!-- Modals -->
+<div id="modals-container" class="hidden">
+  <!-- A warning, an error, or a question (see "MessageModal.tsx") -->
+  <div id="message-modal" class="modal modal-message"></div>
+
+  <!-- A choice, a number, or a card (see "PromptModal.tsx") -->
+  <div id="prompt-modal" class="modal-prompt"></div>
+
+  <!-- The emote and emoji picker (see "EmojiPicker.tsx") -->
+  <div id="emoji-modal" class="modal"></div>
+</div>
+
+<!-- Game (the UI when playing a game) -->
+<div id="game" class="hidden"></div>
+
+<!-- The redesigned game screen, for players who turned on the "New UI" setting -->
+<div id="game-new-ui" class="hidden"></div>
+
+<!-- Game tooltips (which are initialized in "tooltips.js") -->
+<span id="game-tooltips"></span><!-- This span cannot be hidden -->
+
+<!-- Game chat modal -->
+<div id="game-chat-modal" class="hidden draggable">
+  <div id="game-chat-modal-header">
+    <a id="game-chat-modal-header-close">
+      <i class="fas fa-times fa-xs"></i>
+    </a>
+  </div>
+  <!-- The client draws the chat box here. -->
+  <section id="game-chat-modal-white" class="box"></section>
+</div>
+
+<!-- Holds the open modal (see "modals.ts") -->
+<dialog id="modal-dialog"></dialog>
+
+<!-- Used to validate that we are connecting to the correct URL. -->
+<div id="domain" class="hidden">{{ domain }}</div>
+
+{% if isDev %} {% include "vite-dev.html" %}
+<script
+  type="module"
+  src="http://localhost:5173/src/main.ts"
+  onerror="
+    document.getElementById('loading').classList.add('hidden');
+    document.getElementById('client-bundle-error').classList.remove('hidden');
+  "
+></script>
+{% else %}
+<script
+  type="text/javascript"
+  src="/public/js/bundles/main.{{ version }}.min.js"
+></script>
+{% endif %} {% endblock %}

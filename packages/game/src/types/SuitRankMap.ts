@@ -1,6 +1,6 @@
 import type { ReadonlyRecord } from "complete-common";
-import type { Rank } from "./Rank";
-import type { SuitIndex } from "./SuitIndex";
+import type { Rank } from "./Rank.ts";
+import type { SuitIndex } from "./SuitIndex.ts";
 
 /**
  * A two-dimensional map indexed by suit index and then by rank.

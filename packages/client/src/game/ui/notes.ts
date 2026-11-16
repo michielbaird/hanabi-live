@@ -1,15 +1,35 @@
 // Users can right-click cards to record information on them.
 
+import { MAX_NOTE_LENGTH } from "@hanabi-live/data";
 import type { CardOrder } from "@hanabi-live/game";
 import { ReadonlySet, trimSuffix } from "complete-common";
-import * as chat from "../../chat";
-import * as tooltips from "../../tooltips";
-import { escapeHtml } from "../../utils";
-import type { HanabiCard } from "./HanabiCard";
-import { globals } from "./UIGlobals";
-import { getCardOrStackBase } from "./getCardOrStackBase";
+import type { Root } from "react-dom/client";
+import { globals as lobbyGlobals } from "../../Globals.ts";
+import type { LengthLimit } from "../../LengthCounter.tsx";
+import {
+  countCharacters,
+  mountLengthCounter,
+  rejectTooLong,
+} from "../../LengthCounter.tsx";
+import * as chat from "../../chat.ts";
+import { chatTextHtml } from "../../chatText.ts";
+import { store } from "../../store.ts";
+import type { GameTooltipName } from "../../tooltips.ts";
+import * as tooltips from "../../tooltips.ts";
+import {
+  escapeHtml,
+  getHtmlElement,
+  getHtmlInputElement,
+} from "../../utils.ts";
+import * as gameSession from "../gameSession.ts";
+import { gameUpdated } from "../gameSlice.ts";
+import { checkOurNote } from "../noteCheckImpossibility.ts";
+import type { HanabiCard } from "./HanabiCard.ts";
+import { globals } from "./UiGlobals.ts";
+import { getCardOrStackBase } from "./getCardOrStackBase.ts";
 
-const REMOVE_PIPE_KEYS = new ReadonlySet([
+/** The keys that remove the separator that editing adds, when they are the first key pressed. */
+export const REMOVE_PIPE_KEYS = new ReadonlySet([
   "ArrowDown",
   "ArrowLeft",
   "ArrowRight",
@@ -22,9 +42,42 @@ const REMOVE_PIPE_KEYS = new ReadonlySet([
 const CLOSE_NOTE_KEYS = new ReadonlySet(["Enter", "Escape"]);
 const META_KEYS = new ReadonlySet(["Alt", "Control", "Shift"]);
 
+/** The separator that editing adds after a note, so that the player can add to it. */
+export const NOTE_SEPARATOR = " | ";
+
+export const NOTE_LENGTH_LIMIT = {
+  max: MAX_NOTE_LENGTH,
+  left: (text) => MAX_NOTE_LENGTH - countCharacters(savedNote(text)),
+  tooLongText: "Note is too long",
+} as const satisfies LengthLimit;
+
+/** The character counter of the note that is being edited, and the tooltip that shows it. */
+let noteCounter:
+  { readonly tooltip: GameTooltipName; readonly root: Root } | undefined;
+
+/** The note that the text of a note input saves. */
+export function savedNote(text: string): string {
+  return chat.fillEmojis(trimSuffix(text, NOTE_SEPARATOR));
+}
+
+/**
+ * Removes the character counter when its tooltip shows other content. (It stays while the tooltip
+ * fades out.)
+ */
+function unmountNoteCounter(tooltip?: GameTooltipName) {
+  if (
+    noteCounter === undefined
+    || (tooltip !== undefined && noteCounter.tooltip !== tooltip)
+  ) {
+    return;
+  }
+
+  noteCounter.root.unmount();
+  noteCounter = undefined;
+}
+
 function prepareContent(rawNote: string): string {
-  const safe = escapeHtml(rawNote);
-  return chat.getPreparedMessage(safe);
+  return chatTextHtml(rawNote);
 }
 
 /** Get the contents of the note tooltip. */
@@ -39,26 +92,41 @@ function get(order: CardOrder, our: boolean, process = false) {
 
   // Build a string that shows the combined notes from the players & spectators.
   let content = "";
-  const noteObjectArray = globals.state.notes.allNotes[order]!;
+  const noteObjectArray = globals.state.notes.allNotes[order] ?? [];
   let firstSpectator = false;
   for (const noteObject of noteObjectArray) {
     const text = processFunc(noteObject.text);
-    const { isSpectator } = noteObject;
-    if (noteObject.text !== "") {
-      if (!firstSpectator && isSpectator) {
-        firstSpectator = true;
-        if (content !== "") {
-          content = `<div class='noteTitle'><span>Players</span></div>${content}`;
-        }
-        content += "<div class='noteTitle'><span>Spectators</span></div>";
-      }
-      content += `<strong>${escapeHtml(noteObject.name)}:</strong> ${text}<br />`;
+    const { spectator } = noteObject;
+    if (noteObject.text === "") {
+      continue;
     }
+
+    if (!firstSpectator && spectator) {
+      firstSpectator = true;
+      if (content !== "") {
+        content = `<div class='note-title'><span>Players</span></div>${content}`;
+      }
+      content += "<div class='note-title'><span>Spectators</span></div>";
+    }
+    content += `<strong>${escapeHtml(noteObject.username)}:</strong> ${text}<br />`;
   }
 
   content = trimSuffix(content, "<br />");
 
   return content;
+}
+
+/** The viewer's own note on a card. */
+export function getOurNote(order: CardOrder): string {
+  return get(order, true);
+}
+
+/**
+ * The HTML of the notes that the tooltip of a card shows: the viewer's own note when they play in
+ * the game, and otherwise the notes of every player and spectator.
+ */
+export function getShownNoteHtml(order: CardOrder): string {
+  return get(order, false, true);
 }
 
 /**
@@ -69,86 +137,84 @@ function get(order: CardOrder, our: boolean, process = false) {
  */
 export function set(order: CardOrder, text: string): void {
   const oldNote = globals.state.notes.ourNotes[order]!.text;
-  globals.lastNote = text;
+  gameSession.setLastNote(text);
 
   // Send the note to the server.
-  if (!globals.state.finished && text !== oldNote) {
-    globals.lobby.conn!.send("note", {
-      tableID: globals.lobby.tableID,
+  if (text !== oldNote && !globals.state.finished) {
+    lobbyGlobals.connection.send("note", {
+      tableId: lobbyGlobals.joinedTableId,
       order,
-      note: text,
+      text,
     });
   }
 
-  globals.store!.dispatch({
-    type: "editNote",
-    order,
-    text,
-  });
+  store.dispatch(
+    gameUpdated({
+      type: "editNote",
+      order,
+      text,
+    }),
+  );
 
   const card = getCardOrStackBase(order);
-  if (card) {
-    card.checkSpecialNote();
-    card.setRaiseAndShadowOffset();
+  if (!card) {
+    // The New UI draws no cards of its own here.
+    checkOurNote(order);
+    return;
   }
+
+  card.checkSpecialNote();
+  card.setRaiseAndShadowOffset();
 }
 
 export function update(card: HanabiCard, text: string): void {
   // Update the tooltip if it still needs to be shown.
   if (text === "" || globals.activeHover !== card) {
-    const tooltip = `#tooltip-${card.tooltipName}`;
-    tooltips.close(tooltip);
+    tooltips.close(card.tooltipName);
   } else {
-    globals.editingNote = null;
+    globals.editingNote = undefined;
     show(card);
   }
 
   // Update the card indicator.
   const visibleOld = card.noteIndicator.visible();
   const visibleNew = text !== "";
-  if (visibleOld !== visibleNew) {
-    card.noteIndicator.visible(visibleNew);
-    globals.layers.card.batchDraw();
+  if (visibleOld === visibleNew) {
+    return;
   }
+
+  card.noteIndicator.visible(visibleNew);
+  globals.layers.card.batchDraw();
 }
 
 /** Open the tooltip for this card. */
 export function show(card: HanabiCard): void {
-  const tooltip = `#tooltip-${card.tooltipName}`;
+  const tooltip = card.tooltipName;
 
-  // We want the tooltip to appear above the card by default.
-  const pos = card.getAbsolutePosition();
-  const posX = pos.x;
-  let posY = pos.y - (card.height() * card.layout.scale().y) / 2;
-  tooltips.setInstanceOption(tooltip, "side", "top");
-
-  // Flip the tooltip if it is too close to the top of the screen.
-  if (posY < 200) {
-    // 200 is just an arbitrary threshold; 100 is not big enough for the BGA layout.
-    posY = pos.y + (card.height() * card.layout.scale().y) / 2;
-    tooltips.setInstanceOption(tooltip, "side", "bottom");
-  }
-
-  // Update the tooltip position.
-  tooltips.setPosition(tooltip, posX, posY);
+  // Use the on-screen bounds so that cards in rotated hands are measured correctly.
+  tooltips.setPosition(tooltip, card.getClientRect({}));
 
   // Update the tooltip content.
-  let shownNote = get(card.state.order, false, true);
-  if (card.state.location === "playStack") {
-    if (shownNote !== "") {
-      shownNote += "<br><br>";
-    }
-    shownNote += card.suitDescriptionNote();
+  unmountNoteCounter(tooltip);
+  let shownNote = get(card.order, false, true);
+  // A card in the hole of a "Throw It in a Hole" variant is on the play stacks, but its suit can be
+  // unknown.
+  const suitDescription =
+    card.state.location === "playStack"
+      ? card.suitDescriptionNote()
+      : undefined;
+  if (suitDescription !== undefined) {
+    // A line separates the notes from the description of the suit.
+    shownNote =
+      shownNote === ""
+        ? suitDescription
+        : `${shownNote}<div class="tw:mt-2 tw:border-t tw:border-border tw:pt-2">${suitDescription}</div>`;
   }
-  tooltips.setInstanceContent(tooltip, shownNote);
+  tooltips.setContent(tooltip, shownNote);
   tooltips.open(tooltip);
 }
 
-export function openEditTooltip(
-  card: HanabiCard,
-  isDesktop = true,
-  addText = "",
-): void {
+export function openEditTooltip(card: HanabiCard, isDesktop = true): void {
   // Do not edit any notes in dedicated replays.
   if (globals.state.finished) {
     return;
@@ -163,16 +229,15 @@ export function openEditTooltip(
   // handler will automatically close the tooltip, but then this code will run and immediately
   // re-open the tooltip. Detect if this is happening and do nothing. The "focusout" event does not
   // fire on mobile, therefore we only check for desktop clients.
-  const tooltip = `#tooltip-${card.tooltipName}`;
-  const status = tooltips.getStatus(tooltip);
-  if (isDesktop && status.state === "disappearing") {
+  const tooltip = card.tooltipName;
+  if (isDesktop && tooltips.isClosing(tooltip)) {
     return;
   }
 
   show(card);
 
   globals.editingNote = tooltip;
-  const note = get(card.state.order, true);
+  const note = get(card.order, true);
 
   const input = document.createElement("input");
   input.setAttribute("id", `tooltip-${card.tooltipName}-input`);
@@ -183,11 +248,31 @@ export function openEditTooltip(
   input.setAttribute("autocorrect", "off");
   input.setAttribute("autocapitalize", "off");
 
-  tooltips.setInstanceContent(tooltip, input.outerHTML);
+  // The counter is positioned in the input's container.
+  const counterId = `tooltip-${card.tooltipName}-length-counter`;
+  tooltips.setContent(
+    tooltip,
+    `<span class="tw:relative tw:inline-block">${input.outerHTML}<span id="${counterId}"></span></span>`,
+  );
 
-  const noteTextbox = $(`#tooltip-${card.tooltipName}-input`);
+  // A card without a note has an empty tooltip, which "show" leaves closed.
+  tooltips.open(tooltip);
+
+  const inputElement = getHtmlInputElement(
+    `#tooltip-${card.tooltipName}-input`,
+  );
+  unmountNoteCounter();
+  noteCounter = {
+    tooltip,
+    root: mountLengthCounter(
+      getHtmlElement(`#${counterId}`),
+      inputElement,
+      NOTE_LENGTH_LIMIT,
+    ),
+  };
+
   let shouldRemovePipe = true;
-  noteTextbox.on("keydown", (event) => {
+  inputElement.addEventListener("keydown", (event) => {
     event.stopPropagation();
     const { key } = event;
 
@@ -198,14 +283,14 @@ export function openEditTooltip(
         if (key !== "Home") {
           event.preventDefault();
         }
-        noteTextbox.val(note);
+        inputElement.value = note;
       }
       shouldRemovePipe = false;
     }
 
     if (key === "Tab") {
       event.preventDefault();
-      chat.tab(noteTextbox, event);
+      chat.tab(input, event.shiftKey);
       return;
     }
 
@@ -216,91 +301,73 @@ export function openEditTooltip(
     let newNote: string;
     if (key === "Escape") {
       // If Escape is pressed, use the existing note, if any.
-      newNote = get(card.state.order, true);
+      newNote = get(card.order, true);
     } else {
       // If Enter is pressed, get the value of the input box.
-      const val = noteTextbox.val();
-      if (typeof val !== "string") {
-        throw new TypeError(
-          `The value of the "#tooltip-${card.tooltipName}-input" element was not a string.`,
-        );
+      const val = inputElement.value;
+
+      // Keep a note that is too long open, so that the player can shorten it.
+      if (rejectTooLong(inputElement, NOTE_LENGTH_LIMIT)) {
+        return;
       }
 
-      newNote = val;
-
-      // Remove the last pipe.
-      newNote = trimSuffix(newNote, " | ");
-
-      newNote = chat.fillEmojis(newNote);
-
-      set(card.state.order, newNote);
-    }
-
-    // Check to see if an event happened while we were editing this note.
-    if (globals.actionOccurred) {
-      globals.actionOccurred = false;
-      tooltips.close(tooltip);
-      return;
+      newNote = savedNote(val);
+      set(card.order, newNote);
     }
 
     update(card, newNote);
   });
 
   // Reset the tab-complete variables after we have typed a new character.
-  noteTextbox.on("keypress", () => {
+  inputElement.addEventListener("keypress", () => {
     chat.tabResetAutoCompleteList();
   });
 
-  noteTextbox.on("input", (event) => {
-    const text = noteTextbox.val();
-    if (typeof text !== "string") {
-      throw new TypeError(
-        "The value of the element in the input function is not a string.",
-      );
-    }
+  inputElement.addEventListener("input", (event) => {
+    const text = inputElement.value;
 
     // Check for emoji substitution.
     const newText = chat.substituteEmoji(text);
-    if (newText !== null) {
-      noteTextbox.val(newText);
-      event.preventDefault();
+    if (newText === undefined) {
+      return;
     }
+
+    inputElement.value = newText;
+    event.preventDefault();
   });
 
   // Automatically add a pipe to a non empty note input box when it is focused.
-  noteTextbox.on("focus", function tooltipCardInputFocus(this: HTMLElement) {
-    let oldNote = $(this).val();
-    if (typeof oldNote !== "string") {
-      oldNote = "";
-    }
+  inputElement.addEventListener("focus", () => {
+    const oldNote = inputElement.value;
 
     let newNote = oldNote;
-    if (oldNote !== "" && !oldNote.endsWith(" | ")) {
-      newNote += " | ";
+    if (oldNote !== "" && !oldNote.endsWith(NOTE_SEPARATOR)) {
+      newNote += NOTE_SEPARATOR;
     }
-    newNote += addText;
     if (newNote !== oldNote) {
-      $(this).val(newNote);
+      inputElement.value = newNote;
     }
 
     chat.tabResetAutoCompleteList();
   });
 
   // Remove the pipe if the user clicks with the mouse buttons.
-  noteTextbox.on("mousedown", () => {
-    if (shouldRemovePipe) {
-      noteTextbox.val(note);
-      shouldRemovePipe = false;
+  inputElement.addEventListener("mousedown", () => {
+    if (!shouldRemovePipe) {
+      return;
     }
+
+    inputElement.value = note;
+    shouldRemovePipe = false;
   });
 
   // Automatically focus the new text input box. (This will not work properly in speedrun mode
   // unless we put it in a callback.)
   requestAnimationFrame(() => {
-    noteTextbox.trigger("focus");
+    inputElement.focus();
 
     // Automatically close the tooltip if we click elsewhere on the screen.
-    noteTextbox.on("focusout", () => {
+    inputElement.addEventListener("focusout", () => {
       chat.tabResetAutoCompleteList();
       tooltips.close(tooltip);
     });
@@ -308,7 +375,7 @@ export function openEditTooltip(
 
   // On mobile, if the focus event is wrapped in a callback then it will not trigger the keyboard to
   // open (due to security restrictions where only user inputs can trigger certain things).
-  noteTextbox.trigger("focus");
+  inputElement.focus();
 }
 
 /**
@@ -316,7 +383,7 @@ export function openEditTooltip(
  */
 export function setAllCardIndicators(): void {
   // We iterate through the whole deck instead of using the index of the last drawn card to avoid
-  // race conditions where we can get the "noteList" before the "actionList" is finished processing.
+  // race conditions where we can get the notes before all of the game's actions are applied.
   for (const card of globals.deck) {
     card.setNoteIndicator();
   }

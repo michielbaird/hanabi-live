@@ -1,44 +1,44 @@
-/* eslint-disable unicorn/no-null */
-
 import { assertDefined } from "complete-common";
-import { possibleCardsFromNoteAndClues } from "./cardPresentation";
-import { ClueType } from "./enums/ClueType";
-import type { CardIdentity } from "./interfaces/CardIdentity";
-import type { CardNote } from "./interfaces/CardNote";
-import type { CardState } from "./interfaces/CardState";
-import type { GameMetadata } from "./interfaces/GameMetadata";
-import type { GameState } from "./interfaces/GameState";
-import type { Variant } from "./interfaces/Variant";
-import { isCardTouchedByClue, msgClueToClue } from "./rules/clues";
-import { getNextPlayableRanks } from "./rules/playStacks";
-import type { CardOrder } from "./types/CardOrder";
-import type { ColorIndex } from "./types/ColorIndex";
-import type { GameAction } from "./types/gameActions";
-import type { MsgClue } from "./types/MsgClue";
-import type { PlayerIndex } from "./types/PlayerIndex";
-import type { RankClueNumber } from "./types/RankClueNumber";
-import type { SuitIndex } from "./types/SuitIndex";
-import type { SuitRankTuple } from "./types/SuitRankTuple";
+import { identityField } from "./cardEventIdentity.ts";
+import { possibleCardsFromNoteAndClues } from "./cardPresentation.ts";
+import { StackDirection } from "./enums/StackDirection.ts";
+import { START_CARD_RANK } from "./generated/protocol.ts";
+import type { HypotheticalGameAction } from "./hypotheticalState.ts";
+import type { CardIdentity } from "./interfaces/CardIdentity.ts";
+import type { CardNote } from "./interfaces/CardNote.ts";
+import type { CardState } from "./interfaces/CardState.ts";
+import type { GameMetadata } from "./interfaces/GameMetadata.ts";
+import type { GameState } from "./interfaces/GameState.ts";
+import type { Variant } from "./interfaces/Variant.ts";
+import { isCardTouchedByClue, msgClueToClue } from "./rules/clues.ts";
+import { getTotalCardsInDeck } from "./rules/deck.ts";
+import {
+  getNextPlayableRanks,
+  getNextPlayableRanksAfter,
+} from "./rules/playStacks.ts";
+import type { CardOrder } from "./types/CardOrder.ts";
+import type { ActionDraw } from "./types/gameActions.ts";
+import type { MsgClue } from "./types/MsgClue.ts";
+import type { PlayerIndex } from "./types/PlayerIndex.ts";
+import type { Rank } from "./types/Rank.ts";
+import type { SuitIndex } from "./types/SuitIndex.ts";
+import type { SuitRankTuple } from "./types/SuitRankTuple.ts";
 
 export type HypotheticalActionIntent =
   | { readonly type: "play"; readonly order: CardOrder }
   | { readonly type: "discard"; readonly order: CardOrder }
   | {
-      readonly type: "colorClue";
-      readonly target: PlayerIndex;
-      readonly value: ColorIndex;
+      readonly type: "clue";
+      readonly receiverIndex: PlayerIndex;
+      readonly clue: MsgClue;
     }
-  | {
-      readonly type: "rankClue";
-      readonly target: PlayerIndex;
-      readonly value: RankClueNumber;
-    };
+  | { readonly type: "passTurn" };
 
 /** Plain data from a card view needed to reproduce its hypothetical behavior. */
 export interface HypotheticalCardView {
   readonly state: CardState;
   readonly isStackBase: boolean;
-  readonly visibleSuitIndex: SuitIndex | null;
+  readonly visibleSuitIndex: SuitIndex | undefined;
   readonly visibleRank: CardState["rank"];
 }
 
@@ -47,7 +47,7 @@ export interface HypotheticalCard {
   readonly order: CardOrder;
   readonly identity: CardIdentity;
   readonly possibilities: readonly SuitRankTuple[];
-  readonly visibleSuitIndex: SuitIndex | null;
+  readonly visibleSuitIndex: SuitIndex | undefined;
   readonly visibleRank: CardState["rank"];
 }
 
@@ -59,43 +59,73 @@ export interface HypotheticalCardInput extends HypotheticalCardView {
 }
 
 /** Reproduces HanabiCard's identity and possibility semantics using only game data. */
+/**
+ * While playing, a player's note identifies a card in a hypothetical when the note and the clues
+ * leave only one possibility.
+ */
+export function getIdentityFromNote(
+  note: CardNote,
+  state: CardState,
+  playing: boolean,
+): CardIdentity | undefined {
+  if (!playing) {
+    return undefined;
+  }
+
+  const possibilities = possibleCardsFromNoteAndClues(note, state);
+  if (possibilities.length !== 1) {
+    return undefined;
+  }
+
+  const possibility = possibilities[0];
+  assertDefined(possibility, "Expected one note and clue possibility.");
+  const [suitIndex, rank] = possibility;
+  return {
+    suitIndex,
+    rank,
+  };
+}
+
 export function getHypotheticalCard(
   input: HypotheticalCardInput,
 ): HypotheticalCard {
   const {
-    state,
     identity,
     morphedIdentity,
     note,
     playing,
+    state,
     isStackBase,
     visibleSuitIndex,
     visibleRank,
   } = input;
 
+  // A blank morph only hides the card (for example, a card drawn during the hypothetical), so the
+  // player's own note still identifies it.
+  const blankMorph =
+    morphedIdentity !== undefined
+    && morphedIdentity.suitIndex === undefined
+    && morphedIdentity.rank === undefined;
+  const noteIdentity = getIdentityFromNote(note, state, playing);
   let morphedCardIdentity: CardIdentity;
-  if (morphedIdentity === undefined) {
-    const noteAndCluePossibilities = possibleCardsFromNoteAndClues(note, state);
-    if (playing && noteAndCluePossibilities.length === 1) {
-      const possibility = noteAndCluePossibilities[0];
-      assertDefined(possibility, "Expected one note and clue possibility.");
-      const [suitIndex, rank] = possibility;
-      morphedCardIdentity = { suitIndex, rank };
-    } else if (isStackBase) {
-      morphedCardIdentity = {
-        suitIndex: state.suitIndex,
-        rank: state.rank,
-      };
-    } else {
-      morphedCardIdentity = identity;
-    }
-  } else {
+  if (morphedIdentity !== undefined && !blankMorph) {
     morphedCardIdentity = morphedIdentity;
+  } else if (noteIdentity !== undefined) {
+    morphedCardIdentity = noteIdentity;
+  } else if (morphedIdentity !== undefined) {
+    morphedCardIdentity = morphedIdentity;
+  } else if (isStackBase) {
+    morphedCardIdentity = {
+      suitIndex: state.suitIndex,
+      rank: state.rank,
+    };
+  } else {
+    morphedCardIdentity = identity;
   }
 
   if (
-    morphedCardIdentity.suitIndex !== null
-    && morphedCardIdentity.rank !== null
+    morphedCardIdentity.suitIndex !== undefined
+    && morphedCardIdentity.rank !== undefined
   ) {
     return {
       order: state.order,
@@ -138,7 +168,7 @@ export function getHypotheticalTouchedCards(
 
   for (const card of cards) {
     const { suitIndex, rank } = card.identity;
-    if (suitIndex === null && rank === null) {
+    if (suitIndex === undefined && rank === undefined) {
       // Blank morphs are never touched, even when their underlying possibilities match.
       continue;
     }
@@ -147,10 +177,10 @@ export function getHypotheticalTouchedCards(
       card.possibilities.every(([possibleSuitIndex, possibleRank]) =>
         isCardTouchedByClue(variant, fullClue, possibleSuitIndex, possibleRank),
       )
-      && card.possibilities.every(() =>
-        clue.type === ClueType.Rank
-          ? card.visibleRank !== null
-          : card.visibleSuitIndex !== null,
+      && card.possibilities.every(
+        () =>
+          (clue.type === "rank" ? card.visibleRank : card.visibleSuitIndex)
+          !== undefined,
       )
     ) {
       touchedCards.push(card.order);
@@ -166,20 +196,52 @@ export interface PlanHypotheticalActionContext {
   readonly variant: Variant;
   readonly cardIdentities: readonly CardIdentity[];
   readonly morphedIdentities: ReadonlyArray<CardIdentity | undefined>;
+  readonly showDrawnCards: boolean;
+  readonly startingPlayerIndex: PlayerIndex | undefined;
   readonly notes: readonly CardNote[];
   readonly playing: boolean;
   readonly cardViews: readonly HypotheticalCardView[];
 }
 
-/** Returns the game actions for a hypothetical intent, or null when it cannot be planned. */
+/** Returns the game actions for a hypothetical intent, or undefined when it cannot be planned. */
+/**
+ * In a hypothetical, a stack base can be morphed into a card of its suit to pretend that the stack
+ * has already been played up to that card. This lasts until a card is played on the stack. In "Up
+ * or Down" variants, a stack whose direction is still undecided can only have the start card on it,
+ * so other ranks are ambiguous and are ignored.
+ *
+ * @returns The morphed rank, or undefined if the stack base is not morphed in this way.
+ */
+function getMorphedStackBaseRank(
+  suitIndex: SuitIndex,
+  playStack: readonly CardOrder[],
+  playStackDirection: StackDirection,
+  context: PlanHypotheticalActionContext,
+): Rank | undefined {
+  if (playStack.length > 0) {
+    return undefined;
+  }
+
+  // Stack bases use the card orders after the final card in the deck.
+  const stackBaseOrder = (getTotalCardsInDeck(context.variant)
+    + suitIndex) as CardOrder;
+  const morphedIdentity = context.morphedIdentities[stackBaseOrder];
+  return morphedIdentity?.suitIndex !== suitIndex
+    || morphedIdentity.rank === undefined
+    || (playStackDirection === StackDirection.Undecided
+      && morphedIdentity.rank !== START_CARD_RANK)
+    ? undefined
+    : morphedIdentity.rank;
+}
+
 export function planHypotheticalAction(
   intent: HypotheticalActionIntent,
   context: PlanHypotheticalActionContext,
-): readonly GameAction[] | null {
+): readonly HypotheticalGameAction[] | undefined {
   const { gameState, metadata, variant } = context;
   const playerIndex = gameState.turn.currentPlayerIndex;
-  if (playerIndex === null) {
-    return null;
+  if (playerIndex === undefined) {
+    return undefined;
   }
 
   function cardAt(order: CardOrder): HypotheticalCard | undefined {
@@ -195,7 +257,10 @@ export function planHypotheticalAction(
     ) {
       return undefined;
     }
-    const identity = cardIdentity ?? { suitIndex: null, rank: null };
+    const identity = cardIdentity ?? {
+      suitIndex: undefined,
+      rank: undefined,
+    };
     return getHypotheticalCard({
       ...view,
       identity,
@@ -205,7 +270,7 @@ export function planHypotheticalAction(
     });
   }
 
-  const actions: GameAction[] = [];
+  const actions: HypotheticalGameAction[] = [];
   if (intent.type === "play" || intent.type === "discard") {
     // Reject cards held by other players to prevent duplicated card orders.
     const isInOtherHand = gameState.hands.some(
@@ -213,16 +278,16 @@ export function planHypotheticalAction(
         otherPlayerIndex !== playerIndex && hand.includes(intent.order),
     );
     if (isInOtherHand) {
-      return null;
+      return undefined;
     }
 
     const card = cardAt(intent.order);
     if (
       card === undefined
-      || card.identity.suitIndex === null
-      || card.identity.rank === null
+      || card.identity.suitIndex === undefined
+      || card.identity.rank === undefined
     ) {
-      return null;
+      return undefined;
     }
 
     const { suitIndex, rank } = card.identity;
@@ -241,58 +306,63 @@ export function planHypotheticalAction(
         playStackDirection,
         "Expected a play stack direction for the card suit.",
       );
-      const nextRanks = getNextPlayableRanks(
+      const morphedTopRank = getMorphedStackBaseRank(
         suitIndex,
         playStack,
         playStackDirection,
-        gameState.playStackStarts,
-        variant,
-        gameState.deck,
+        context,
       );
+      const nextRanks =
+        morphedTopRank === undefined
+          ? getNextPlayableRanks(
+              suitIndex,
+              playStack,
+              playStackDirection,
+              gameState.playStackStarts,
+              variant,
+              gameState.deck,
+            )
+          : getNextPlayableRanksAfter(
+              suitIndex,
+              morphedTopRank,
+              playStackDirection,
+              gameState.playStackStarts,
+              variant,
+            );
       if (!nextRanks.includes(rank)) {
-        actionType = "discard";
         failed = true;
       }
     }
 
-    if (actionType === "play") {
-      actions.push({
-        type: "play",
-        playerIndex,
-        order: intent.order,
+    const movedCard = {
+      playerIndex,
+      order: intent.order,
+      ...identityField({
         suitIndex,
         rank,
-      });
-    } else {
-      actions.push({
-        type: "discard",
-        playerIndex,
-        order: intent.order,
-        suitIndex,
-        rank,
-        failed,
-      });
-    }
-
-    if (failed) {
-      actions.push({
-        type: "strike",
-        num: (gameState.strikes.length + 1) as 1 | 2 | 3,
-        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-        turn: gameState.turn.segment!,
-        order: intent.order,
-      });
-    }
+      }),
+    };
+    const moveAction: HypotheticalGameAction = failed
+      ? {
+          type: "misplay",
+          ...movedCard,
+        }
+      : {
+          type: actionType,
+          ...movedCard,
+        };
 
     if (gameState.deck.length < context.cardIdentities.length) {
       const nextCardOrder = gameState.deck.length as CardOrder;
       const nextCard = context.cardIdentities[nextCardOrder];
-      const drawAction: GameAction = {
+      const drawAction: ActionDraw = {
         type: "draw",
         order: nextCardOrder,
         playerIndex,
-        suitIndex: nextCard?.suitIndex ?? -1,
-        rank: nextCard?.rank ?? -1,
+        ...identityField({
+          suitIndex: nextCard?.suitIndex,
+          rank: nextCard?.rank,
+        }),
       };
       const isBottomDeckAction =
         metadata.options.deckPlays
@@ -300,33 +370,49 @@ export function planHypotheticalAction(
         && intent.order === nextCardOrder;
       if (isBottomDeckAction) {
         // The final card must exist in state before it can be played or discarded.
-        actions.unshift(drawAction);
+        actions.push(drawAction, moveAction);
       } else {
-        actions.push(drawAction);
+        actions.push(moveAction, drawAction);
       }
+    } else {
+      actions.push(moveAction);
     }
+  } else if (intent.type === "passTurn") {
+    actions.push({
+      type: "clue",
+      clue: {
+        type: undefined,
+        value: undefined,
+        visibleType: undefined,
+      },
+      playerIndex,
+      orders: [],
+      receiverIndex: playerIndex,
+      ignoreNegative: true,
+    });
   } else {
-    const clue: MsgClue =
-      intent.type === "colorClue"
-        ? { type: ClueType.Color, value: intent.value }
-        : { type: ClueType.Rank, value: intent.value };
+    const { clue } = intent;
     const targetCards: HypotheticalCard[] = [];
-    const targetHand = gameState.hands[intent.target];
+    const targetHand = gameState.hands[intent.receiverIndex];
     assertDefined(targetHand, "Expected a hand for the clue target.");
     for (const order of targetHand) {
       const card = cardAt(order);
       if (card === undefined) {
-        return null;
+        return undefined;
       }
       targetCards.push(card);
     }
     actions.push({
       type: "clue",
       clue,
-      giver: playerIndex,
-      list: getHypotheticalTouchedCards(targetCards, clue, variant),
-      target: intent.target,
-      ignoreNegative: false,
+      playerIndex,
+      orders: getHypotheticalTouchedCards(targetCards, clue, variant),
+      receiverIndex: intent.receiverIndex,
+      // While drawn cards are hidden, negative information could reveal the starting player's
+      // hidden cards.
+      ignoreNegative:
+        !context.showDrawnCards
+        && intent.receiverIndex === context.startingPlayerIndex,
     });
   }
 
@@ -336,7 +422,7 @@ export function planHypotheticalAction(
   }
   actions.push({
     type: "turn",
-    num: gameState.turn.turnNum + 1,
+    turn: gameState.turn.turnNum + 1,
     currentPlayerIndex: nextPlayerIndex as PlayerIndex,
   });
 

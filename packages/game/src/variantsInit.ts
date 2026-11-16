@@ -1,21 +1,20 @@
 import { assertDefined, parseIntSafe } from "complete-common";
-import { getUppercaseSuitAbbreviationsForVariant } from "./abbreviations";
+import { getUppercaseSuitAbbreviationsForVariant } from "./abbreviations.ts";
 import {
-  DEFAULT_CARD_RANKS,
   DEFAULT_CLUE_RANKS,
   DEFAULT_FINISHED_STACK_LENGTH,
-  START_CARD_RANK,
-} from "./constants";
-import { Pip } from "./enums/Pip";
-import type { Color } from "./interfaces/Color";
-import type { Suit } from "./interfaces/Suit";
-import type { Variant } from "./interfaces/Variant";
-import type { VariantDescription } from "./interfaces/VariantDescription";
-import type { VariantJSON } from "./interfaces/VariantJSON";
-import variantsJSON from "./json/variants.json";
-import { getIdentityNotePatternForVariant } from "./notes";
-import type { Rank } from "./types/Rank";
-import { isValidRankClueNumber } from "./types/RankClueNumber";
+} from "./constants.ts";
+import { Pip } from "./enums/Pip.ts";
+import { DEFAULT_CARD_RANKS, START_CARD_RANK } from "./generated/protocol.ts";
+import type { Color } from "./interfaces/Color.ts";
+import type { Suit } from "./interfaces/Suit.ts";
+import type { Variant } from "./interfaces/Variant.ts";
+import type { VariantDescription } from "./interfaces/VariantDescription.ts";
+import type { VariantJson } from "./interfaces/VariantJson.ts";
+import variantsJson from "./json/variants.json" with { type: "json" };
+import { getIdentityNotePatternForVariant } from "./notes.ts";
+import type { Rank } from "./types/Rank.ts";
+import type { VariantId } from "./types/VariantId.ts";
 
 const AUTO_PIP_PRIORITY = [
   Pip.hanabiRed1,
@@ -32,35 +31,12 @@ export function variantsInit(
 ): ReadonlyMap<string, Variant> {
   const variants = new Map<string, Variant>();
 
-  if (variantsJSON.length === 0) {
-    throw new Error(
-      'The "variants.json" file did not have any elements in it.',
-    );
-  }
+  // A test validates the file against the server's catalog contract.
+  for (const variantJson of variantsJson as readonly VariantJson[]) {
+    const { id, recipe } = variantJson;
+    const variant = createVariant(colorsMap, suitsMap, variantJson, id, recipe);
 
-  // Fields are validated in the order that they appear in "VariantDescription.ts".
-  for (const variantJSON of variantsJSON as VariantJSON[]) {
-    // ------------------------
-    // `VariantJSON` properties
-    // ------------------------
-
-    // Validate the ID. (The first variant has an ID of 0.)
-    if (variantJSON.id < 0) {
-      throw new Error(`The "${variantJSON.name}" variant has an invalid ID.`);
-    }
-    const { id } = variantJSON;
-
-    // Validate the new ID.
-    if (variantJSON.newID === "") {
-      throw new Error(
-        `The "${variantJSON.name}" variant has a blank "newID" property.`,
-      );
-    }
-    const { newID } = variantJSON;
-
-    const variant = createVariant(colorsMap, suitsMap, variantJSON, id, newID);
-
-    variants.set(variantJSON.name, variant);
+    variants.set(variantJson.name, variant);
   }
 
   return variants;
@@ -70,9 +46,12 @@ export function createVariant(
   colorsMap: ReadonlyMap<string, Color>,
   suitsMap: ReadonlyMap<string, Suit>,
   variantDescription: VariantDescription,
-  id: number,
-  newID: string,
+  id: VariantId,
+  recipe: string,
 ): Variant {
+  // Fields are validated in the order that they appear in `CatalogVariant` (in
+  // "server/protocol/src/lib.rs").
+
   // ---------------
   // Core properties
   // ---------------
@@ -103,142 +82,61 @@ export function createVariant(
   // array to a color object array.
   const clueColors = getVariantClueColors(variantDescription, colorsMap, suits);
 
-  // Validate the clue ranks (the ranks available to clue in this variant). If it is not specified,
-  // assume that players can clue the normal ranks.
-  if (variantDescription.clueRanks !== undefined) {
-    for (const clueRank of variantDescription.clueRanks) {
-      if (!isValidRankClueNumber(clueRank)) {
-        throw new Error(
-          `The "clueRanks" property for the variant "${name}" has an invalid value of: ${clueRank}`,
-        );
-      }
-    }
-  }
+  // The ranks available to clue in this variant. If it is not specified, assume that players can
+  // clue the normal ranks.
   const clueRanks = variantDescription.clueRanks ?? [...DEFAULT_CLUE_RANKS];
 
-  // Validate the "stackSize" property.
-  if (variantDescription.stackSize === DEFAULT_FINISHED_STACK_LENGTH) {
-    throw new Error(
-      `The "stackSize" property for the variant "${variantDescription.name}" must not be set to ${DEFAULT_FINISHED_STACK_LENGTH}. If it is intended to be ${DEFAULT_FINISHED_STACK_LENGTH}, then remove the property altogether.`,
-    );
-  }
+  // The catalog omits the default stack size.
   const stackSize =
     variantDescription.stackSize ?? DEFAULT_FINISHED_STACK_LENGTH;
 
   // -----------------------------------------------
-  // Special variant properties (from `VariantJSON`)
+  // Special variant properties (from `VariantJson`)
   // -----------------------------------------------
 
-  // Validate the "clueStarved" property. If it is not specified, assume false.
-  if (variantDescription.clueStarved === false) {
-    throw new Error(
-      `The "clueStarved" property for the variant "${variantDescription.name}" must be set to true. If it is intended to be false, then remove the property altogether.`,
-    );
-  }
+  // If "clueStarved" is not specified, assume false.
   const clueStarved = variantDescription.clueStarved ?? false;
 
-  // Validate the "colorCluesTouchNothing" property. If it is not specified, assume false (e.g.
-  // cluing colors in this variant works normally).
-  if (variantDescription.colorCluesTouchNothing === false) {
-    throw new Error(
-      `The "colorCluesTouchNothing" property for the variant "${variantDescription.name}" must be set to true. If it is intended to be false, then remove the property altogether.`,
-    );
-  }
+  // If "colorCluesTouchNothing" is not specified, assume false (e.g. cluing colors in this variant
+  // works normally).
   const colorCluesTouchNothing =
     variantDescription.colorCluesTouchNothing ?? false;
 
-  // Validate the "rankCluesTouchNothing" property. If it is not specified, assume false (e.g.
-  // cluing ranks in this variant works normally).
-  if (variantDescription.rankCluesTouchNothing === false) {
-    throw new Error(
-      `The "rankCluesTouchNothing" property for the variant "${variantDescription.name}" must be set to true. If it is intended to be false, then remove the property altogether.`,
-    );
-  }
+  // If "rankCluesTouchNothing" is not specified, assume false (e.g. cluing ranks in this variant
+  // works normally).
   const rankCluesTouchNothing =
     variantDescription.rankCluesTouchNothing ?? false;
 
-  // Validate the "alternatingClues" property. If it is not specified, assume false.
-  if (variantDescription.alternatingClues === false) {
-    throw new Error(
-      `The "alternatingClues" property for the variant "${variantDescription.name}" must be set to true. If it is intended to be false, then remove the property altogether.`,
-    );
-  }
+  // If "alternatingClues" is not specified, assume false.
   const alternatingClues = variantDescription.alternatingClues ?? false;
 
-  // Validate the "cowAndPig" property. If it is not specified, assume false.
-  if (variantDescription.cowAndPig === false) {
-    throw new Error(
-      `The "cowAndPig" property for the variant "${variantDescription.name}" must be set to true. If it is intended to be false, then remove the property altogether.`,
-    );
-  }
+  // If "cowAndPig" is not specified, assume false.
   const cowAndPig = variantDescription.cowAndPig ?? false;
 
-  // Validate the "duck" property. If it is not specified, assume false.
-  if (variantDescription.duck === false) {
-    throw new Error(
-      `The "duck" property for the variant "${variantDescription.name}" must be set to true. If it is intended to be false, then remove the property altogether.`,
-    );
-  }
+  // If "duck" is not specified, assume false.
   const duck = variantDescription.duck ?? false;
 
-  // Validate the "oddsAndEvens" property. If it is not specified, assume false (e.g. cluing ranks
-  // in this variant works normally).
-  if (variantDescription.oddsAndEvens === false) {
-    throw new Error(
-      `The "oddsAndEvens" property for the variant "${variantDescription.name}" must be set to true. If it is intended to be false, then remove the property altogether.`,
-    );
-  }
+  // If "oddsAndEvens" is not specified, assume false (e.g. cluing ranks in this variant works
+  // normally).
   const oddsAndEvens = variantDescription.oddsAndEvens ?? false;
 
-  // Validate the "synesthesia" property. If it is not specified, assume false.
-  if (variantDescription.synesthesia === false) {
-    throw new Error(
-      `The "synesthesia" property for the variant "${variantDescription.name}" must be set to true. If it is intended to be false, then remove the property altogether.`,
-    );
-  }
+  // If "synesthesia" is not specified, assume false.
   const synesthesia = variantDescription.synesthesia ?? false;
 
-  // Validate the "upOrDown" property. If it is not specified, assume false.
-  if (variantDescription.upOrDown === false) {
-    throw new Error(
-      `The "upOrDown" property for the variant "${variantDescription.name}" must be set to true. If it is intended to be false, then remove the property altogether.`,
-    );
-  }
+  // If "upOrDown" is not specified, assume false.
   const upOrDown = variantDescription.upOrDown ?? false;
 
-  // Validate the "throwItInAHole" property. If it is not specified, assume false.
-  if (variantDescription.throwItInAHole === false) {
-    throw new Error(
-      `The "throwItInAHole" property for the variant "${variantDescription.name}" must be set to true. If it is intended to be false, then remove the property altogether.`,
-    );
-  }
+  // If "throwItInAHole" is not specified, assume false.
   const throwItInAHole = variantDescription.throwItInAHole ?? false;
 
-  // Validate the "funnels" property. If it is not specified, assume false (e.g. cluing ranks in
-  // this variant works normally).
-  if (variantDescription.funnels === false) {
-    throw new Error(
-      `The "funnels" property for the variant "${variantDescription.name}" must be set to true. If it is intended to be false, then remove the property altogether.`,
-    );
-  }
+  // If "funnels" is not specified, assume false (e.g. cluing ranks in this variant works normally).
   const funnels = variantDescription.funnels ?? false;
 
-  // Validate the "chimneys" property. If it is not specified, assume false (e.g. cluing ranks in
-  // this variant works normally).
-  if (variantDescription.chimneys === false) {
-    throw new Error(
-      `The "chimneys" property for the variant "${variantDescription.name}" must be set to true. If it is intended to be false, then remove the property altogether.`,
-    );
-  }
+  // If "chimneys" is not specified, assume false (e.g. cluing ranks in this variant works
+  // normally).
   const chimneys = variantDescription.chimneys ?? false;
 
-  // Validate the "sudoku" property. If it is not specified, assume false (e.g. cluing ranks in this
-  // variant works normally).
-  if (variantDescription.sudoku === false) {
-    throw new Error(
-      `The "sudoku" property for the variant "${variantDescription.name}" must be set to true. If it is intended to be false, then remove the property altogether.`,
-    );
-  }
+  // If "sudoku" is not specified, assume false (e.g. cluing ranks in this variant works normally).
   const sudoku = variantDescription.sudoku ?? false;
 
   // --------------------------------------
@@ -275,7 +173,7 @@ export function createVariant(
   }
 
   // --------------------------------------------
-  // Special rank properties (from `VariantJSON`)
+  // Special rank properties (from `VariantJson`)
   // --------------------------------------------
 
   // Validate the "specialRank" property (e.g. for "Rainbow-Ones"). If it is not specified, assume
@@ -290,53 +188,28 @@ export function createVariant(
   }
   const { specialRank } = variantDescription;
 
-  // Validate the "specialRankAllClueColors" property. If it is not specified, assume false (e.g.
-  // cluing ranks in this variant works normally).
-  if (variantDescription.specialRankAllClueColors === false) {
-    throw new Error(
-      `The "specialRankAllClueColors" property for the variant "${variantDescription.name}" must be set to true. If it is intended to be false, then remove the property altogether.`,
-    );
-  }
+  // If "specialRankAllClueColors" is not specified, assume false (e.g. cluing ranks in this variant
+  // works normally).
   const specialRankAllClueColors =
     variantDescription.specialRankAllClueColors ?? false;
 
-  // Validate the "specialRankAllClueRanks" property. If it is not specified, assume false (e.g.
-  // cluing ranks in this variant works normally).
-  if (variantDescription.specialRankAllClueRanks === false) {
-    throw new Error(
-      `The "specialRankAllClueRanks" property for the variant "${variantDescription.name}" must be set to true. If it is intended to be false, then remove the property altogether.`,
-    );
-  }
+  // If "specialRankAllClueRanks" is not specified, assume false (e.g. cluing ranks in this variant
+  // works normally).
   const specialRankAllClueRanks =
     variantDescription.specialRankAllClueRanks ?? false;
 
-  // Validate the "specialRankNoClueColors" property. If it is not specified, assume false (e.g.
-  // cluing ranks in this variant works normally).
-  if (variantDescription.specialRankNoClueColors === false) {
-    throw new Error(
-      `The "specialRankNoClueColors" property for the variant "${variantDescription.name}" must be set to true. If it is intended to be false, then remove the property altogether.`,
-    );
-  }
+  // If "specialRankNoClueColors" is not specified, assume false (e.g. cluing ranks in this variant
+  // works normally).
   const specialRankNoClueColors =
     variantDescription.specialRankNoClueColors ?? false;
 
-  // Validate the "specialRankNoClueRanks" property. If it is not specified, assume false (e.g.
-  // cluing ranks in this variant works normally).
-  if (variantDescription.specialRankNoClueRanks === false) {
-    throw new Error(
-      `The "specialRankNoClueRanks" property for the variant "${variantDescription.name}" must be set to true. If it is intended to be false, then remove the property altogether.`,
-    );
-  }
+  // If "specialRankNoClueRanks" is not specified, assume false (e.g. cluing ranks in this variant
+  // works normally).
   const specialRankNoClueRanks =
     variantDescription.specialRankNoClueRanks ?? false;
 
-  // Validate the "specialRankDeceptive" property. If it is not specified, assume false (e.g. cluing
-  // ranks in this variant works normally).
-  if (variantDescription.specialRankDeceptive === false) {
-    throw new Error(
-      `The "specialRankDeceptive" property for the variant "${variantDescription.name}" must be set to true. If it is intended to be false, then remove the property altogether.`,
-    );
-  }
+  // If "specialRankDeceptive" is not specified, assume false (e.g. cluing ranks in this variant
+  // works normally).
   const specialRankDeceptive = variantDescription.specialRankDeceptive ?? false;
 
   // Validate the "criticalRank" property. If it is not specified, assume `undefined` (e.g. there
@@ -351,13 +224,8 @@ export function createVariant(
   }
   const { criticalRank } = variantDescription;
 
-  // Validate the "scarceOnes" property. If it is not specified, assume false (e.g. there is the
-  // usual number of ones per suit).
-  if (variantDescription.scarceOnes === false) {
-    throw new Error(
-      `The "scarceOnes" property for the variant "${variantDescription.name}" must be set to true. If it is intended to be false, then remove the property altogether.`,
-    );
-  }
+  // If "scarceOnes" is not specified, assume false (e.g. there is the usual number of ones per
+  // suit).
   const scarceOnes = variantDescription.scarceOnes ?? false;
 
   // --------------------------------------
@@ -380,13 +248,12 @@ export function createVariant(
 
   const showSuitNames = getVariantShowSuitNames(suits, upOrDown, sudoku);
 
-  // Create the regular expression pattern for identity notes in this variant.
-  const isUpOrDown = name.startsWith("Up or Down");
+  // Use the variant metadata, not its name, to enable Up or Down note shorthands.
   const identityNotePattern = getIdentityNotePatternForVariant(
     suits,
     ranks,
     suitAbbreviations,
-    isUpOrDown,
+    upOrDown,
   );
 
   const hasInverted = suits.some((suit: Suit) => suit.inverted);
@@ -427,7 +294,7 @@ export function createVariant(
     hasInverted,
 
     id,
-    newID,
+    recipe,
 
     maxScore,
     offsetCornerElements,
@@ -485,17 +352,17 @@ function getVariantShowSuitNames(
   // If the suit ID ends in a number, it is an "Ambiguous" suit, which means that its identity is
   // not easily identifiable from a glance. Thus, we want to show the suit names for the variant in
   // this case.
-  const hasSuitIDThatEndsWithANumber = suits.some((suit) => {
-    const finalIDCharacter = suit.id.at(-1);
+  const hasSuitIdThatEndsWithANumber = suits.some((suit) => {
+    const finalIdCharacter = suit.id.at(-1);
     assertDefined(
-      finalIDCharacter,
+      finalIdCharacter,
       `Failed to get the final character of the ID of suit: ${suit.name}`,
     );
 
-    const finalIDNumber = parseIntSafe(finalIDCharacter);
-    return finalIDNumber !== undefined;
+    const finalIdNumber = parseIntSafe(finalIdCharacter);
+    return finalIdNumber !== undefined;
   });
-  if (hasSuitIDThatEndsWithANumber) {
+  if (hasSuitIdThatEndsWithANumber) {
     return true;
   }
 
@@ -508,24 +375,8 @@ function getVariantShowSuitNames(
     return true;
   }
 
-  // If a variant has a reversed suit, we want to show the suit names so that the stack direction is
-  // easily identifiable.
+  // If a variant has a reversed suit, or in "Up or Down" and "Sudoku" variants, we want to show the
+  // suit names so that the stack directions and status are easily identifiable.
   const variantHasReversedSuits = suits.some((suit: Suit) => suit.reversed);
-  if (variantHasReversedSuits) {
-    return true;
-  }
-
-  // In "Up or Down" variants, we always want to show the suit names so that the stack directions
-  // are easily identifiable.
-  if (upOrDown) {
-    return true;
-  }
-
-  // In "Sudoku" variants, we always want to show the suit names so that the stack status is easily
-  // identifiable.
-  if (sudoku) {
-    return true;
-  }
-
-  return false;
+  return variantHasReversedSuits || upOrDown || sudoku;
 }

@@ -1,49 +1,65 @@
 // The main reducer for the game mode, contemplating replays and game actions.
 
 import type {
+  ActionNoteList,
+  ActionNoteListPlayer,
+  AuthorNotes,
   CardIdentity,
   GameAction,
   GameMetadata,
   GameState,
+  Perspective,
 } from "@hanabi-live/game";
 import { gameReducer, getInitialGameState } from "@hanabi-live/game";
-import { assertDefined, assertNotNull } from "complete-common";
+import { assertDefined } from "complete-common";
 import type { Draft } from "immer";
-import { castDraft, original, produce } from "immer";
-import type { State } from "../types/State";
-import type { Action } from "../types/actions";
-import { notesReducer } from "./notesReducer";
-import { replayReducer } from "./replayReducer";
-import { shouldStoreSegment } from "./stateReducerHelpers";
-import { uiReducer } from "./uiReducer";
+import { castDraft, produce } from "immer";
+import type { State } from "../types/State.ts";
+import type { Action } from "../types/actions.ts";
+import { notesReducer } from "./notesReducer.ts";
+import { replayReducer } from "./replayReducer.ts";
+import {
+  getPerspective,
+  playerNamesAt,
+  shouldStoreSegment,
+  snapshot,
+} from "./stateReducerHelpers.ts";
 
 export const stateReducer = produce(stateReducerFunction, {} as State);
 
 function stateReducerFunction(state: Draft<State>, action: Action) {
   switch (action.type) {
-    case "gameActionList": {
-      // Calculate all the intermediate states.
-      const initialGameState = getInitialGameState(state.metadata);
-
-      const { game, states } = reduceGameActions(
-        action.actions,
-        initialGameState,
-        state.playing,
-        state.shadowing,
-        state.finished,
-        state.metadata,
-      );
-
-      state.ongoingGame = castDraft(game);
-
-      // Initialized, ready to show.
-      state.visibleState = state.ongoingGame;
-
-      // We copy the card identities to the global state for convenience.
-      updateCardIdentities(state);
-
-      state.replay.states = castDraft(states);
-      state.replay.actions = castDraft(action.actions);
+    case "gameStateLoaded": {
+      if (action.sharedReplay !== undefined) {
+        stateReducerFunction(state, {
+          type: "sharedReplayState",
+          ...action.sharedReplay,
+        });
+      }
+      loadGameActions(state, action.actions);
+      if (action.cardIdentities !== undefined) {
+        stateReducerFunction(state, {
+          type: "cardIdentities",
+          cardIdentities: action.cardIdentities,
+        });
+      }
+      stateReducerFunction(state, getNotesAction(state, action.notes));
+      if (action.pause !== undefined) {
+        stateReducerFunction(state, {
+          type: "pause",
+          ...action.pause,
+        });
+      }
+      stateReducerFunction(state, {
+        type: "spectators",
+        spectators: action.spectators,
+      });
+      if (action.hypothetical !== undefined) {
+        stateReducerFunction(state, {
+          type: "hypotheticalStart",
+          ...action.hypothetical,
+        });
+      }
       break;
     }
 
@@ -60,20 +76,19 @@ function stateReducerFunction(state: Draft<State>, action: Action) {
       break;
     }
 
-    case "finishOngoingGame": {
+    case "gameFinished": {
       if (state.playing || state.shadowing) {
         // We were playing in a game that just ended. Recalculate the whole game as a spectator to
-        // fix card possibilities.
+        // fix card possibilities, from the actions with the clues that we saw only in part.
         state.playing = false;
         state.shadowing = false;
+        state.replay.actions = castDraft(action.actions);
 
         const initialGameState = getInitialGameState(state.metadata);
         const { game, states } = reduceGameActions(
-          state.replay.actions,
+          action.actions,
           initialGameState,
-          state.playing,
-          state.shadowing,
-          true,
+          getPerspective(state),
           state.metadata,
         );
 
@@ -85,21 +100,21 @@ function stateReducerFunction(state: Draft<State>, action: Action) {
       // Mark that this game is now finished. The finished view will take care of enabling the UI
       // elements for a shared replay.
       state.finished = true;
-      state.datetimeFinished = action.datetimeFinished;
+      state.finishedAt = action.finishedAt;
 
-      // Record the database ID of the game.
-      state.replay.databaseID = action.databaseID;
+      // Record the database ID of the game, if it was saved.
+      state.replay.gameId = action.view.gameId;
 
       // If we were in an in-game replay when the game ended, keep us at the current turn so that we
       // are not taken away from what we are looking at. Otherwise, go to the penultimate segment.
       // We want to use the penultimate segment instead of the final segment, because the final
       // segment will contain the times for all of the players, and this will drown out the reason
       // that the game ended.
-      const inInGameReplay = state.replay.active;
+      const inInGameReplay = state.replay.segment !== undefined;
 
-      assertNotNull(
+      assertDefined(
         state.ongoingGame.turn.segment,
-        "The segment for the ongoing game was null when it finished.",
+        "The segment for the ongoing game was undefined when it finished.",
       );
 
       if (state.ongoingGame.turn.segment < 1) {
@@ -111,57 +126,100 @@ function stateReducerFunction(state: Draft<State>, action: Action) {
       const penultimateSegment = state.ongoingGame.turn.segment - 1;
 
       if (!inInGameReplay) {
-        state.replay.active = true;
         state.replay.segment = penultimateSegment;
       }
 
-      // Initialize the shared replay.
+      // Initialize the shared replay. Its players stay on the penultimate segment rather than the
+      // server's shared segment.
+      const { view } = action;
       state.replay.shared = {
         segment: penultimateSegment,
         useSharedSegments: !inInGameReplay,
-        leader: action.sharedReplayLeader,
-        amLeader: action.sharedReplayLeader === state.metadata.ourUsername,
+        leader: action.leader,
+        amLeader: action.leader === state.metadata.ourUsername,
+        replayStartedAt: view.replayStartedAt,
+        spoilerFree: view.spoilerFree,
+        canPlayAgain: view.canPlayAgain,
+        restartDeclined: castDraft(
+          playerNamesAt(
+            state.metadata.playerNames,
+            action.sharedReplay.restartDecliners,
+          ),
+        ),
+        hypothetical: undefined,
       };
 
       break;
     }
 
     case "init": {
-      state.datetimeStarted = action.datetimeStarted;
-      state.datetimeFinished = action.datetimeFinished;
+      state.startedAt = action.startedAt;
+      state.finishedAt = action.finishedAt;
 
-      if (action.spectating) {
-        state.playing = false;
-      }
-      if (action.shadowing) {
-        state.shadowing = true;
-      }
+      const { mode } = action;
+      switch (mode.type) {
+        case "playing": {
+          break;
+        }
 
-      if (action.replay) {
-        state.playing = false;
-        state.shadowing = false;
-        state.finished = true;
-        state.replay.active = true;
-        state.replay.segment = 0; // In dedicated solo replays, start on the first segment
-        state.replay.databaseID = action.databaseID;
+        case "spectating": {
+          state.playing = false;
+          break;
+        }
 
-        if (action.sharedReplay) {
-          // In dedicated shared replays, start on the shared replay turn.
-          state.replay.segment = action.sharedReplaySegment;
-          state.replay.shared = {
-            segment: action.sharedReplaySegment,
-            useSharedSegments: true,
-            leader: action.sharedReplayLeader,
-            amLeader: action.sharedReplayLeader === state.metadata.ourUsername,
-          };
+        case "shadowing": {
+          state.playing = false;
+          state.shadowing = true;
+          break;
+        }
+
+        case "soloReplay":
+        case "sharedReplay": {
+          state.playing = false;
+          state.shadowing = false;
+          state.finished = true;
+          state.replay.segment = 0; // In dedicated solo replays, start on the first segment
+          state.replay.gameId = mode.gameId;
+
+          if (mode.type === "sharedReplay") {
+            // The game's state ("sharedReplayState") sets the leader, the turn, and the rest of
+            // what changes while the replay runs.
+            state.replay.shared = {
+              segment: 0,
+              useSharedSegments: true,
+              leader: "",
+              amLeader: false,
+              replayStartedAt: mode.replayStartedAt,
+              spoilerFree: mode.spoilerFree,
+              canPlayAgain: mode.canPlayAgain,
+              restartDeclined: [],
+              hypothetical: undefined,
+            };
+          }
+          break;
         }
       }
 
-      if (action.paused) {
-        state.pause.active = true;
-        state.pause.playerIndex = action.pausePlayerIndex;
-      }
+      break;
+    }
 
+    case "sharedReplayState": {
+      const { shared } = state.replay;
+      assertDefined(
+        shared,
+        `A "${action.type}" action was dispatched, but we are not in a shared replay.`,
+      );
+
+      shared.segment = action.turn;
+      if (shared.useSharedSegments) {
+        state.replay.segment = action.turn;
+      }
+      shared.leader = action.leader;
+      shared.amLeader = action.leader === state.metadata.ourUsername;
+      shared.restartDeclined = castDraft(
+        playerNamesAt(state.metadata.playerNames, action.restartDecliners),
+      );
+      state.notes.efficiencyModifier = action.efficiencyModifier;
       break;
     }
 
@@ -171,32 +229,23 @@ function stateReducerFunction(state: Draft<State>, action: Action) {
     case "replaySharedSegment":
     case "replayUseSharedSegments":
     case "replayLeader":
-    case "hypoStart":
-    case "hypoBack":
-    case "hypoEnd":
-    case "hypoAction":
-    case "hypoShowDrawnCards": {
+    case "restartDeclined":
+    case "hypotheticalStart":
+    case "hypotheticalBack":
+    case "hypotheticalEnd":
+    case "hypotheticalActions":
+    case "hypotheticalShowDrawnCards": {
       state.replay = castDraft(
-        replayReducer(state.replay, action, state.finished, state.metadata),
+        replayReducer(state.replay, action, state.metadata),
       );
       break;
     }
 
-    case "dragStart": {
-      state.UI = uiReducer(state.UI, action);
-      break;
-    }
-
-    case "dragReset": {
-      state.UI = uiReducer(state.UI, action);
-      break;
-    }
-
     case "premove": {
-      if (action.premove === null) {
+      if (action.premove === undefined) {
         // Allow the clearing of a premove anytime. (It might be our turn and we are clearing the
         // premove prior to sending our action to the server.)
-        state.premove = null;
+        state.premove = undefined;
       } else if (
         // Only allow premoves in ongoing games.
         !state.finished
@@ -211,14 +260,8 @@ function stateReducerFunction(state: Draft<State>, action: Action) {
     }
 
     case "pause": {
-      state.pause.active = action.active;
-      state.pause.playerIndex = action.playerIndex;
-
-      // If the game is now paused, unqueue any queued pauses.
-      if (action.active) {
-        state.pause.queued = false;
-      }
-
+      state.pause.pausingPlayerIndex = action.pausingPlayerIndex;
+      state.pause.queued = action.queued;
       break;
     }
 
@@ -236,7 +279,7 @@ function stateReducerFunction(state: Draft<State>, action: Action) {
     case "receiveNote": {
       state.notes = castDraft(
         notesReducer(
-          original(state.notes),
+          snapshot(state.notes),
           action,
           state.metadata,
           state.playing,
@@ -246,12 +289,12 @@ function stateReducerFunction(state: Draft<State>, action: Action) {
       break;
     }
 
-    case "setEffMod":
+    case "setEfficiencyModifier":
     case "editNote":
     case "noteListPlayer": {
       state.notes = castDraft(
         notesReducer(
-          original(state.notes),
+          snapshot(state.notes),
           action,
           state.metadata,
           state.playing,
@@ -263,12 +306,9 @@ function stateReducerFunction(state: Draft<State>, action: Action) {
         // Recompute efficiency since it could change.
         state.ongoingGame = castDraft(
           gameReducer(
-            original(state.ongoingGame),
+            snapshot(state.ongoingGame),
             action,
-            state.playing,
-            state.shadowing,
-            state.finished,
-            state.replay.hypothetical !== null,
+            getPerspective(state),
             state.metadata,
             state.notes.ourNotes,
           ),
@@ -282,12 +322,9 @@ function stateReducerFunction(state: Draft<State>, action: Action) {
       const previousSegment = state.ongoingGame.turn.segment;
       state.ongoingGame = castDraft(
         gameReducer(
-          original(state.ongoingGame),
+          snapshot(state.ongoingGame),
           action,
-          state.playing,
-          state.shadowing,
-          state.finished,
-          false,
+          getPerspective(state),
           state.metadata,
           state.notes.ourNotes,
         ),
@@ -302,7 +339,7 @@ function stateReducerFunction(state: Draft<State>, action: Action) {
           previousSegment,
           action,
         )
-        && state.ongoingGame.turn.segment !== null
+        && state.ongoingGame.turn.segment !== undefined
       ) {
         state.replay.states[state.ongoingGame.turn.segment] = state.ongoingGame;
       }
@@ -318,33 +355,66 @@ function stateReducerFunction(state: Draft<State>, action: Action) {
   state.visibleState = visualStateToShow(state, action);
 }
 
+/** Computes the game from its actions so far, with the state of every segment for replays. */
+function loadGameActions(state: Draft<State>, actions: readonly GameAction[]) {
+  // Calculate all the intermediate states.
+  const initialGameState = getInitialGameState(state.metadata);
+
+  const { game, states } = reduceGameActions(
+    actions,
+    initialGameState,
+    getPerspective(state),
+    state.metadata,
+  );
+
+  state.ongoingGame = castDraft(game);
+
+  // Initialized, ready to show.
+  state.visibleState = state.ongoingGame;
+
+  // We copy the card identities to the global state for convenience.
+  updateCardIdentities(state);
+
+  state.replay.states = castDraft(states);
+  state.replay.actions = castDraft(actions);
+}
+
+/**
+ * The notes that we may see: everyone's for a spectator or a replay viewer, and only our own for a
+ * player of a game in progress.
+ */
+export function getNotesAction(
+  state: Pick<State, "playing" | "finished">,
+  notes: readonly AuthorNotes[],
+): ActionNoteList | ActionNoteListPlayer {
+  return state.playing && !state.finished
+    ? {
+        type: "noteListPlayer",
+        texts: notes[0]?.notes ?? [],
+      }
+    : {
+        type: "noteList",
+        notes,
+      };
+}
+
 // Runs through a list of actions from an initial state, and returns the final state and all
 // intermediate states.
 function reduceGameActions(
   actions: readonly GameAction[],
   initialState: GameState,
-  playing: boolean,
-  shadowing: boolean,
-  finished: boolean,
+  perspective: Perspective,
   metadata: GameMetadata,
 ) {
   const states: GameState[] = [initialState];
 
   // eslint-disable-next-line unicorn/no-array-reduce
   const game = actions.reduce((s: GameState, a: GameAction) => {
-    const nextState = gameReducer(
-      s,
-      a,
-      playing,
-      shadowing,
-      finished,
-      false,
-      metadata,
-    );
+    const nextState = gameReducer(s, a, perspective, metadata);
 
     if (
       shouldStoreSegment(nextState.turn.segment, s.turn.segment, a)
-      && nextState.turn.segment !== null
+      && nextState.turn.segment !== undefined
     ) {
       states[nextState.turn.segment] = nextState;
     }
@@ -352,7 +422,10 @@ function reduceGameActions(
     return nextState;
   }, initialState);
 
-  return { game, states };
+  return {
+    game,
+    states,
+  };
 }
 
 /**
@@ -386,14 +459,14 @@ function updateCardIdentities(state: Draft<State>) {
 function visualStateToShow(
   state: Draft<State>,
   action: Action,
-): Draft<GameState> | null {
-  if (state.visibleState === null) {
+): Draft<GameState> | undefined {
+  if (state.visibleState === undefined) {
     // The state is still initializing, so do not show anything.
-    return null;
+    return undefined;
   }
 
-  if (state.replay.active) {
-    if (state.replay.hypothetical === null) {
+  if (state.replay.segment !== undefined) {
+    if (state.replay.hypothetical === undefined) {
       // Show the current replay segment.
       const currentReplayState = state.replay.states[state.replay.segment];
       assertDefined(
@@ -409,13 +482,11 @@ function visualStateToShow(
   }
 
   // After an ongoing game ends, do not automatically show the final segment with the player's times
-  // by default in order to avoid drowning out the reason why the game ended.
-  if (action.type === "playerTimes") {
-    return state.replay.states.at(-2) ?? null; // The penultimate segment
-  }
-
-  // Show the final segment of the current game.
-  return state.ongoingGame;
+  // by default in order to avoid drowning out the reason why the game ended. Show the penultimate
+  // segment instead. Otherwise, show the final segment of the current game.
+  return action.type === "playerTimes"
+    ? (state.replay.states.at(-2) ?? undefined)
+    : state.ongoingGame;
 }
 
 /**
@@ -432,7 +503,7 @@ function rehydrateScrubbedActions(
       (action.type === "play"
         || action.type === "discard"
         || action.type === "draw")
-      && (action.suitIndex === -1 || action.rank === -1)
+      && action.identity === undefined
     ) {
       const cardIdentity = cardIdentities[action.order];
       assertDefined(
@@ -441,7 +512,7 @@ function rehydrateScrubbedActions(
       );
 
       const { suitIndex, rank } = cardIdentity;
-      if (suitIndex === null || rank === null) {
+      if (suitIndex === undefined || rank === undefined) {
         throw new Error(
           "Failed to find the suit index or rank of a card identity for an action while rehydrating the scrubbed actions.",
         );
@@ -449,8 +520,10 @@ function rehydrateScrubbedActions(
 
       return {
         ...action,
-        suitIndex,
-        rank,
+        identity: {
+          suitIndex,
+          rank,
+        },
       };
     }
 

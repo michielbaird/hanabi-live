@@ -1,8 +1,8 @@
-import type { ClueType } from "../enums/ClueType";
-import type { CardOrder } from "./CardOrder";
-import type { ColorIndex } from "./ColorIndex";
-import type { PlayerIndex } from "./PlayerIndex";
-import type { RankClueNumber } from "./RankClueNumber";
+import type { CardOrder } from "./CardOrder.ts";
+import type { ClueRank } from "./ClueRank.ts";
+import type { ColorIndex } from "./ColorIndex.ts";
+import type { HiddenClue } from "./HiddenClue.ts";
+import type { PlayerIndex } from "./PlayerIndex.ts";
 
 interface StateClueBase {
   readonly giver: PlayerIndex;
@@ -17,13 +17,15 @@ interface StateClueBase {
 }
 
 export interface StateColorClue extends StateClueBase {
-  readonly type: ClueType.Color;
-  readonly value: ColorIndex;
+  readonly type: "color";
+  readonly color: ColorIndex;
 }
 
 export interface StateRankClue extends StateClueBase {
-  readonly type: ClueType.Rank;
-  readonly value: RankClueNumber;
+  readonly type: "rank";
+  readonly rank: ClueRank;
 }
 
-export type StateClue = StateColorClue | StateRankClue;
+export type StateHiddenClue = StateClueBase & HiddenClue;
+
+export type StateClue = StateColorClue | StateRankClue | StateHiddenClue;

@@ -1,8 +1,8 @@
 import type { SuitRankTuple } from "@hanabi-live/game";
 import { getDefaultVariant, getVariant } from "@hanabi-live/game";
-import { describe, expect, test } from "@jest/globals";
 import { iRange } from "complete-common";
-import { getPossibilitiesFromKeywords } from "./noteIdentity";
+import { describe, expect, test } from "vitest";
+import { getPossibilitiesFromKeywords } from "./noteIdentity.ts";
 
 const DEFAULT_VARIANT = getDefaultVariant();
 const UP_OR_DOWN_VARIANT = getVariant("Up or Down (5 Suits)");
@@ -242,15 +242,9 @@ function getRankMap(
   ranks: ReadonlySet<number>,
   numSuits: number,
 ): ReadonlyArray<readonly number[]> {
-  const cardMap: number[][] = [];
-
-  for (const rank of [1, 2, 3, 4, 5, 6, 7]) {
-    if (ranks.has(rank)) {
-      cardMap.push(ONES.slice(0, numSuits));
-    } else {
-      cardMap.push(ZEROES.slice(0, numSuits));
-    }
-  }
+  const cardMap: number[][] = Array.from([1, 2, 3, 4, 5, 6, 7], (rank) =>
+    (ranks.has(rank) ? ONES : ZEROES).slice(0, numSuits),
+  );
 
   return cardMap;
 }

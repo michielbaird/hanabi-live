@@ -13,23 +13,17 @@ bun.lock
 
 # @template-customization-start
 
+# Cargo lock file
+server/Cargo.lock
+
 # Auto-generated Husky files
 .husky/_
 
 # Images
 *.svg
 
-# Special Golang files
-go.mod
-
-# Temporary files
-critical.css
-grunt_output
-
-# Keldon files
-keldon
-
 # Specially formatted JSON files
 example_game_with_comments.jsonc
+server/.sqlx
 
 # @template-customization-end

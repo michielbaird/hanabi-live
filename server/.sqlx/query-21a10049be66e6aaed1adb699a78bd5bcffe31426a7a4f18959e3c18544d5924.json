@@ -1,0 +1,88 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT c.id,c.source,c.message,c.discord_name,c.datetime_sent,\n         u.username AS \"username?\" FROM chat_log c LEFT JOIN users u ON u.id=c.user_id\n         WHERE c.table_id IS NULL AND c.deleted_at IS NULL\n         ORDER BY c.datetime_sent DESC,c.id DESC LIMIT $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "chat_log",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "source",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "chat_log",
+            "name": "source"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "message",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "chat_log",
+            "name": "message"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "discord_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "chat_log",
+            "name": "discord_name"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "datetime_sent",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "chat_log",
+            "name": "datetime_sent"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "username?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "username"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "21a10049be66e6aaed1adb699a78bd5bcffe31426a7a4f18959e3c18544d5924"
+}

@@ -1,0 +1,38 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT message,datetime_sent FROM chat_log WHERE table_id IS NULL AND source='server'\n         ORDER BY datetime_sent DESC,id DESC LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "message",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "chat_log",
+            "name": "message"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "datetime_sent",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "chat_log",
+            "name": "datetime_sent"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "63271b9e4404ab13133e504f1bd335e3bde7d34fe1a9fd8e973997bc688c7b6d"
+}

@@ -1,0 +1,1029 @@
+use super::socket::{Account, bootstrap, load_lobby, lobby_initial};
+use super::*;
+use crate::transport::test_frame;
+use crate::{
+    errors::CommandError,
+    lobby::{self, Publication},
+    transport::{Outgoing, Session},
+};
+use axum::extract::ws::Message;
+use axum::http::HeaderValue;
+use futures_util::{SinkExt, StreamExt};
+use hanabi_protocol::UserId;
+use serde_json::{Value, json};
+use std::collections::BTreeSet;
+use std::time::Duration;
+use tokio::sync::oneshot;
+use tokio_tungstenite::{
+    connect_async,
+    tungstenite::{Message as WireMessage, client::IntoClientRequest},
+};
+use tower::ServiceExt;
+
+type Socket =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+#[tokio::test]
+async fn websocket_errors_explain_invalid_fields_and_database_failures_postgres() {
+    let Some(fixture) = test_support::Fixture::start().await else {
+        return;
+    };
+    let cookie = login(&fixture, "ErrorDetails").await;
+    let mut socket = connect(&fixture, &cookie).await;
+    receive(&mut socket, "welcome").await;
+    for (id, page, expected) in [
+        (
+            1,
+            json!({"offset":"bad","limit":10}),
+            "Invalid PageRequest payload at /offset",
+        ),
+        (
+            2,
+            json!({"offset":0,"limit":10}),
+            "database connection pool is closed",
+        ),
+    ] {
+        let closed = page["offset"] == 0;
+        if closed {
+            fixture.app.store.primary.close().await;
+        }
+        send(&mut socket, id, "gameHistory", page).await;
+        let reply = reply(&mut socket, id).await;
+        let error = reply["error"]["message"].as_str().unwrap();
+        assert!(error.contains(expected), "{error}");
+        if closed {
+            assert!(error.contains("Loading game history"));
+            assert!(error.contains("Reference:"));
+        }
+    }
+    socket.close(None).await.unwrap();
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn websocket_handshake_database_failure_has_a_diagnostic_response_postgres() {
+    let Some(fixture) = test_support::Fixture::start().await else {
+        return;
+    };
+    let cookie = login(&fixture, "HandshakeError").await;
+    fixture.app.store.primary.close().await;
+    let mut request = format!("ws://{}/ws?version=42", fixture.address)
+        .into_client_request()
+        .unwrap();
+    request
+        .headers_mut()
+        .insert(header::COOKIE, HeaderValue::from_str(&cookie).unwrap());
+    request
+        .headers_mut()
+        .insert(header::ORIGIN, HeaderValue::from_str(&fixture.url).unwrap());
+    let error = connect_async(request).await.unwrap_err();
+    let tokio_tungstenite::tungstenite::Error::Http(response) = error else {
+        panic!("Expected HTTP rejection");
+    };
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(response.headers().contains_key("x-error-id"));
+    let body = String::from_utf8(response.into_body().unwrap()).unwrap();
+    assert!(body.contains("Checking live-connection access"));
+    assert!(body.contains("database connection pool is closed"));
+    fixture.close().await;
+}
+
+async fn login(fixture: &test_support::Fixture, name: &str) -> String {
+    let response = reqwest::Client::new()
+        .post(format!("{}/login", fixture.url))
+        .header("Origin", &fixture.url)
+        .form(&[
+            ("username", name),
+            ("password", "synthetic-password"),
+            ("version", "42"),
+            ("createAccount", "true"),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    response.headers()[header::SET_COOKIE]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .into()
+}
+
+async fn connect(fixture: &test_support::Fixture, cookie: &str) -> Socket {
+    connect_query(fixture, cookie, "version=42").await
+}
+
+async fn connect_query(fixture: &test_support::Fixture, cookie: &str, query: &str) -> Socket {
+    let mut request = format!("ws://{}/ws?{query}", fixture.address)
+        .into_client_request()
+        .unwrap();
+    request
+        .headers_mut()
+        .insert(header::COOKIE, HeaderValue::from_str(cookie).unwrap());
+    request
+        .headers_mut()
+        .insert(header::ORIGIN, HeaderValue::from_str(&fixture.url).unwrap());
+    connect_async(request).await.unwrap().0
+}
+
+#[tokio::test]
+async fn http_routes_reject_parameters_and_bodies_they_do_not_take_postgres() {
+    let Some(fixture) = test_support::Fixture::start().await else {
+        return;
+    };
+    let cookie = login(&fixture, "StrictHttp").await;
+    let client = reqwest::Client::new();
+    let requests = [
+        client.get(format!("{}/test-cookie", fixture.url)).body("x"),
+        client.get(format!("{}/test-cookie?utm_source=x", fixture.url)),
+        client.get(format!("{}/test-cookie?account=0", fixture.url)),
+        client.get(format!("{}/logout?dev=1", fixture.url)),
+        client.get(format!("{}/logout?return=%2F", fixture.url)),
+        client
+            .post(format!("{}/api/v1/identity/token", fixture.url))
+            .body("token=x"),
+    ];
+    for request in requests {
+        let response = request
+            .header("Origin", &fixture.url)
+            .header(header::COOKIE, &cookie)
+            .send()
+            .await
+            .unwrap();
+        let url = response.url().clone();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{url}");
+        let error: hanabi_protocol::Notice = response.json().await.unwrap();
+        assert!(!error.message.is_empty(), "{url}");
+    }
+    // Errors that the router itself produces take the same form as the URL's other errors.
+    let oversized = "a".repeat(9000);
+    for (request, status, json) in [
+        (
+            client.get(format!("{}/api/v1/nope", fixture.url)),
+            404,
+            true,
+        ),
+        (client.get(format!("{}/nope", fixture.url)), 404, false),
+        (client.get(format!("{}/login", fixture.url)), 405, true),
+        (
+            client.post(format!("{}/api/v1/variants", fixture.url)),
+            405,
+            true,
+        ),
+        (
+            client
+                .post(format!("{}/api/v1/identity/token", fixture.url))
+                .body(oversized.clone()),
+            413,
+            true,
+        ),
+    ] {
+        let response = request.header("Origin", &fixture.url).send().await.unwrap();
+        let url = response.url().clone();
+        assert_eq!(response.status().as_u16(), status, "{url}");
+        let body = response.text().await.unwrap();
+        assert_eq!(
+            serde_json::from_str::<hanabi_protocol::Notice>(&body).is_ok(),
+            json,
+            "{url}: {body}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn websocket_rejects_parameters_it_does_not_take_postgres() {
+    let Some(fixture) = test_support::Fixture::start().await else {
+        return;
+    };
+    let cookie = login(&fixture, "StrictQuery").await;
+    for query in [
+        "fastResume=1",
+        "reconnect=1",
+        "account=x",
+        "version=42&version=42",
+    ] {
+        let mut request = format!("ws://{}/ws?{query}", fixture.address)
+            .into_client_request()
+            .unwrap();
+        request
+            .headers_mut()
+            .insert(header::COOKIE, HeaderValue::from_str(&cookie).unwrap());
+        request
+            .headers_mut()
+            .insert(header::ORIGIN, HeaderValue::from_str(&fixture.url).unwrap());
+        match connect_async(request).await {
+            Err(tokio_tungstenite::tungstenite::Error::Http(response)) => {
+                assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{query}");
+            }
+            Err(error) => panic!("{query}: {error}"),
+            Ok(_) => panic!("{query}: the connection was accepted"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn websocket_checks_client_version_with_existing_cookie_postgres() {
+    let Some(fixture) = test_support::Fixture::start().await else {
+        return;
+    };
+    let cookie = login(&fixture, "ClientVersion").await;
+    for query in ["", "version=", "version=41"] {
+        let mut socket = connect_query(&fixture, &cookie, query).await;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            // A page from before JSON frames reads the error in the old `command JSON` form,
+            // which current clients ignore.
+            let WireMessage::Text(legacy) = socket.next().await.unwrap().unwrap() else {
+                panic!("Expected a version error before any bootstrap messages");
+            };
+            assert!(parse_frame(&legacy).is_none());
+            let (command, body) = legacy.split_once(' ').unwrap();
+            assert_eq!(command, "error");
+            let legacy: Value = serde_json::from_str(body).unwrap();
+            let WireMessage::Text(text) = socket.next().await.unwrap().unwrap() else {
+                panic!("Expected the version error as a JSON frame");
+            };
+            let Some(Received::Event(name, payload)) = parse_frame(&text) else {
+                panic!("Expected an error before any bootstrap messages: {text}");
+            };
+            assert_eq!(name, "error");
+            assert_eq!(
+                payload["code"],
+                hanabi_protocol::NoticeCode::OutdatedClient.name()
+            );
+            assert!(
+                payload["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("perform a refresh")
+            );
+            assert_eq!(legacy, payload);
+            assert!(matches!(
+                socket.next().await.unwrap().unwrap(),
+                WireMessage::Close(_)
+            ));
+        })
+        .await
+        .unwrap();
+    }
+    let mut socket = connect_query(&fixture, &cookie, "client=app").await;
+    receive(&mut socket, "welcome").await;
+    socket.close(None).await.unwrap();
+    let flagged: Vec<bool> = sqlx::query_scalar!("SELECT is_bot FROM users")
+        .fetch_all(&fixture.db.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        flagged,
+        [false],
+        "an app connection does not flag its account"
+    );
+    for query in ["version=42", "client=bot"] {
+        let mut socket = connect_query(&fixture, &cookie, query).await;
+        receive(&mut socket, "welcome").await;
+        socket.close(None).await.unwrap();
+    }
+    let flagged: Vec<bool> = sqlx::query_scalar!("SELECT is_bot FROM users")
+        .fetch_all(&fixture.db.pool)
+        .await
+        .unwrap();
+    assert_eq!(flagged, [true], "a bot connection flags its account");
+    fixture.close().await;
+}
+
+/// A frame from the server: a message with its name and data, or the reply to a request.
+enum Received {
+    Event(String, Value),
+    Reply(u64, Value),
+}
+
+fn parse_frame(text: &str) -> Option<Received> {
+    let frame: Value = serde_json::from_str(text).ok()?;
+    if let Some(id) = frame["reply"].as_u64() {
+        return Some(Received::Reply(id, frame));
+    }
+    Some(Received::Event(
+        frame["event"].as_str()?.to_owned(),
+        frame["data"].clone(),
+    ))
+}
+
+/// Sends a request with this ID.
+async fn send(socket: &mut Socket, id: u64, command: &str, data: Value) {
+    socket
+        .send(WireMessage::Text(
+            json!({"id": id, "request": command, "data": data})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+}
+
+/// Waits for the reply to the request with this ID, and returns it. Fails on another message
+/// that only a server failure sends.
+async fn reply(socket: &mut Socket, id: u64) -> Value {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let WireMessage::Text(text) = socket.next().await.unwrap().unwrap() else {
+                continue;
+            };
+            match parse_frame(&text) {
+                Some(Received::Reply(reply, frame)) if reply == id => return frame,
+                Some(Received::Event(name, _)) if name == "error" => {
+                    panic!("Unexpected error while waiting for reply {id}: {text}");
+                }
+                _ => {}
+            }
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("Timed out waiting for reply {id}"))
+}
+
+async fn receive(socket: &mut Socket, command: &str) -> Value {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let next = socket.next().await.unwrap().unwrap();
+            let WireMessage::Text(text) = next else {
+                continue;
+            };
+            match parse_frame(&text) {
+                Some(Received::Event(name, data)) => {
+                    if matches!(name.as_str(), "warning" | "error") {
+                        panic!("Unexpected {name} while waiting for {command}: {data}");
+                    }
+                    if name == command {
+                        return data;
+                    }
+                }
+                Some(Received::Reply(_, frame)) if frame.get("error").is_some() => {
+                    panic!("Unexpected failed request while waiting for {command}: {frame}");
+                }
+                _ => {}
+            }
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("Timed out waiting for {command}"))
+}
+
+#[tokio::test]
+async fn uptime_replies_only_to_requester_in_lobby_and_table_postgres() {
+    let Some(fixture) = test_support::Fixture::start().await else {
+        return;
+    };
+    let alice_cookie = login(&fixture, "Alice").await;
+    let bob_cookie = login(&fixture, "Bob").await;
+    let mut alice = connect(&fixture, &alice_cookie).await;
+    let mut bob = connect(&fixture, &bob_cookie).await;
+    receive(&mut alice, "welcome").await;
+    receive(&mut bob, "welcome").await;
+    for socket in [&mut alice, &mut bob] {
+        receive(socket, "chatList").await;
+        assert_eq!(receive(socket, "lobbyStatus").await["type"], "ready");
+    }
+    send(
+        &mut alice,
+        1,
+        "tableCreate",
+        json!({"settings":{"name":"Private uptime","maxPlayers":5,"options":{}}}),
+    )
+    .await;
+    let table = receive(&mut alice, "tableJoined").await["tableId"]
+        .as_u64()
+        .unwrap();
+    reply(&mut alice, 1).await;
+    send(&mut bob, 1, "tableJoin", json!({"tableId": table})).await;
+    receive(&mut bob, "tableJoined").await;
+    reply(&mut bob, 1).await;
+    // Alice's reply comes after the chat that says that Bob joined.
+    send(&mut alice, 10, "gameHistory", json!({"offset":0,"limit":1})).await;
+    reply(&mut alice, 10).await;
+    let before: i64 = sqlx::query_scalar!("SELECT COUNT(*) AS \"v!\" FROM chat_log")
+        .fetch_one(&fixture.db.pool)
+        .await
+        .unwrap();
+    let tables_before = fixture.app.store.load().await.unwrap();
+    for (id, table) in [(2, None), (3, Some(table))] {
+        let payload = table.map_or_else(
+            || json!({"text":"/UpTiMe"}),
+            |table| json!({"text":"/UpTiMe","tableId":table}),
+        );
+        send(&mut alice, id, "chat", payload).await;
+        for prefix in ["The server came online at:", "Uptime:"] {
+            let reply = receive(&mut alice, "chat").await;
+            assert_eq!(
+                reply["kind"],
+                json!({"type":"private","author":{"type":"server"},"recipient":"Alice"})
+            );
+            // The reply names no table, so the client shows it in the chat that is open.
+            assert!(reply.get("tableId").is_none());
+            assert!(reply["text"].as_str().unwrap().starts_with(prefix));
+            assert!(reply.get("chatId").is_none());
+        }
+        reply(&mut alice, id).await;
+        // Bob's own request is answered after everything that the server sent him before it.
+        send(&mut bob, id, "gameHistory", json!({"offset":0,"limit":1})).await;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let WireMessage::Text(text) = bob.next().await.unwrap().unwrap() else {
+                    continue;
+                };
+                match parse_frame(&text) {
+                    Some(Received::Event(name, _)) => assert_ne!(
+                        name, "chat",
+                        "Private uptime leaked to another player: {text}"
+                    ),
+                    Some(Received::Reply(reply, _)) if reply == id => break,
+                    _ => {}
+                }
+            }
+        })
+        .await
+        .unwrap();
+    }
+    assert_eq!(
+        sqlx::query_scalar!("SELECT COUNT(*) AS \"v!\" FROM chat_log")
+            .fetch_one(&fixture.db.pool)
+            .await
+            .unwrap(),
+        before
+    );
+    let tables_after = fixture.app.store.load().await.unwrap();
+    assert_eq!(
+        tables_before
+            .iter()
+            .map(|(table, _)| (table.id, table.chat.len()))
+            .collect::<Vec<_>>(),
+        tables_after
+            .iter()
+            .map(|(table, _)| (table.id, table.chat.len()))
+            .collect::<Vec<_>>()
+    );
+    alice.close(None).await.unwrap();
+    bob.close(None).await.unwrap();
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn http2_login_accepts_uri_authority_without_host_header_postgres() {
+    let Some(fixture) = test_support::Fixture::start().await else {
+        return;
+    };
+    let response = router(fixture.app.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .version(axum::http::Version::HTTP_2)
+                .uri(format!("{}/login", fixture.url))
+                .header(header::ORIGIN, &fixture.url)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .extension(ConnectInfo(fixture.address))
+                .body(axum::body::Body::from(
+                    "username=Http2User&password=synthetic-password&version=42&createAccount=true",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(response.headers().contains_key(header::SET_COOKIE));
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn native_browser_login_ws_bootstrap_and_command_routing_postgres() {
+    let Some(fixture) = test_support::Fixture::start().await else {
+        return;
+    };
+    // Intentionally use Unicode to verify the username survives login, storage, and WebSocket messages.
+    let alice_cookie = login(&fixture, "Alicè").await;
+    let bob_cookie = login(&fixture, "Bob").await;
+    let alice_id: i32 = sqlx::query_scalar!("SELECT id FROM users WHERE username='Alicè'")
+        .fetch_one(&fixture.db.pool)
+        .await
+        .unwrap();
+    let historical:i32=sqlx::query_scalar!("INSERT INTO games(name,num_players,variant_id,timed,time_base,time_per_turn,
+         speedrun,deck_plays,empty_clues,one_extra_card,one_less_card,
+         all_or_nothing,detrimental_characters,seed,score,num_turns,end_condition,datetime_started,datetime_finished)
+         VALUES('Authored history',3,1,true,180,30,false,false,true,false,false,false,true,'p3v1s42',30,40,1,NOW(),NOW()) RETURNING id").fetch_one(&fixture.db.pool).await.unwrap();
+    let participant: i32 = sqlx::query_scalar!(
+        "INSERT INTO game_participants(game_id,user_id,seat)
+         VALUES($1,$2,0) RETURNING id",
+        historical,
+        alice_id
+    )
+    .fetch_one(&fixture.db.pool)
+    .await
+    .unwrap();
+    sqlx::query!("INSERT INTO game_participant_notes(game_participant_id,card_order,note) VALUES($1,0,'authored note')", participant).execute(&fixture.db.pool).await.unwrap();
+    sqlx::query!(
+        "INSERT INTO game_tags(game_id,user_id,tag) VALUES($1,$2,'authored')",
+        historical,
+        alice_id
+    )
+    .execute(&fixture.db.pool)
+    .await
+    .unwrap();
+    let mut alice = connect(&fixture, &alice_cookie).await;
+    let welcome = receive(&mut alice, "welcome").await;
+    assert_eq!(welcome["username"], "Alicè");
+    assert!(receive(&mut alice, "chatList").await["messages"].is_array());
+    assert_eq!(receive(&mut alice, "lobbyStatus").await["type"], "ready");
+    send(&mut alice, 1, "gameHistory", json!({"offset":0,"limit":10})).await;
+    let history = reply(&mut alice, 1).await["data"].clone();
+    assert_eq!(history["games"][0]["gameId"], historical);
+    assert_eq!(history["games"][0]["options"]["variantId"], 1);
+    assert_eq!(
+        history["games"][0]["options"]["timeControl"]["baseSeconds"],
+        180
+    );
+    assert_eq!(history["games"][0]["options"]["emptyClues"], true);
+    assert_eq!(history["games"][0]["tags"], json!(["authored"]));
+    let mut bob = connect(&fixture, &bob_cookie).await;
+    let bob_welcome = receive(&mut bob, "welcome").await;
+    let _ = receive(&mut bob, "user").await;
+    receive(&mut bob, "chatList").await;
+    assert_eq!(receive(&mut bob, "lobbyStatus").await["type"], "ready");
+    send(
+        &mut alice,
+        2,
+        "settings",
+        json!({"settings":{"hGroupConventions":true}}),
+    )
+    .await;
+    loop {
+        let user = receive(&mut alice, "user").await;
+        if user["userId"] == welcome["userId"] && user["hGroupConventions"] == true {
+            break;
+        }
+    }
+    send(
+        &mut alice,
+        3,
+        "chatPm",
+        json!({"text":"private <content>","recipient":"Bob"}),
+    )
+    .await;
+    let pm = receive(&mut bob, "chat").await;
+    assert_eq!(
+        pm["kind"],
+        json!({"type":"private","author":{"type":"user","username":"Alicè"},"recipient":"Bob"})
+    );
+    assert_eq!(pm["text"], "private <content>");
+    assert!(pm.get("chatId").is_none());
+    assert!(pm.get("tableId").is_none());
+    let echo = receive(&mut alice, "chat").await;
+    assert_eq!(echo, pm);
+    send(&mut alice, 4, "chat", json!({"text":"/token"})).await;
+    let token = receive(&mut alice, "chat").await;
+    assert_eq!(token["kind"]["recipient"], "Alicè");
+    assert!(
+        token["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("Identity token")
+    );
+    assert_eq!(
+        sqlx::query_scalar!("SELECT COUNT(*) AS \"v!\" FROM chat_log WHERE source='user'")
+            .fetch_one(&fixture.db.pool)
+            .await
+            .unwrap(),
+        0
+    );
+    send(&mut alice, 5, "chat", json!({"text":"/findvariant"})).await;
+    let _ = receive(&mut alice, "chat").await;
+    assert_eq!(
+        receive(&mut alice, "chat").await["text"],
+        "You can only perform this command while in a game."
+    );
+    send(
+        &mut alice,
+        6,
+        "tableCreate",
+        json!({"settings":{"name":"Browser game","maxPlayers":5,"options":{"variantId":0}}}),
+    )
+    .await;
+    let table = receive(&mut alice, "table").await;
+    assert!(
+        table["tableId"]
+            .as_u64()
+            .unwrap_or_else(|| table["tableId"].as_u64().unwrap())
+            > 0
+    );
+    let mut replacement = connect(&fixture, &bob_cookie).await;
+    receive(&mut replacement, "welcome").await;
+    let alice_generation = Session::new(
+        UserId::new(welcome["userId"].as_i64().unwrap()).unwrap(),
+        "Alicè".into(),
+        1,
+    )
+    .0;
+    let (reply, received) = oneshot::channel();
+    fixture
+        .app
+        .hub
+        .send(HubCommand::LobbyEffects {
+            session: alice_generation,
+            effects: vec![Publication::ToUser {
+                id: UserId::new(bob_welcome["userId"].as_i64().unwrap()).unwrap(),
+                generation: 2,
+                message: Outgoing::new(
+                    hanabi_protocol::event::CHAT,
+                    hanabi_protocol::Chat::from(hanabi_protocol::ChatMessage::server(
+                        "must not reroute to replacement",
+                        chrono::DateTime::from_timestamp(1_794_009_600, 0).unwrap(),
+                    )),
+                ),
+            }],
+            reply,
+        })
+        .await
+        .unwrap();
+    received.await.unwrap().unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), async {
+            while let Some(Ok(WireMessage::Text(text))) = replacement.next().await {
+                assert!(
+                    !text.contains("must not reroute"),
+                    "Private reply leaked to replacement session"
+                );
+            }
+        })
+        .await
+        .is_err()
+    );
+    // Effects captured for the old recipient generation must never reach replacement.
+    let (reply, received) = oneshot::channel();
+    fixture
+        .app
+        .hub
+        .send(HubCommand::Directory {
+            session: Session::new(UserId::new(999).unwrap(), "stale".into(), 999).0,
+            reply,
+        })
+        .await
+        .unwrap();
+    assert!(received.await.unwrap().is_err());
+    assert_eq!(bob_welcome["username"], "Bob");
+    let cross = reqwest::Client::new()
+        .post(format!("{}/login", fixture.url))
+        .header("Origin", "https://evil.invalid")
+        .form(&[("username", "Nope"), ("password", "x"), ("version", "42")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(cross.status(), StatusCode::FORBIDDEN);
+    let _ = alice.close(None).await;
+    let _ = bob.close(None).await;
+    let _ = replacement.close(None).await;
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn native_admission_waits_for_inflight_http_and_fences_lost_ownership_postgres() {
+    let Some(fixture) = test_support::Fixture::start().await else {
+        return;
+    };
+    let permit = fixture.app.lifecycle.admit().await.unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), fixture.app.lifecycle.drain())
+            .await
+            .is_err()
+    );
+    drop(permit);
+    tokio::time::timeout(Duration::from_secs(1), fixture.app.lifecycle.drain())
+        .await
+        .unwrap();
+    let response = reqwest::Client::new()
+        .get(format!("{}/test-cookie", fixture.url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn websocket_defers_lobby_reads_without_an_opt_in_postgres() {
+    let Some(fixture) = test_support::Fixture::start().await else {
+        return;
+    };
+    let cookie = login(&fixture, "DeferredLobby").await;
+    let mut lock = fixture.db.pool.begin().await.unwrap();
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "test SQL that sets up database state or failures directly"
+    )]
+    sqlx::query("LOCK TABLE games IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut *lock)
+        .await
+        .unwrap();
+    let mut socket = connect(&fixture, &cookie).await;
+    let welcome = tokio::time::timeout(Duration::from_secs(1), receive(&mut socket, "welcome"))
+        .await
+        .expect("Archive reads blocked the welcome");
+    assert!(welcome.get("numGames").is_none());
+    let loading = receive(&mut socket, "lobbyStatus").await;
+    assert_eq!(loading["type"], "loading");
+    lock.rollback().await.unwrap();
+    let ready = receive(&mut socket, "lobbyStatus").await;
+    assert_eq!(ready["type"], "ready");
+    assert_eq!(ready["numGames"], 0);
+    socket.close(None).await.unwrap();
+    fixture.close().await;
+}
+
+async fn test_account(fixture: &test_support::Fixture, id: i32) -> Account {
+    Account::read(&fixture.app.store.primary, UserId::new(id).unwrap())
+        .await
+        .unwrap()
+        .expect("test account")
+}
+
+#[tokio::test]
+async fn game_archive_locks_do_not_block_authentication_and_deferred_errors_are_explicit() {
+    let Some(fixture) = test_support::Fixture::start().await else {
+        return;
+    };
+    let user = fixture.db.user("FastResume").await;
+    let mut lock = fixture.db.pool.begin().await.unwrap();
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "test SQL that sets up database state or failures directly"
+    )]
+    sqlx::query("LOCK TABLE games IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut *lock)
+        .await
+        .unwrap();
+    let prepared = tokio::time::timeout(
+        Duration::from_secs(1),
+        bootstrap(
+            &fixture.app,
+            test_account(&fixture, user).await,
+            "127.0.0.1",
+        ),
+    )
+    .await
+    .expect("Archive reads blocked the welcome")
+    .unwrap();
+    assert_eq!(
+        prepared.initial,
+        vec![test_frame("lobbyStatus", json!({"type":"loading"}))]
+    );
+    let slots = fixture
+        .app
+        .lobby_slots
+        .clone()
+        .acquire_many_owned(64)
+        .await
+        .unwrap();
+    let (session, mut outgoing) = Session::new(UserId::new(user).unwrap(), "FastResume".into(), 1);
+    load_lobby(fixture.app.clone(), session);
+    let message = tokio::time::timeout(Duration::from_secs(1), outgoing.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let (name, status) = crate::transport::event(message.message.to_text().unwrap()).unwrap();
+    assert_eq!(name, "lobbyStatus");
+    assert_eq!(status["type"], "error");
+    assert!(status.get("numGames").is_none());
+    assert!(
+        status["message"]
+            .as_str()
+            .unwrap()
+            .contains("lobby read queue is full")
+    );
+    assert!(status["message"].as_str().unwrap().contains("Reference:"));
+    drop(slots);
+    lock.rollback().await.unwrap();
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn full_history_bootstrap_queues_in_order_without_a_writer_postgres() {
+    let Some(fixture) = test_support::Fixture::start().await else {
+        return;
+    };
+    let alice = fixture.db.user("HistorianAlice").await;
+    let mut shared = Vec::new();
+    for index in 0..5 {
+        shared.push(fixture.db.user(&format!("Historian{index:05}")).await);
+    }
+    let games:Vec<i32>=sqlx::query_scalar!("INSERT INTO games(name,num_players,variant_id,timed,time_base,time_per_turn,
+         speedrun,deck_plays,empty_clues,one_extra_card,one_less_card,
+         all_or_nothing,detrimental_characters,seed,score,num_turns,end_condition,datetime_started,datetime_finished)
+         SELECT 'Historical game '||n,6,1,true,180,30,false,false,true,false,false,false,true,
+         'p6v1s'||n,30,72,1,NOW(),NOW() FROM generate_series(1,200) n ORDER BY n RETURNING id").fetch_all(&fixture.db.pool).await.unwrap();
+    let mut players = vec![alice];
+    players.extend(&shared);
+    sqlx::query!(
+        "INSERT INTO game_participants(game_id,user_id,seat)
+             SELECT game_id,user_id,(position-1)::smallint FROM unnest($1::int[]) games(game_id)
+             CROSS JOIN unnest($2::int[]) WITH ORDINALITY players(user_id,position)",
+        &games,
+        &players
+    )
+    .execute(&fixture.db.pool)
+    .await
+    .unwrap();
+    sqlx::query!(
+        "INSERT INTO game_tags(game_id,user_id,tag)
+         SELECT game_id,$2,lpad(n::text,3,'0')||repeat('t',97)
+         FROM unnest($1::int[]) games(game_id) CROSS JOIN generate_series(1,8) n",
+        &games,
+        alice
+    )
+    .execute(&fixture.db.pool)
+    .await
+    .unwrap();
+    sqlx::query!(
+        "INSERT INTO chat_log(user_id,source,message)
+         SELECT $1,'user',$2 FROM generate_series(1,50)",
+        alice,
+        &"\"".repeat(300)
+    )
+    .execute(&fixture.db.pool)
+    .await
+    .unwrap();
+
+    let prepared = bootstrap(
+        &fixture.app,
+        test_account(&fixture, alice).await,
+        "127.0.0.1",
+    )
+    .await
+    .unwrap();
+    let mut history_lock = fixture.db.pool.begin().await.unwrap();
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "test SQL that sets up database state or failures directly"
+    )]
+    sqlx::query("LOCK TABLE game_tags IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut *history_lock)
+        .await
+        .unwrap();
+    let (messages, total) = tokio::time::timeout(
+        Duration::from_secs(1),
+        lobby_initial(&fixture.app, UserId::new(alice).unwrap()),
+    )
+    .await
+    .expect("Lobby initialization queried personal history")
+    .unwrap();
+    assert_eq!(total, 200);
+    assert!(
+        messages
+            .iter()
+            .all(|message| !crate::transport::is_event(message, "gameHistory"))
+    );
+    history_lock.rollback().await.unwrap();
+    let own_ids = lobby::history_ids(&fixture.db.pool, UserId::new(alice).unwrap(), 0, 100)
+        .await
+        .unwrap();
+    let next_ids = lobby::history_ids(&fixture.db.pool, UserId::new(alice).unwrap(), 100, 100)
+        .await
+        .unwrap();
+    assert_eq!(own_ids.len(), 100);
+    assert_eq!(next_ids.len(), 100);
+    let own = test_frame(
+        "gameHistory",
+        json!(
+            lobby::get_history(&fixture.db.pool, &own_ids)
+                .await
+                .unwrap()
+        ),
+    );
+    let next = test_frame(
+        "gameHistory",
+        json!(
+            lobby::get_history(&fixture.db.pool, &next_ids)
+                .await
+                .unwrap()
+        ),
+    );
+    let mut initial = lobby_initial(&fixture.app, UserId::new(alice).unwrap())
+        .await
+        .unwrap()
+        .0;
+    assert!(
+        initial
+            .iter()
+            .all(|message| !crate::transport::is_event(message, "gameHistory"))
+    );
+    // Requested full history pages must still fit in the outbound queue.
+    initial.extend([own, next]);
+    let mut expected = vec![
+        "welcome".to_owned(),
+        "userList".to_owned(),
+        "tableList".to_owned(),
+    ];
+    expected.extend(
+        initial
+            .iter()
+            .map(|message| crate::transport::event(message).unwrap().0),
+    );
+    expected.push("user".into());
+    assert!(
+        initial.iter().all(|message| message.len() < 262_144),
+        "This regression must exercise aggregate bootstrap size, not only a large single frame"
+    );
+    assert!(initial.iter().map(|message| message.len()).sum::<usize>() > 262_144);
+    let (session, mut outgoing) = Session::new(UserId::new(alice).unwrap(), prepared.name, 42);
+    let (reply, received) = oneshot::channel();
+    fixture
+        .app
+        .hub
+        .send(HubCommand::Register {
+            session: session.clone(),
+            blocks: BTreeSet::new(),
+            welcome: prepared.welcome,
+            initial,
+            reply,
+        })
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(2), received)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    // No receiver was polled during registration; a writer cannot mask a
+    // synchronously overflowing coordinator publication batch.
+    assert!(
+        session.active(),
+        "Full bootstrap exhausted the outbound queue"
+    );
+    let mut actual = Vec::new();
+    while let Ok(outbound) = outgoing.try_recv() {
+        let Message::Text(text) = outbound.message else {
+            panic!("Unexpected bootstrap frame");
+        };
+        let (command, data) = crate::transport::event(&text).unwrap();
+        actual.push(command.clone());
+        match command.as_str() {
+            "chatList" => assert_eq!(data["messages"].as_array().unwrap().len(), 50),
+            "gameHistory" => {
+                assert_eq!(data.as_array().unwrap().len(), 100);
+                assert_eq!(data[0]["playerNames"].as_array().unwrap().len(), 6);
+                assert_eq!(data[0]["options"]["variantId"], 1);
+                assert_eq!(data[0]["tags"].as_array().unwrap().len(), 8);
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(actual, expected);
+    assert!(session.active());
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn a_lobby_command_from_a_replaced_connection_writes_nothing_postgres() {
+    let Some(fixture) = test_support::Fixture::start().await else {
+        return;
+    };
+    login(&fixture, "Replaced").await;
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "test SQL that reads the fixture account"
+    )]
+    let id: i32 = sqlx::query_scalar("SELECT id FROM users WHERE username = 'Replaced'")
+        .fetch_one(&fixture.app.store.primary)
+        .await
+        .unwrap();
+    let before = lobby::get_settings(&fixture.app.store.primary, UserId::new(id).unwrap())
+        .await
+        .unwrap()
+        .volume;
+    // A newer connection registered, but the older one has not noticed yet and is still active.
+    let task = fixture
+        .app
+        .users
+        .task(&fixture.app, UserId::new(id).unwrap());
+    task.send(user::UserCommand::Current(2)).await.unwrap();
+    let (older, _frames) = Session::new(UserId::new(id).unwrap(), "Replaced".into(), 1);
+    let volume = hanabi_protocol::Volume::new(before.get() / 2).unwrap();
+    let (reply, replied) = oneshot::channel();
+    task.send(user::UserCommand::Lobby {
+        session: older,
+        message: Box::new(
+            crate::actors::client_message("settings", &json!({ "settings": { "volume": volume } }))
+                .unwrap(),
+        ),
+        reply,
+    })
+    .await
+    .unwrap();
+    assert!(matches!(
+        replied.await.unwrap(),
+        Err(CommandError::Rejected { .. })
+    ));
+    let after = lobby::get_settings(&fixture.app.store.primary, UserId::new(id).unwrap())
+        .await
+        .unwrap()
+        .volume;
+    assert_eq!(after, before, "A replaced connection changed a setting");
+    drop(task);
+    fixture.close().await;
+}

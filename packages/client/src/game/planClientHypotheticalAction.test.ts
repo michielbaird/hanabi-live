@@ -1,0 +1,408 @@
+import type {
+  ActionIncludingHypothetical,
+  CardOrder,
+  GameAction,
+  GameState,
+  HypotheticalState,
+  PlanHypotheticalActionContext,
+  PlayerIndex,
+  Rank,
+} from "@hanabi-live/game";
+import {
+  gameReducer,
+  getDefaultMetadata,
+  getDefaultVariant,
+  getInitialCardState,
+  planHypotheticalAction,
+} from "@hanabi-live/game";
+import { afterEach, describe, expect, test, vi } from "vitest";
+
+vi.mock("../Globals.ts", () => ({
+  globals: {},
+}));
+const { initialState } =
+  await import("./reducers/initialStates/initialState.ts");
+const { sendHypotheticalAction } = await import("./hypothetical.ts");
+const { planClientHypotheticalAction } =
+  await import("./planClientHypotheticalAction.ts");
+const { store } = await import("../store.ts");
+const { gameStarted, gameUpdated } = await import("./gameSlice.ts");
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+/** Records the game's actions without changing the store. */
+function spyOnDispatch() {
+  return vi.spyOn(store, "dispatch").mockImplementation((action) => action);
+}
+
+const bottomOrder = 2 as CardOrder;
+
+function makeContext(rank: Rank = 1): PlanHypotheticalActionContext {
+  const variant = getDefaultVariant();
+  const metadata = getDefaultMetadata(2);
+  const state = initialState(metadata);
+  const deck = [0, 1].map((order) => ({
+    ...getInitialCardState(order as CardOrder, variant, 2),
+    location: order as PlayerIndex,
+  }));
+  return {
+    metadata: {
+      ...metadata,
+      options: {
+        ...metadata.options,
+        deckPlays: true,
+      },
+    },
+    variant,
+    gameState: {
+      ...state.ongoingGame,
+      turn: {
+        ...state.ongoingGame.turn,
+        segment: 4,
+        turnNum: 6,
+        currentPlayerIndex: 0,
+      },
+      deck,
+      hands: [[0 as CardOrder], [1 as CardOrder]],
+      cardsRemainingInTheDeck: 1,
+    },
+    cardIdentities: [
+      {
+        suitIndex: 0,
+        rank: 1,
+      },
+      {
+        suitIndex: 0,
+        rank: 1,
+      },
+      {
+        suitIndex: 0,
+        rank,
+      },
+    ],
+    morphedIdentities: [],
+    showDrawnCards: true,
+    startingPlayerIndex: 0,
+    notes: state.notes.ourNotes,
+    playing: false,
+    // Only drawn cards have UI views. The bottom card is absent from both collections.
+    cardViews: deck.map((card) => ({
+      state: card,
+      isStackBase: false,
+      visibleSuitIndex: undefined,
+      visibleRank: undefined,
+    })),
+  };
+}
+
+function applyPlan(
+  actions: readonly GameAction[] | undefined,
+  context: PlanHypotheticalActionContext,
+): GameState {
+  expect(actions).not.toBeUndefined();
+  let state = context.gameState;
+  for (const action of actions!) {
+    state = gameReducer(state, action, "hypothetical", context.metadata);
+  }
+  return state;
+}
+
+/** A hypothetical in a solo replay is our own, and we show it. */
+function soloHypothetical(ongoing: GameState) {
+  const hypothetical = {
+    ongoing,
+    morphedIdentities: [],
+  } as unknown as HypotheticalState;
+  return {
+    ownHypothetical: hypothetical,
+    hypothetical,
+  };
+}
+
+describe("client hypothetical planning", () => {
+  test.each([1, 2] as const)(
+    "sends a bottom-deck rank %s play through the real client handoff before the card is drawn",
+    (rank) => {
+      const context = makeContext(rank);
+      const state = initialState(context.metadata);
+      store.dispatch(
+        gameStarted({
+          ...state,
+          playing: context.playing,
+          visibleState: context.gameState,
+          cardIdentities: context.cardIdentities,
+          replay: {
+            ...state.replay,
+            ...soloHypothetical(context.gameState),
+          },
+        }),
+      );
+      expect(
+        store.getState().game.current?.visibleState?.deck[bottomOrder],
+      ).toBeUndefined();
+      const dispatch = spyOnDispatch();
+
+      sendHypotheticalAction({
+        type: "play",
+        order: bottomOrder,
+      });
+
+      const actions = planClientHypotheticalAction(
+        {
+          type: "play",
+          order: bottomOrder,
+        },
+        context,
+      );
+      expect(actions).not.toBeUndefined();
+      expect(dispatch).toHaveBeenCalledOnce();
+      expect(dispatch).toHaveBeenCalledWith(
+        gameUpdated({
+          type: "hypotheticalActions",
+          shared: false,
+          actions: actions!,
+        }),
+      );
+    },
+  );
+
+  test("reads the visible card for a hypothetical clue", () => {
+    const context = makeContext();
+    const state = initialState(context.metadata);
+    store.dispatch(
+      gameStarted({
+        ...state,
+        playing: false,
+        visibleState: context.gameState,
+        cardIdentities: context.cardIdentities,
+        notes: {
+          ...state.notes,
+          ourNotes: context.notes,
+        },
+        replay: {
+          ...state.replay,
+          ...soloHypothetical(context.gameState),
+        },
+      }),
+    );
+    const dispatch = spyOnDispatch();
+
+    sendHypotheticalAction({
+      type: "clue",
+      receiverIndex: 1 as PlayerIndex,
+      clue: {
+        type: "rank",
+        rank: 1,
+      },
+    });
+
+    expect(dispatch).toHaveBeenCalledWith(
+      gameUpdated({
+        type: "hypotheticalActions",
+        shared: false,
+        actions: expect.arrayContaining([
+          {
+            type: "clue",
+            clue: {
+              type: "rank",
+              rank: 1,
+            },
+            playerIndex: 0 as PlayerIndex,
+            orders: [1 as CardOrder],
+            receiverIndex: 1 as PlayerIndex,
+            ignoreNegative: false,
+          },
+        ]) as unknown as readonly ActionIncludingHypothetical[],
+      }),
+    );
+  });
+
+  test("plans the exact final order without an existing UI card", () => {
+    const context = makeContext();
+    const intent = {
+      type: "play",
+      order: bottomOrder,
+    } as const;
+    expect(context.gameState.deck[bottomOrder]).toBeUndefined();
+    expect(
+      context.cardViews.find(({ state }) => state.order === bottomOrder),
+    ).toBeUndefined();
+    expect(planHypotheticalAction(intent, context)).toBeUndefined();
+
+    const actions = planClientHypotheticalAction(intent, context);
+    expect(actions).toEqual<unknown>([
+      {
+        type: "draw",
+        order: 2,
+        playerIndex: 0,
+        identity: {
+          suitIndex: 0,
+          rank: 1,
+        },
+      },
+      {
+        type: "play",
+        order: 2,
+        playerIndex: 0,
+        identity: {
+          suitIndex: 0,
+          rank: 1,
+        },
+      },
+      {
+        type: "turn",
+        turn: 7,
+        currentPlayerIndex: 1,
+      },
+    ]);
+    const state = applyPlan(actions, context);
+    expect(state.hands).toEqual(context.gameState.hands);
+    expect(state.deck[bottomOrder]?.location).toBe("playStack");
+    expect(state.cardsRemainingInTheDeck).toBe(0);
+    expect(state.turn.currentPlayerIndex).toBe(1);
+    expect(context.cardViews).toHaveLength(2);
+    expect(context.gameState.deck).toHaveLength(2);
+  });
+
+  test("draws before a misplay without an existing UI card", () => {
+    const context = makeContext(2);
+    const actions = planClientHypotheticalAction(
+      {
+        type: "play",
+        order: bottomOrder,
+      },
+      context,
+    );
+    expect(actions).toEqual<unknown>([
+      {
+        type: "draw",
+        order: 2,
+        playerIndex: 0,
+        identity: {
+          suitIndex: 0,
+          rank: 2,
+        },
+      },
+      {
+        type: "misplay",
+        order: 2,
+        playerIndex: 0,
+        identity: {
+          suitIndex: 0,
+          rank: 2,
+        },
+      },
+      {
+        type: "turn",
+        turn: 7,
+        currentPlayerIndex: 1,
+      },
+    ]);
+    const state = applyPlan(actions, context);
+    expect(state.hands).toEqual(context.gameState.hands);
+    expect(state.deck[bottomOrder]).toMatchObject({
+      location: "discard",
+      isMisplayed: true,
+    });
+    expect(state.cardsRemainingInTheDeck).toBe(0);
+  });
+
+  test.each(["play", "discard"] as const)(
+    "preserves ordinary hand %s before the final draw",
+    (type) => {
+      const context = makeContext();
+      const intent = {
+        type,
+        order: 0 as CardOrder,
+      };
+      const actions = planClientHypotheticalAction(intent, context);
+      expect(actions).toEqual(planHypotheticalAction(intent, context));
+      expect(actions?.map((action) => action.type)).toEqual([
+        type,
+        "draw",
+        "turn",
+      ]);
+    },
+  );
+
+  test("rejects a bottom card without a UI view when deck plays are disabled", () => {
+    const base = makeContext();
+    const context = {
+      ...base,
+      metadata: {
+        ...base.metadata,
+        options: {
+          ...base.metadata.options,
+          deckPlays: false,
+        },
+      },
+    };
+    expect(
+      planClientHypotheticalAction(
+        {
+          type: "play",
+          order: bottomOrder,
+        },
+        context,
+      ),
+    ).toBeUndefined();
+  });
+
+  test.each([2, 3])(
+    "rejects missing future order %s with two cards remaining",
+    (order) => {
+      const base = makeContext();
+      const context = {
+        ...base,
+        gameState: {
+          ...base.gameState,
+          cardsRemainingInTheDeck: 2,
+        },
+        cardIdentities: [...base.cardIdentities, base.cardIdentities[0]!],
+      };
+      expect(
+        planClientHypotheticalAction(
+          {
+            type: "play",
+            order: order as CardOrder,
+          },
+          context,
+        ),
+      ).toBeUndefined();
+    },
+  );
+
+  test("rejects a missing order beyond the final card", () => {
+    expect(
+      planClientHypotheticalAction(
+        {
+          type: "play",
+          order: 3 as CardOrder,
+        },
+        makeContext(),
+      ),
+    ).toBeUndefined();
+  });
+
+  test("requires the remaining count to agree with the final order", () => {
+    const base = makeContext();
+    const context = {
+      ...base,
+      gameState: {
+        ...base.gameState,
+        cardsRemainingInTheDeck: 2,
+      },
+    };
+    expect(
+      planClientHypotheticalAction(
+        {
+          type: "play",
+          order: bottomOrder,
+        },
+        context,
+      ),
+    ).toBeUndefined();
+  });
+});

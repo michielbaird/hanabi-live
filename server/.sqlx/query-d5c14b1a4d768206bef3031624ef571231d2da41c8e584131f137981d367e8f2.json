@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT jsonb_build_object('score',score,'numGames',count(*)) AS \"value!\" FROM games WHERE seed=$1 GROUP BY score ORDER BY score",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "value!",
+        "type_info": "Jsonb",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "d5c14b1a4d768206bef3031624ef571231d2da41c8e584131f137981d367e8f2"
+}

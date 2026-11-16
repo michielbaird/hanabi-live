@@ -1,14 +1,13 @@
 // The site has the ability to send (optional) notifications.
 
-import * as modals from "./modals";
+import * as modals from "./modals.ts";
 
 export function test(): void {
   // From: https://stackoverflow.com/questions/38422340/check-if-browser-notification-is-available
-  if (!("Notification" in globalThis)) {
-    return;
-  }
-
-  if (Notification.permission === "granted") {
+  if (
+    !("Notification" in globalThis)
+    || Notification.permission === "granted"
+  ) {
     return;
   }
 
@@ -33,18 +32,26 @@ export function test(): void {
 
 export function send(msg: string, tag: string | undefined): void {
   // From: https://stackoverflow.com/questions/38422340/check-if-browser-notification-is-available
-  if (!("Notification" in globalThis)) {
+  if (
+    !("Notification" in globalThis)
+    || Notification.permission !== "granted"
+  ) {
     return;
   }
 
-  if (Notification.permission !== "granted") {
-    return;
+  let notification: Notification;
+  try {
+    notification = new Notification(`Hanab Live: ${msg}`, {
+      icon: "/public/img/favicon-32x32.png",
+      tag,
+    });
+  } catch (error) {
+    // Some Android browsers disallow constructing a notification despite granted permission.
+    if (error instanceof TypeError) {
+      return;
+    }
+    throw error;
   }
-
-  const notification = new Notification(`Hanab Live: ${msg}`, {
-    icon: "/public/img/favicon-32x32.png",
-    tag,
-  });
 
   notification.addEventListener("click", () => {
     window.focus();

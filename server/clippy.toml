@@ -1,0 +1,22 @@
+# Queries must be checked against the schema at compile time with the sqlx macros
+# (`query!`, `query_as!`, `query_scalar!`). Dynamic SQL needs an explicit, justified allow.
+disallowed-methods = [
+  { path = "sqlx::query", reason = "use sqlx::query! so the SQL is checked at compile time" },
+  { path = "sqlx::query_as", reason = "use sqlx::query_as! so the SQL is checked at compile time" },
+  { path = "sqlx::query_scalar", reason = "use sqlx::query_scalar! so the SQL is checked at compile time" },
+  { path = "sqlx::query_with", reason = "use sqlx::query! so the SQL is checked at compile time" },
+  { path = "sqlx::query_as_with", reason = "use sqlx::query_as! so the SQL is checked at compile time" },
+  { path = "sqlx::query_scalar_with", reason = "use sqlx::query_scalar! so the SQL is checked at compile time" },
+  { path = "sqlx::raw_sql", reason = "use the sqlx query macros so the SQL is checked at compile time" },
+  { path = "sqlx::QueryBuilder::new", reason = "use the sqlx query macros so the SQL is checked at compile time" },
+  # Compiling a regex is expensive. `regex!` (src/lib.rs) compiles each pattern once.
+  { path = "regex::Regex::new", reason = "use regex! so the pattern is compiled once" },
+  { path = "regex::RegexBuilder::new", reason = "use regex! so the pattern is compiled once" },
+  { path = "regex::RegexSet::new", reason = "use regex! so the pattern is compiled once" },
+  { path = "regex::bytes::Regex::new", reason = "use regex! so the pattern is compiled once" },
+  { path = "regex::bytes::RegexBuilder::new", reason = "use regex! so the pattern is compiled once" },
+  { path = "regex::bytes::RegexSet::new", reason = "use regex! so the pattern is compiled once" },
+]
+
+# Default: false. Tests may unwrap: a failing unwrap is a failing test.
+allow-unwrap-in-tests = true

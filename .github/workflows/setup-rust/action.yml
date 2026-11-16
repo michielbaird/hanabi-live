@@ -1,0 +1,30 @@
+inputs:
+  cache-key:
+    description: Separates the Cargo cache of jobs in one matrix, which share a job ID.
+    default: ""
+outputs:
+  cache-hit:
+    description: Whether the Cargo dependency cache matched exactly.
+    value: ${{ steps.cargo-cache.outputs.cache-hit }}
+runs:
+  using: composite
+  steps:
+    - name: Select the repository's Rust toolchain
+      shell: bash
+      working-directory: server
+      run: |
+        rustup show
+        echo "RUSTUP_TOOLCHAIN=$(rustup show active-toolchain | cut -d ' ' -f 1)" >> "$GITHUB_ENV"
+        # Backtraces need only line tables. Full debug info makes the cache bigger and linking slower.
+        echo "CARGO_PROFILE_DEV_DEBUG=line-tables-only" >> "$GITHUB_ENV"
+
+    - name: Cache Cargo dependencies
+      id: cargo-cache
+      uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      with:
+        workspaces: server -> target
+        key: ${{ inputs.cache-key }}
+        # Keep job-specific profiles/targets separate and rebuild our revision-stamped binaries.
+        cache-workspace-crates: false
+        cache-bin: false
+        save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}

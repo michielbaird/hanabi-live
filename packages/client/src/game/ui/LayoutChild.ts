@@ -1,29 +1,29 @@
 import type { PlayerIndex } from "@hanabi-live/game";
 import { isAtMaxClueTokens } from "@hanabi-live/game";
 import Konva from "konva";
-import * as modals from "../../modals";
-import * as sounds from "../../sounds";
-import { ActionType } from "../types/ActionType";
-import { SoundType } from "../types/SoundType";
-import type { CardLayout } from "./CardLayout";
-import type { HanabiCard } from "./HanabiCard";
-import type { PlayStack } from "./PlayStack";
-import { globals } from "./UIGlobals";
-import { checkMisplay } from "./checkMisplay";
-import * as cursor from "./cursor";
-import { isOurTurn } from "./isOurTurn";
-import * as turn from "./turn";
+import * as modals from "../../modals.ts";
+import * as sounds from "../../sounds.ts";
+import { confirmPlay } from "../confirmPlay.ts";
+import { SoundType } from "../types/SoundType.ts";
+import type { CardLayout } from "./CardLayout.ts";
+import * as cursor from "./cursor.ts";
+import type { HanabiCard } from "./HanabiCard.ts";
+import type { MisplayAnimation } from "./misplayAnimation.ts";
+import type { PlayStack } from "./PlayStack.ts";
+import { draggablePlayerIndex } from "./reactive/views/draggableView.ts";
+import type { StackCompleteAnimation } from "./stackCompleteAnimation.ts";
+import * as turn from "./turn.ts";
+import { globals } from "./UiGlobals.ts";
 
 /** Parent of a `HanabiCard`. It has a `CardLayout` or `PlayStack` parent. */
 export class LayoutChild extends Konva.Group {
-  tween: Konva.Tween | null = null;
-  doMisplayAnimation = false;
-  blank = false;
-
   private readonly _card: HanabiCard;
-  get card(): HanabiCard {
-    return this._card;
-  }
+
+  tween: Konva.Tween | undefined = undefined;
+  doMisplayAnimation = false;
+  misplayAnimation: MisplayAnimation | undefined = undefined;
+  stackCompleteAnimation: StackCompleteAnimation | undefined = undefined;
+  blank = false;
 
   constructor(child: HanabiCard, config?: Konva.ContainerConfig) {
     super(config);
@@ -33,7 +33,7 @@ export class LayoutChild extends Konva.Group {
   }
 
   private addCard(child: HanabiCard) {
-    this.add(child as unknown as Konva.Group);
+    this.add(child);
     this.width(child.width());
     this.height(child.height());
 
@@ -52,17 +52,34 @@ export class LayoutChild extends Konva.Group {
     child.on("heightChange", change);
   }
 
-  // Note that this method cannot be named "setDraggable()", since that would overlap with the Konva
-  // function.
-  checkSetDraggable(): void {
-    if (globals.state.visibleState === null) {
+  get card(): HanabiCard {
+    return this._card;
+  }
+
+  stopAnimations(): void {
+    if (this.misplayAnimation !== undefined) {
+      this.misplayAnimation.stop();
+      this.misplayAnimation = undefined;
+    }
+    if (this.stackCompleteAnimation === undefined) {
       return;
     }
 
-    if (
-      this.shouldBeDraggable(globals.state.visibleState.turn.currentPlayerIndex)
-    ) {
+    this.stackCompleteAnimation.stop();
+    this.stackCompleteAnimation = undefined;
+  }
+
+  // Note that this method cannot be named "setDraggable()", since that would overlap with the Konva
+  // function.
+  checkSetDraggable(): void {
+    if (globals.state.visibleState === undefined) {
+      return;
+    }
+
+    if (this.shouldBeDraggable(draggablePlayerIndex(globals.state))) {
       this.draggable(true);
+      // This method runs repeatedly, so replace the handler instead of adding another copy of it.
+      this.off("dragend");
       // eslint-disable-next-line @typescript-eslint/unbound-method
       this.on("dragend", this.dragEnd);
     } else {
@@ -70,54 +87,29 @@ export class LayoutChild extends Konva.Group {
       this.off("dragend");
     }
 
-    // Konva has no pointer position until the mouse has moved over the stage once (e.g. in a window
-    // that was just opened), and "getIntersection" throws without one. (The Konva types do not say
-    // that it can be undefined.)
-    const pointerPosition = globals.stage.getPointerPosition() as
-      Konva.Vector2d | undefined;
-    if (pointerPosition === undefined) {
+    // Konva warns when asked for the pointer position before the pointer has entered the stage.
+    const { stage } = globals;
+    const pointer =
+      stage.getPointersPositions().length > 0
+        ? stage.getPointerPosition()
+        : null;
+    if (pointer === null) {
       return;
     }
-
-    const shape = globals.stage.getIntersection(pointerPosition);
+    const shape = globals.stage.getIntersection(pointer);
     if (shape !== null && this.card.isAncestorOf(shape)) {
       this.card.setCursor();
     }
   }
 
-  shouldBeDraggable(currentPlayerIndex: PlayerIndex | null): boolean {
-    // Rarely, if the game is restarted when a tween is happening, we can get here without the card
-    // being defined.
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-    if (this.card === null || this.card === undefined) {
-      return false;
-    }
-
-    // First, handle the special case of a hypothetical.
-    if (globals.state.replay.hypothetical !== null) {
-      return (
-        (globals.state.replay.shared === null
-          || globals.state.replay.shared.amLeader)
-        && currentPlayerIndex === this.card.state.location
-        && !this.blank
-      );
-    }
-
+  shouldBeDraggable(draggableIndex: PlayerIndex | undefined): boolean {
     return (
-      // If it is not our turn, then the card should not need to be draggable yet (unless we have
-      // the "Enable pre-playing cards" feature enabled).
-      (isOurTurn() || globals.lobby.settings.speedrunPreplay)
-      // Cards should not be draggable if there is a queued move.
-      && globals.state.premove === null
-      && !globals.options.speedrun // Cards should never be draggable while speedrunning
-      && !globals.lobby.settings.speedrunMode  // Cards should never be draggable while speedrunning
-      // Only our cards should be draggable.
-      && this.card.state.location === globals.metadata.ourPlayerIndex
-      // Cards should not be draggable if we are spectating an ongoing game, in a dedicated solo
-      // replay, or in a shared replay.
-      && globals.state.playing
-      // Cards should not be draggable if they are currently playing an animation. (This function
-      // will be called again upon the completion of the animation.)
+      draggableIndex !== undefined
+      && this.card.state.location === draggableIndex
+      // A morphed card with an unknown identity cannot be played or discarded.
+      && !this.blank
+      // Cards should not be draggable while they are playing an animation. (This function will be
+      // called again upon the completion of the animation.)
       && !this.card.tweening
     );
   }
@@ -133,7 +125,7 @@ export class LayoutChild extends Konva.Group {
     this.off("dragend");
 
     const ongoingGameState =
-      globals.state.replay.hypothetical === null
+      globals.state.replay.hypothetical === undefined
         ? globals.state.ongoingGame
         : globals.state.replay.hypothetical.ongoing;
 
@@ -144,10 +136,10 @@ export class LayoutChild extends Konva.Group {
     ) {
       sounds.play(SoundType.Error);
       globals.elements.cluesNumberLabelPulse?.play();
-      draggedTo = null;
+      draggedTo = undefined;
     }
     if (
-      globals.state.replay.hypothetical !== null
+      globals.state.replay.hypothetical !== undefined
       && (draggedTo === "playArea" || draggedTo === "discardArea")
     ) {
       const knownCard = this.checkHypoUnknown(draggedTo);
@@ -160,52 +152,53 @@ export class LayoutChild extends Konva.Group {
     this.continueDragAction(draggedTo);
   }
 
-  // Before we play a card, do a check to ensure that it is actually playable to prevent silly
-  // mistakes from players. (But disable this in speedruns, hypotheticals and certain variants.)
-  checkMisplay(): boolean {
-    return checkMisplay(this.card.state);
-  }
-
   checkHypoUnknown(draggedTo: "playArea" | "discardArea"): boolean {
     const { suitIndex, rank } = this.card.getMorphedIdentity();
-    if (suitIndex !== null && rank !== null) {
+    if (suitIndex !== undefined && rank !== undefined) {
       return true; // Known card
     }
 
-    modals.askForMorph(
-      this.card,
-      globals.variant,
-      globals.cardImages,
-      draggedTo,
-    );
+    modals.askForMorph(this.card.morphTarget(), globals.variant, (changed) => {
+      this.continueDragAction(changed ? draggedTo : undefined);
+    });
     return false; // Unknown card
   }
 
-  continueDragAction(draggedTo: "playArea" | "discardArea" | null): void {
-    const cancelMisplay = draggedTo === "playArea" && this.checkMisplay();
-
-    if (cancelMisplay || draggedTo === null) {
-      // The card was dragged to an invalid location; tween it back to the hand.
+  continueDragAction(draggedTo: "playArea" | "discardArea" | undefined): void {
+    const returnToHand = () => {
       (this.parent as unknown as CardLayout | PlayStack).doLayout();
-      return;
-    }
+    };
 
-    let type: ActionType;
     switch (draggedTo) {
+      case undefined: {
+        // The card was dragged to an invalid location; tween it back to the hand.
+        returnToHand();
+        break;
+      }
+
       case "playArea": {
-        type = ActionType.Play;
+        // Before we play a card, ensure that it is actually playable to prevent silly mistakes from
+        // players. (But this is disabled in speedruns, hypotheticals and certain variants.)
+        confirmPlay(
+          this.card.state,
+          () => {
+            turn.end({
+              type: "play",
+              order: this.card.order,
+            });
+          },
+          returnToHand,
+        );
         break;
       }
 
       case "discardArea": {
-        type = ActionType.Discard;
+        turn.end({
+          type: "discard",
+          order: this.card.order,
+        });
         break;
       }
     }
-
-    turn.end({
-      type,
-      target: this.card.state.order,
-    });
   }
 }

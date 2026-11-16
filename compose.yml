@@ -1,0 +1,15 @@
+# PostgreSQL for local development. Start everything with "bun run dev".
+name: hanabi-live
+services:
+  postgres:
+    image: docker.io/library/postgres:18
+    environment:
+      POSTGRES_USER: "${DB_USER:-hanabiuser}"
+      POSTGRES_PASSWORD: "${DB_PASSWORD:-1234567890}"
+      POSTGRES_DB: "${DB_NAME:-hanabi}"
+    ports:
+      - "127.0.0.1:${DB_PORT:-5432}:5432"
+    volumes:
+      - postgres:/var/lib/postgresql
+volumes:
+  postgres:

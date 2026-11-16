@@ -1,31 +1,28 @@
-import type { CardOrder, GameState, SuitIndex } from "@hanabi-live/game";
-import {
+import type {
+  CardOrder,
+  GameState,
   StackDirection,
-  getStackStartRank,
-  getTotalCardsInDeck,
-  hasReversedSuits,
+  SuitIndex,
 } from "@hanabi-live/game";
-import { ReadonlyMap, assertDefined, assertNotNull } from "complete-common";
+import { getTotalCardsInDeck, hasReversedSuits } from "@hanabi-live/game";
 import equal from "fast-deep-equal";
 import type Konva from "konva";
-import type { HanabiCard } from "../../HanabiCard";
-import type { LayoutChild } from "../../LayoutChild";
-import { globals } from "../../UIGlobals";
-import { updateCardVisuals } from "./cardsView";
-
-const STACK_STRINGS_REVERSED = new ReadonlyMap<StackDirection, string>([
-  [StackDirection.Undecided, ""],
-  [StackDirection.Up, ""],
-  [StackDirection.Down, "Reversed"],
-  [StackDirection.Finished, "Reversed"],
-]);
-
-const STACK_STRINGS_UP_OR_DOWN = new ReadonlyMap<StackDirection, string>([
-  [StackDirection.Undecided, ""],
-  [StackDirection.Up, "Up"],
-  [StackDirection.Down, "Down"],
-  [StackDirection.Finished, "Finished"],
-]);
+import { store } from "../../../../store.ts";
+import { areReplayAnimationsOn } from "../../../replayAnimations.ts";
+import {
+  getStackDirectionLabel,
+  getSudokuStackLabels,
+} from "../../../stackLabels.ts";
+import type { HanabiCard } from "../../HanabiCard.ts";
+import type { LayoutChild } from "../../LayoutChild.ts";
+import { globals } from "../../UiGlobals.ts";
+import { CARD_ANIMATION_LENGTH_SECONDS } from "../../constants.ts";
+import {
+  startMaxScoreDropAnimation,
+  stopMaxScoreDropAnimation,
+} from "../../signalAnimations.ts";
+import { startStackCompleteAnimation } from "../../stackCompleteAnimation.ts";
+import { updateCardVisuals } from "./cardsView.ts";
 
 export function onPlayStackDirectionsChanged(
   directions: readonly StackDirection[],
@@ -44,23 +41,11 @@ export function onPlayStackDirectionsChanged(
       continue;
     }
 
-    const suit = globals.variant.suits[i]!;
-    let text = "";
-    const isUpOrDown = globals.variant.upOrDown;
-    if (isUpOrDown || suit.reversed) {
-      const stackStrings = isUpOrDown
-        ? STACK_STRINGS_UP_OR_DOWN
-        : STACK_STRINGS_REVERSED;
-
-      const stackText = stackStrings.get(direction);
-      assertDefined(
-        stackText,
-        `Failed to find the stack string for the stack direction of: ${direction}`,
-      );
-
-      text = stackText;
-    }
-
+    const text = getStackDirectionLabel(
+      globals.variant,
+      i as SuitIndex,
+      direction,
+    );
     globals.elements.suitLabelTexts[i]!.fitText(text);
 
     const visibleCardsOfThisSuit = globals.deck.filter(
@@ -93,9 +78,7 @@ export function onDiscardStacksChanged(
     discardStacks,
     (i) => {
       const suit = globals.variant.suits[i]!;
-      return globals.elements.discardStacks.get(
-        suit,
-      )! as unknown as Konva.Container;
+      return globals.elements.discardStacks.get(suit)!;
     },
     (card) => {
       if (card.state.isMisplayed) {
@@ -108,6 +91,92 @@ export function onDiscardStacksChanged(
   globals.layers.card.batchDraw();
 }
 
+interface StackCompletionData {
+  playStacks: GameState["playStacks"];
+  clueTokens: number;
+  score: number;
+}
+
+/** Celebrates a card that completes its play stack. */
+export function onStackCompletionDataChanged(
+  data: StackCompletionData,
+  previousData: StackCompletionData | undefined,
+): void {
+  // Celebrate only in a game in progress, not in a replay (unless the `animations()` console
+  // command is on), and not with reduced motion.
+  if (
+    previousData === undefined
+    || globals.animateFast
+    || store.getState().session.settings.reducedMotion
+    || (globals.state.replay.segment !== undefined && !areReplayAnimationsOn())
+  ) {
+    return;
+  }
+
+  const { stackSize } = globals.variant;
+  for (const [suitIndex, stack] of data.playStacks.entries()) {
+    const previousStack = previousData.playStacks[suitIndex];
+    if (stack.length !== stackSize || previousStack?.length !== stackSize - 1) {
+      continue;
+    }
+
+    const card = globals.deck[stack.at(-1)!];
+    if (card === undefined) {
+      continue;
+    }
+    const suit = globals.variant.suits[suitIndex]!;
+    const playStack = globals.elements.playStacks.get(suit)!;
+    const gainedClue = data.clueTokens > previousData.clueTokens;
+    const { layout } = card;
+    layout.stopAnimations();
+    layout.stackCompleteAnimation = startStackCompleteAnimation(
+      layout,
+      playStack,
+      gainedClue ? previousData.clueTokens : undefined,
+      data.score === globals.variant.maxScore,
+      () => {
+        layout.stackCompleteAnimation = undefined;
+      },
+    );
+  }
+}
+
+interface MaxScoreData {
+  maxScore: number;
+  discardStacks: GameState["discardStacks"];
+}
+
+/** Shows when a lost card lowers the maximum score. */
+export function onMaxScoreOrDiscardStacksChanged(
+  data: MaxScoreData,
+  previousData: MaxScoreData | undefined,
+): void {
+  if (previousData === undefined || data.maxScore === previousData.maxScore) {
+    return;
+  }
+
+  stopMaxScoreDropAnimation();
+  // Skip the animation when jumping through a replay, when going backwards, or with reduced motion.
+  if (
+    globals.animateFast
+    || data.maxScore > previousData.maxScore
+    || store.getState().session.settings.reducedMotion
+  ) {
+    return;
+  }
+
+  // Find the card that was just lost.
+  const previousDiscards = new Set(previousData.discardStacks.flat());
+  const order = data.discardStacks
+    .flat()
+    .find((discardedOrder) => !previousDiscards.has(discardedOrder));
+  const layoutChild =
+    order === undefined ? undefined : globals.deck[order]?.layout;
+  const delay =
+    layoutChild?.misplayAnimation?.seconds ?? CARD_ANIMATION_LENGTH_SECONDS;
+  startMaxScoreDropAnimation(layoutChild, previousData.maxScore, delay);
+}
+
 export function onPlayStacksChanged(
   playStacks: GameState["playStacks"],
   previousPlayStacks: GameState["playStacks"] | undefined,
@@ -116,9 +185,7 @@ export function onPlayStacksChanged(
     playStacks,
     (i) => {
       const suit = globals.variant.suits[i]!;
-      return globals.elements.playStacks.get(
-        suit,
-      )! as unknown as Konva.Container;
+      return globals.elements.playStacks.get(suit)!;
     },
     (card) => {
       card.animateToPlayStacks();
@@ -127,87 +194,25 @@ export function onPlayStacksChanged(
 
   for (const [suitIndex, stack] of playStacks.entries()) {
     if (
-      previousPlayStacks === undefined
-      || !equal(stack, previousPlayStacks[suitIndex])
+      previousPlayStacks !== undefined
+      && equal(stack, previousPlayStacks[suitIndex])
     ) {
-      const suit = globals.variant.suits[suitIndex]!;
-      const playStack = globals.elements.playStacks.get(suit)!;
-      playStack.hideCardsUnderneathTheTopCard();
+      continue;
     }
+
+    const suit = globals.variant.suits[suitIndex]!;
+    const playStack = globals.elements.playStacks.get(suit)!;
+    playStack.hideCardsUnderneathTheTopCard();
   }
 
   if (globals.variant.sudoku) {
-    // First, we will find out all available stack starts.
-    const availableStackStartsFlags: boolean[] = [
-      false,
-      false,
-      false,
-      false,
-      false,
-    ];
-    for (const rank of globals.variant.ranks) {
-      availableStackStartsFlags[rank - 1] = true;
-    }
-    for (const playStack of playStacks) {
-      const stackStart = getStackStartRank(
-        playStack,
-        globals.state.visibleState!.deck,
-      );
-      if (stackStart !== null) {
-        availableStackStartsFlags[stackStart - 1] = false;
-      }
-    }
-    const availableStackStarts: number[] = [];
-    for (const [index, available] of availableStackStartsFlags.entries()) {
-      if (available) {
-        availableStackStarts.push(index + 1);
-      }
-    }
-
-    // Now, add the suit label texts, showing current progress or the possible remaining starting
-    // values.
-    for (const [suitIndex, playStack] of playStacks.entries()) {
-      let text: string;
-      if (playStack.length === globals.variant.ranks.length) {
-        text = "Finished";
-      } else if (playStack.length > 0) {
-        const firstPlayedCardOrder = playStack[0];
-        assertDefined(
-          firstPlayedCardOrder,
-          `Failed to get the first card order from the play stack at suit index: ${suitIndex}`,
-        );
-        const firstPlayedCard = globals.deck[firstPlayedCardOrder];
-        assertDefined(
-          firstPlayedCard,
-          `Failed to get the first played card at index: ${firstPlayedCardOrder}`,
-        );
-        const firstPlayedRank = firstPlayedCard.getCardIdentity().rank;
-        assertNotNull(
-          firstPlayedRank,
-          `Failed to get the rank of the first played card at index: ${firstPlayedCardOrder}`,
-        );
-        const playedRanks = playStack.map(
-          (_stack, rankOffset) =>
-            ((rankOffset + firstPlayedRank - 1) % globals.variant.stackSize)
-            + 1,
-        );
-        const ranksText =
-          playedRanks.join(" ")
-          + " _".repeat(globals.variant.stackSize - playStack.length);
-        text = `[ ${ranksText} ]`;
-      } else {
-        const bracketText =
-          availableStackStarts.length === globals.variant.stackSize
-            ? "Any"
-            : availableStackStarts.join("");
-        text = `Start: [${bracketText}]`;
-      }
-      const fitText = globals.elements.suitLabelTexts[suitIndex];
-      assertDefined(
-        fitText,
-        `Failed to get the fit text at suit index: ${suitIndex}`,
-      );
-      fitText.fitText(text);
+    const labels = getSudokuStackLabels(
+      globals.variant,
+      playStacks,
+      globals.state.visibleState!.playStackStarts,
+    );
+    for (const [suitIndex, text] of labels.entries()) {
+      globals.elements.suitLabelTexts[suitIndex]?.fitText(text);
     }
   }
 
@@ -242,16 +247,16 @@ export function updatePlayStackVisuals(): void {
 
 function syncChildren(
   collections: ReadonlyArray<readonly CardOrder[]>,
-  getCollectionUI: (i: number) => Konva.Container,
-  addToCollectionUI: (card: HanabiCard, i: number) => void,
+  getCollectionUi: (i: number) => Konva.Container,
+  addToCollectionUi: (card: HanabiCard, i: number) => void,
 ) {
   for (const [i, collection] of collections.entries()) {
     // eslint-disable-next-line func-style
     const getCurrentSorting = () =>
-      (getCollectionUI(i).children.toArray() as LayoutChild[])
+      ([...getCollectionUi(i).children] as LayoutChild[])
         .map((layoutChild) => layoutChild.card)
         .filter((card) => !card.isStackBase)
-        .map((card) => card.state.order);
+        .map((card) => card.order);
 
     let current = getCurrentSorting();
 
@@ -260,7 +265,7 @@ function syncChildren(
     const removedCards = removedCardOrders.map(getCard);
     for (const card of removedCards) {
       const realState =
-        globals.store?.getState().visibleState?.deck[card!.state.order];
+        store.getState().game.current?.visibleState?.deck[card!.order];
       if (realState === undefined || realState.location === "deck") {
         card!.animateToDeck();
       } else {
@@ -272,7 +277,7 @@ function syncChildren(
     const addedCardOrders = collection.filter((n) => !current.includes(n));
     const addedCards = addedCardOrders.map(getCard);
     for (const card of addedCards) {
-      addToCollectionUI(card!, i);
+      addToCollectionUi(card!, i);
     }
 
     // Reorder the elements to match the collection.

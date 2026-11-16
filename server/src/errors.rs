@@ -1,0 +1,649 @@
+use axum::{
+    Json,
+    extract::{MatchedPath, Request},
+    http::{HeaderValue, StatusCode},
+    middleware::Next,
+    response::{IntoResponse, Response},
+};
+use hanabi_protocol::NoticeCode;
+use serde_json::json;
+use std::{fmt, io};
+
+/// The PostgreSQL SQLSTATE codes that public errors distinguish.
+mod sqlstate {
+    /// The length of every SQLSTATE code.
+    pub const LENGTH: usize = 5;
+    pub const UNIQUE_VIOLATION: &str = "23505";
+    pub const FOREIGN_KEY_VIOLATION: &str = "23503";
+    pub const CHECK_VIOLATION: &str = "23514";
+    pub const SERIALIZATION_FAILURE: &str = "40001";
+    pub const DEADLOCK_DETECTED: &str = "40P01";
+    pub const TOO_MANY_CONNECTIONS: &str = "53300";
+    pub const LOCK_NOT_AVAILABLE: &str = "55P03";
+    pub const QUERY_CANCELED: &str = "57014";
+    pub const ADMIN_SHUTDOWN: &str = "57P01";
+    pub const CRASH_SHUTDOWN: &str = "57P02";
+    pub const CANNOT_CONNECT_NOW: &str = "57P03";
+}
+
+tokio::task_local! {
+    static HTTP_OPERATION: String;
+    /// Set while a request reads only from the lobby read pool.
+    static LOBBY_READS: ();
+}
+
+/// Codes that report the server working as intended, such as refusing work during a restart, so
+/// they are neither logged as failures nor posted as alerts.
+const REFUSALS: [NoticeCode; 3] = [
+    NoticeCode::PasswordRateLimited,
+    NoticeCode::ServerDraining,
+    NoticeCode::SessionReplaced,
+];
+
+pub async fn http_context(request: Request, next: Next) -> Response {
+    let path = request
+        .extensions()
+        .get::<MatchedPath>()
+        .map_or("HTTP request", MatchedPath::as_str);
+    let operation = format!("{} {path}", request.method());
+    HTTP_OPERATION.scope(operation, next.run(request)).await
+}
+
+/// Marks the requests of a router that reads only from the lobby read pool, so their database
+/// errors state that pool's timeout.
+pub async fn lobby_reads(request: Request, next: Next) -> Response {
+    LOBBY_READS.scope((), next.run(request)).await
+}
+
+pub fn http_operation(fallback: &str) -> String {
+    HTTP_OPERATION
+        .try_with(Clone::clone)
+        .unwrap_or_else(|_| fallback.to_owned())
+}
+
+/// The error of an HTTP request: a refusal of a request that the server does not serve, or a
+/// failure, which is reported.
+#[derive(Debug)]
+pub enum HttpError {
+    /// The response's status and the message for the client.
+    Refused(StatusCode, String),
+    Failed(Box<Report>),
+}
+
+impl HttpError {
+    pub fn refused(status: StatusCode, message: impl Into<String>) -> Self {
+        Self::Refused(status, message.into())
+    }
+    pub fn bad(message: impl Into<String>) -> Self {
+        Self::Refused(StatusCode::BAD_REQUEST, message.into())
+    }
+    pub fn not_found(message: impl Into<String>) -> Self {
+        Self::Refused(StatusCode::NOT_FOUND, message.into())
+    }
+    /// The response for a client that reads JSON: every route other than an HTML page or the
+    /// operations endpoint.
+    pub fn json(self) -> Response {
+        match self {
+            Self::Refused(status, message) => {
+                (status, Json(hanabi_protocol::Notice::new(message))).into_response()
+            }
+            Self::Failed(report) => report.response(true),
+        }
+    }
+}
+
+/// A failure of a request, reported as the request's operation.
+impl<E: Into<anyhow::Error>> From<E> for HttpError {
+    fn from(error: E) -> Self {
+        Self::Failed(Box::new(Report::from_error(
+            http_operation("HTTP request"),
+            &error.into(),
+        )))
+    }
+}
+
+/// The response as plain text.
+impl IntoResponse for HttpError {
+    fn into_response(self) -> Response {
+        match self {
+            Self::Refused(status, message) => (status, message).into_response(),
+            Self::Failed(report) => report.response(false),
+        }
+    }
+}
+
+/// Marks an error from a statement that sets its own `statement_timeout`, so a timeout states that
+/// limit instead of its pool's. Attach it with `context` where the statement fails.
+#[derive(Debug)]
+pub struct StatementLimit(pub std::time::Duration);
+
+impl fmt::Display for StatementLimit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Running a statement limited to {} seconds",
+            self.0.as_secs()
+        )
+    }
+}
+
+/// Marks an error from the lobby read pool, whose waits and statements time out sooner than the
+/// other pools'. Attach it with `context` where a lobby read fails.
+#[derive(Debug)]
+pub struct LobbyRead;
+
+impl fmt::Display for LobbyRead {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Reading lobby data")
+    }
+}
+
+/// Why a player's command did not complete. Handlers decide which kind of failure they report, so
+/// the connection knows what to tell the player without inspecting the error.
+#[derive(Debug)]
+pub enum CommandError {
+    /// The server refused the request as intended, such as a move that the rules do not allow.
+    /// The player sees the message as it is, unless it is silent. It is not logged.
+    Rejected { message: String, silent: bool },
+    /// The server cannot serve the command now, such as while it drains or after it lost
+    /// ownership of the live tables. The player sees the fault's description.
+    Unavailable(Fault),
+    /// Anything else: a failure of storage or another service, or a bug. It is logged, and the
+    /// player sees a diagnostic reference.
+    Internal(anyhow::Error),
+}
+
+pub type CommandResult<T = ()> = Result<T, CommandError>;
+
+impl CommandError {
+    pub fn rejected(message: impl Into<String>) -> Self {
+        Self::Rejected {
+            message: message.into(),
+            silent: false,
+        }
+    }
+}
+
+impl fmt::Display for CommandError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Rejected { message, .. } => f.write_str(message),
+            Self::Unavailable(fault) => fault.fmt(f),
+            Self::Internal(error) => write!(f, "{error:#}"),
+        }
+    }
+}
+
+impl std::error::Error for CommandError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Rejected { .. } => None,
+            Self::Unavailable(fault) => Some(fault),
+            Self::Internal(error) => Some(error.as_ref()),
+        }
+    }
+}
+
+/// Converts the errors of code outside the command handlers, such as the store and the engine.
+/// Those report a refusal or a fault as the error itself, so only the outermost error is checked.
+impl From<anyhow::Error> for CommandError {
+    fn from(error: anyhow::Error) -> Self {
+        let error = match error.downcast::<Self>() {
+            Ok(error) => return error,
+            Err(error) => error,
+        };
+        let error = match error.downcast::<hanabi_engine::ActionRejected>() {
+            Ok(rejected) => {
+                return Self::Rejected {
+                    message: rejected.message,
+                    silent: rejected.silent,
+                };
+            }
+            Err(error) => error,
+        };
+        match error.downcast::<Fault>() {
+            Ok(fault) => Self::Unavailable(fault),
+            Err(error) => Self::Internal(error),
+        }
+    }
+}
+
+impl From<Fault> for CommandError {
+    fn from(fault: Fault) -> Self {
+        Self::Unavailable(fault)
+    }
+}
+
+/// Errors that command handlers pass on with `?`, which are always unexpected.
+macro_rules! internal_errors {
+    ($($error:ty),+ $(,)?) => {
+        $(impl From<$error> for CommandError {
+            fn from(error: $error) -> Self {
+                Self::Internal(error.into())
+            }
+        })+
+    };
+}
+internal_errors!(
+    sqlx::Error,
+    hanabi_protocol::OutOfRange,
+    serde_json::Error,
+    std::num::TryFromIntError,
+    std::num::ParseIntError,
+    tokio::sync::oneshot::error::RecvError,
+    tokio::sync::TryAcquireError,
+);
+impl<T: Send + Sync + 'static> From<tokio::sync::mpsc::error::SendError<T>> for CommandError {
+    fn from(error: tokio::sync::mpsc::error::SendError<T>) -> Self {
+        Self::Internal(anyhow::anyhow!("{error}"))
+    }
+}
+
+/// Turns a missing value or a failed parse of a player's input into a rejection.
+pub trait OrReject<T> {
+    fn or_reject(self, message: impl Into<String>) -> CommandResult<T>;
+}
+impl<T> OrReject<T> for Option<T> {
+    fn or_reject(self, message: impl Into<String>) -> CommandResult<T> {
+        self.ok_or_else(|| CommandError::rejected(message))
+    }
+}
+impl<T, E> OrReject<T> for Result<T, E> {
+    fn or_reject(self, message: impl Into<String>) -> CommandResult<T> {
+        self.map_err(|_| CommandError::rejected(message))
+    }
+}
+
+/// The description of an unexpected failure, which the server wrote for the player to see, such as
+/// one from `internal!`. A failure that the report does not recognize shows its whole error chain to
+/// the player only when the chain starts from one of these.
+#[derive(Debug)]
+pub struct Described(pub String);
+
+impl fmt::Display for Described {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+impl std::error::Error for Described {}
+
+/// Only construct this with server-defined descriptions, never request values or raw errors.
+#[derive(Debug)]
+pub struct Fault {
+    pub code: NoticeCode,
+    pub description: String,
+    pub status: StatusCode,
+}
+
+impl Fault {
+    pub fn new(code: NoticeCode, description: impl Into<String>, status: StatusCode) -> Self {
+        Self {
+            code,
+            description: description.into(),
+            status,
+        }
+    }
+}
+
+impl fmt::Display for Fault {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.description)
+    }
+}
+impl std::error::Error for Fault {}
+
+#[derive(Clone, Debug)]
+pub struct Report {
+    pub operation: String,
+    pub code: NoticeCode,
+    pub description: String,
+    pub diagnostic_id: String,
+    pub status: StatusCode,
+}
+
+impl Report {
+    pub fn known(
+        operation: impl Into<String>,
+        code: NoticeCode,
+        description: impl Into<String>,
+        status: StatusCode,
+    ) -> Self {
+        Self {
+            operation: operation.into(),
+            code,
+            description: description.into(),
+            diagnostic_id: format!("{:016x}", rand::random::<u64>()),
+            status,
+        }
+    }
+
+    pub fn from_error(operation: impl Into<String>, error: &anyhow::Error) -> Self {
+        let timeout = if let Some(StatementLimit(limit)) = error.downcast_ref() {
+            *limit
+        } else if error.downcast_ref::<LobbyRead>().is_some()
+            || LOBBY_READS.try_with(|()| ()).is_ok()
+        {
+            crate::store::LOBBY_READ_TIMEOUT
+        } else {
+            crate::store::DATABASE_TIMEOUT
+        };
+        let limit = format!(" after {} seconds", timeout.as_secs());
+        let (code, description, status) = if let Some(fault) = error.downcast_ref::<Fault>() {
+            (fault.code, fault.description.clone(), fault.status)
+        } else if let Some(database) = error.downcast_ref::<sqlx::Error>() {
+            match database {
+                sqlx::Error::PoolTimedOut => (NoticeCode::DatabasePoolTimeout, format!("Waiting for an available database connection timed out{limit}. Please try again."), StatusCode::SERVICE_UNAVAILABLE),
+                sqlx::Error::PoolClosed => (NoticeCode::DatabaseUnavailable, "The database connection pool is closed. Please try again after the server recovers.".into(), StatusCode::SERVICE_UNAVAILABLE),
+                sqlx::Error::Database(database) => {
+                    match database.code().as_deref() {
+                        Some(sqlstate::QUERY_CANCELED) if database.message().contains("statement timeout") =>
+                            (NoticeCode::DatabaseQueryTimeout, format!("The database query timed out{limit}. Please try again."), StatusCode::GATEWAY_TIMEOUT),
+                        Some(sqlstate::QUERY_CANCELED) => (NoticeCode::DatabaseQueryCancelled, "The database query was cancelled before it finished.".into(), StatusCode::SERVICE_UNAVAILABLE),
+                        Some(sqlstate::LOCK_NOT_AVAILABLE) => (NoticeCode::DatabaseLockTimeout, "The database could not acquire the required lock in time.".into(), StatusCode::SERVICE_UNAVAILABLE),
+                        Some(sqlstate::UNIQUE_VIOLATION) => (NoticeCode::DatabaseDuplicate, "An existing record already uses a value that must be unique.".into(), StatusCode::CONFLICT),
+                        Some(sqlstate::FOREIGN_KEY_VIOLATION) => (NoticeCode::DatabaseReferenceConflict, "A related database record is missing or is still in use.".into(), StatusCode::CONFLICT),
+                        Some(sqlstate::CHECK_VIOLATION) => (NoticeCode::DatabaseConstraintFailed, "The requested change violates a database validation rule.".into(), StatusCode::CONFLICT),
+                        Some(sqlstate::SERIALIZATION_FAILURE | sqlstate::DEADLOCK_DETECTED) => (NoticeCode::DatabaseTransactionConflict, "The database transaction was rolled back because another operation conflicted with it. Please try again.".into(), StatusCode::CONFLICT),
+                        Some(sqlstate::TOO_MANY_CONNECTIONS | sqlstate::ADMIN_SHUTDOWN | sqlstate::CRASH_SHUTDOWN | sqlstate::CANNOT_CONNECT_NOW) => (NoticeCode::DatabaseUnavailable, "The database is restarting or cannot accept connections.".into(), StatusCode::SERVICE_UNAVAILABLE),
+                        _ => {
+                            let state = database.code().filter(|code| code.len() == sqlstate::LENGTH && code.bytes().all(|c| c.is_ascii_alphanumeric()));
+                            (NoticeCode::DatabaseError, format!("The database rejected the operation (SQLSTATE {}).", state.as_deref().unwrap_or("unavailable")), StatusCode::INTERNAL_SERVER_ERROR)
+                        }
+                    }
+                }
+                sqlx::Error::Io(_) | sqlx::Error::Tls(_) => (NoticeCode::DatabaseConnectionFailed, "The server could not communicate with the database. The result of a write may be unconfirmed; do not repeat game actions.".into(), StatusCode::SERVICE_UNAVAILABLE),
+                sqlx::Error::RowNotFound => (NoticeCode::RecordNotFound, "The requested database record no longer exists.".into(), StatusCode::NOT_FOUND),
+                _ => (NoticeCode::DatabaseResultInvalid, "The database response could not be decoded or did not match the expected schema.".into(), StatusCode::INTERNAL_SERVER_ERROR),
+            }
+        } else if let Some(discord) = error.downcast_ref::<twilight_http::Error>() {
+            use twilight_http::error::ErrorType;
+            match discord.kind() {
+                ErrorType::RequestTimedOut => (
+                    NoticeCode::UpstreamTimeout,
+                    "Discord did not respond before the request deadline.".into(),
+                    StatusCode::GATEWAY_TIMEOUT,
+                ),
+                ErrorType::RequestError | ErrorType::RequestCanceled => (
+                    NoticeCode::UpstreamConnectionFailed,
+                    "The server could not reach Discord.".into(),
+                    StatusCode::BAD_GATEWAY,
+                ),
+                ErrorType::Response { status, .. } => (
+                    NoticeCode::UpstreamHttpError,
+                    format!("Discord returned HTTP status: {}", status.get()),
+                    StatusCode::BAD_GATEWAY,
+                ),
+                ErrorType::Unauthorized => (
+                    NoticeCode::UpstreamUnauthorized,
+                    "Discord rejected the bot token.".into(),
+                    StatusCode::BAD_GATEWAY,
+                ),
+                _ => (
+                    NoticeCode::UpstreamRequestInvalid,
+                    "The Discord request could not be built or sent.".into(),
+                    StatusCode::BAD_GATEWAY,
+                ),
+            }
+        } else if error
+            .downcast_ref::<twilight_http::response::DeserializeBodyError>()
+            .is_some()
+            || error
+                .downcast_ref::<twilight_gateway::error::ReceiveMessageError>()
+                .is_some()
+        {
+            (
+                NoticeCode::UpstreamResponseInvalid,
+                "A Discord response or gateway event could not be read.".into(),
+                StatusCode::BAD_GATEWAY,
+            )
+        } else if let Some(limited) = error.downcast_ref::<crate::accounts::TooMuchPasswordWork>() {
+            (
+                NoticeCode::PasswordRateLimited,
+                limited.to_string(),
+                StatusCode::TOO_MANY_REQUESTS,
+            )
+        } else if let Some(overload) = error.downcast_ref::<crate::accounts::HashOverload>() {
+            (
+                NoticeCode::PasswordProcessingBusy,
+                format!(
+                    "Password processing is temporarily busy: {}. Please try again.",
+                    overload.diagnostic()
+                ),
+                StatusCode::SERVICE_UNAVAILABLE,
+            )
+        } else if let Some(failure) = error.downcast_ref::<crate::accounts::HashFailure>() {
+            (
+                NoticeCode::PasswordProcessingFailed,
+                format!(
+                    "Password verification or storage failed: {}",
+                    failure.diagnostic()
+                ),
+                StatusCode::INTERNAL_SERVER_ERROR,
+            )
+        } else if error
+            .downcast_ref::<tokio::time::error::Elapsed>()
+            .is_some()
+        {
+            (
+                NoticeCode::OperationTimeout,
+                "The operation exceeded its processing deadline.".into(),
+                StatusCode::GATEWAY_TIMEOUT,
+            )
+        } else if let Some(error) = error.downcast_ref::<io::Error>() {
+            let description = match error.kind() {
+                io::ErrorKind::NotFound => "A required server file or resource is missing.",
+                io::ErrorKind::PermissionDenied => {
+                    "The server does not have permission to access a required resource."
+                }
+                io::ErrorKind::TimedOut => "A server input/output operation timed out.",
+                io::ErrorKind::ConnectionRefused => {
+                    "A required service refused the server's connection."
+                }
+                io::ErrorKind::ConnectionReset
+                | io::ErrorKind::BrokenPipe
+                | io::ErrorKind::UnexpectedEof => {
+                    "A required service closed the connection before the operation finished."
+                }
+                _ => "A server input/output operation failed.",
+            };
+            (
+                NoticeCode::ServerIoError,
+                description.into(),
+                StatusCode::INTERNAL_SERVER_ERROR,
+            )
+        } else if error.downcast_ref::<serde_json::Error>().is_some() {
+            (
+                NoticeCode::ServerDataInvalid,
+                "Stored data or a service response contains invalid JSON.".into(),
+                StatusCode::INTERNAL_SERVER_ERROR,
+            )
+        } else if error.downcast_ref::<tokio::task::JoinError>().is_some() {
+            (
+                NoticeCode::WorkerFailed,
+                "A server worker stopped before completing the operation.".into(),
+                StatusCode::INTERNAL_SERVER_ERROR,
+            )
+        } else {
+            (NoticeCode::InternalOperationFailed, "An unexpected server failure prevented completion. Report the diagnostic ID to an administrator.".into(), StatusCode::INTERNAL_SERVER_ERROR)
+        };
+        Self::known(operation, code, description, status)
+    }
+
+    pub fn text(&self) -> String {
+        format!(
+            "{} failed: {} [Reference: {}]",
+            self.operation, self.description, self.diagnostic_id
+        )
+    }
+
+    /// What a client shows: the text, which ends with the diagnostic ID, and the typed cause.
+    pub fn notice(&self) -> hanabi_protocol::Notice {
+        hanabi_protocol::Notice {
+            code: Some(self.code),
+            ..hanabi_protocol::Notice::new(self.text())
+        }
+    }
+
+    /// Whether this reports a failure, rather than a refusal of the server working as intended.
+    pub fn is_failure(&self) -> bool {
+        !REFUSALS.contains(&self.code)
+    }
+
+    pub fn log(&self) {
+        if !self.is_failure() {
+            return;
+        }
+        tracing::error!(
+            "Server failure: {}",
+            json!({
+                "timestamp": chrono::Utc::now().to_rfc3339(),
+                "revision": crate::restart::version(),
+                "operation": self.operation,
+                "code": self.code,
+                "description": self.description,
+                "diagnosticId": self.diagnostic_id
+            })
+        );
+    }
+
+    pub fn response(&self, json_response: bool) -> Response {
+        self.log();
+        let mut response = if json_response {
+            (self.status, Json(self.notice())).into_response()
+        } else {
+            (self.status, self.text()).into_response()
+        };
+        response.headers_mut().insert(
+            "x-error-id",
+            HeaderValue::from_str(&self.diagnostic_id).expect("Hexadecimal diagnostic ID"),
+        );
+        // The web router posts server errors to the error alerts from here.
+        response.extensions_mut().insert(self.clone());
+        response
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn database_pool_and_unknown_errors_are_specific_and_redacted() {
+        let report = Report::from_error(
+            "Loading game history",
+            &anyhow::Error::from(sqlx::Error::PoolTimedOut).context(LobbyRead),
+        );
+        assert_eq!(report.code, NoticeCode::DatabasePoolTimeout);
+        assert!(
+            report
+                .text()
+                .contains("database connection timed out after 2 seconds")
+        );
+        let report = Report::from_error(
+            "Saving settings",
+            &anyhow::anyhow!("password=synthetic-secret SELECT private-data"),
+        );
+        assert!(!report.text().contains("synthetic-secret"));
+        assert!(!report.text().contains("SELECT"));
+        assert!(report.text().contains(&report.diagnostic_id));
+    }
+
+    #[test]
+    fn error_responses_carry_their_report_for_alerts() {
+        let report =
+            Report::from_error("GET /api/v1/seed/{seed}", &sqlx::Error::PoolTimedOut.into());
+        let response = report.response(true);
+        assert!(response.status().is_server_error());
+        let attached = response
+            .extensions()
+            .get::<Report>()
+            .expect("attached report");
+        assert_eq!(attached.code, NoticeCode::DatabasePoolTimeout);
+        assert_eq!(attached.operation, "GET /api/v1/seed/{seed}");
+        assert_eq!(attached.diagnostic_id, report.diagnostic_id);
+    }
+
+    #[test]
+    fn persistence_uncertainty_is_not_reported_as_safe_to_repeat() {
+        let fault = Fault::new(
+            NoticeCode::PersistenceUncertain,
+            "The write may have been saved; do not repeat game actions.",
+            StatusCode::SERVICE_UNAVAILABLE,
+        );
+        let error = anyhow::anyhow!("private checkpoint payload").context(fault);
+        let report = Report::from_error("Playing a card", &error);
+        assert_eq!(report.code, NoticeCode::PersistenceUncertain);
+        assert!(report.text().contains("may have been saved"));
+        assert!(!report.text().contains("private checkpoint"));
+    }
+
+    #[tokio::test]
+    async fn postgres_timeouts_and_rejected_values_remain_specific_without_secrets() {
+        let Some(db) = crate::accounts::test_support::TestDb::create().await else {
+            return;
+        };
+        let mut connection = db.pool.acquire().await.unwrap();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "test SQL that sets up database state or failures directly"
+        )]
+        sqlx::query("SET statement_timeout = 2000")
+            .execute(&mut *connection)
+            .await
+            .unwrap();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "test SQL that sets up database state or failures directly"
+        )]
+        let error = sqlx::query("SELECT pg_sleep(3)")
+            .execute(&mut *connection)
+            .await
+            .unwrap_err();
+        let report = Report::from_error(
+            "Loading game history",
+            &anyhow::Error::from(error).context(LobbyRead),
+        );
+        assert_eq!(report.code, NoticeCode::DatabaseQueryTimeout);
+        assert_eq!(report.status, StatusCode::GATEWAY_TIMEOUT);
+        assert!(report.text().contains("timed out after 2 seconds"));
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "test SQL that sets up database state or failures directly"
+        )]
+        let error = sqlx::query("SELECT pg_sleep(3)")
+            .execute(&mut *connection)
+            .await
+            .unwrap_err();
+        let report = Report::from_error(
+            "Loading seed statistics",
+            &anyhow::Error::from(error)
+                .context(StatementLimit(std::time::Duration::from_secs(20)))
+                .context(LobbyRead),
+        );
+        assert!(report.text().contains("timed out after 20 seconds"));
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "test SQL that sets up database state or failures directly"
+        )]
+        let error = sqlx::query("SELECT 'synthetic-password-token'::integer")
+            .execute(&mut *connection)
+            .await
+            .unwrap_err();
+        let report = Report::from_error("Loading data", &error.into());
+        assert!(report.text().contains("SQLSTATE 22P02"));
+        assert!(!report.text().contains("synthetic-password-token"));
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "test SQL that sets up database state or failures directly"
+        )]
+        let error = sqlx::query("SELECT pg_cancel_backend(pg_backend_pid())")
+            .execute(&mut *connection)
+            .await
+            .unwrap_err();
+        let report = Report::from_error("Loading data", &error.into());
+        assert_eq!(report.code, NoticeCode::DatabaseQueryCancelled);
+        assert!(!report.text().contains("timed out"));
+        drop(connection);
+        db.close().await;
+    }
+}

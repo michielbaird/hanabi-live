@@ -1,0 +1,253 @@
+// @vitest-environment jsdom
+
+import type { ServerEventData } from "@hanabi-live/data";
+import { tableIdSchema, userIdSchema } from "@hanabi-live/data";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
+import { Provider } from "react-redux";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { globals } from "../../Globals.ts";
+import { DIMMED_OPACITY } from "../../constants.ts";
+import {
+  blockedChanged,
+  friendsChanged,
+  screenChanged,
+  usernameChanged,
+} from "../../sessionSlice.ts";
+import { store } from "../../store.ts";
+import { tablesCleared, tablesListed } from "../tables/tablesSlice.ts";
+import { Screen } from "../types/Screen.ts";
+import { UsersList, UsersTitle } from "./UsersList.tsx";
+import {
+  botsShownChanged,
+  userChanged,
+  userLeft,
+  usersCleared,
+  usersListed,
+} from "./usersSlice.ts";
+
+// The menu tooltip shows its content in the body, since jsdom does not support popovers.
+vi.mock("../../Tooltip.ts", () => ({
+  Tooltip: class {
+    private readonly content: Node | string;
+
+    isOpen = false;
+
+    openOnHover = vi.fn();
+    setContent = vi.fn();
+
+    constructor(_anchor: HTMLElement, options: { content: Node | string }) {
+      this.content = options.content;
+    }
+
+    openUntilClickElsewhere() {
+      document.body.append(this.content);
+      this.isOpen = true;
+    }
+
+    close() {
+      if (this.content instanceof Element) {
+        this.content.remove();
+      }
+      this.isOpen = false;
+    }
+
+    destroy() {
+      this.close();
+    }
+  },
+}));
+vi.mock("../tables/tableActions.ts", () => ({
+  tableJoin: vi.fn(),
+  tableSpectate: vi.fn(),
+}));
+const { tableJoin } = await import("../tables/tableActions.ts");
+
+const TABLE_ID = tableIdSchema.parse(7);
+
+function user(
+  userId: number,
+  name: string,
+  status: "lobby" | "pregame" = "lobby",
+): ServerEventData["user"] {
+  return {
+    userId: userIdSchema.parse(userId),
+    username: name,
+    activity:
+      status === "lobby"
+        ? { type: status }
+        : {
+            type: status,
+            tableId: TABLE_ID,
+          },
+    hGroupConventions: false,
+    bot: false,
+    inactive: false,
+  };
+}
+
+function renderList() {
+  render(
+    <Provider store={store}>
+      <h3 data-testid="title">
+        <UsersTitle />
+      </h3>
+      <UsersList />
+    </Provider>,
+  );
+}
+
+function rowNames(): readonly string[] {
+  return screen
+    .getAllByRole("row")
+    .slice(1)
+    .map((row) => row.querySelector("a")!.textContent);
+}
+
+beforeEach(() => {
+  store.dispatch(usernameChanged("me"));
+  store.dispatch(friendsChanged(["zed", "Bob"]));
+  store.dispatch(blockedChanged([]));
+  store.dispatch(screenChanged(Screen.Lobby));
+  store.dispatch(usersCleared());
+  store.dispatch(botsShownChanged(false));
+  store.dispatch(tablesCleared());
+});
+
+afterEach(cleanup);
+
+describe("UsersList", () => {
+  test("lists us first, then friends, then everyone else, case-insensitively", () => {
+    store.dispatch(
+      usersListed([
+        user(1, "carol"),
+        user(2, "zed"),
+        user(3, "Alice"),
+        user(4, "me"),
+        user(5, "Bob"),
+      ]),
+    );
+    renderList();
+
+    expect(rowNames()).toStrictEqual(["me", "Bob", "zed", "Alice", "carol"]);
+    expect(screen.getByText("me").className).toBe("tw:text-name-me");
+    expect(screen.getByText("me").parentElement!.tagName).toBe("STRONG");
+    expect(screen.getByText("Bob").className).toBe("tw:text-friend");
+    expect(screen.getByText("Alice").className).toBe("");
+    expect(screen.getByText("Alice").getAttribute("href")).toBe(
+      "/scores/Alice",
+    );
+    expect(screen.getByTestId("title").textContent).toBe("Online Users (5)");
+  });
+
+  test("re-renders when a user becomes inactive", () => {
+    store.dispatch(usersListed([user(1, "Alice")]));
+    renderList();
+    const name = screen.getByText("Alice").parentElement!;
+    expect(name.style.opacity).toBe("");
+    expect(name.textContent).not.toContain("\u{1F4A4}");
+
+    act(() => {
+      store.dispatch(
+        userChanged({
+          ...user(1, "Alice"),
+          inactive: true,
+        }),
+      );
+    });
+
+    expect(name.style.opacity).toBe(String(DIMMED_OPACITY));
+    expect(name.textContent).toContain("\u{1F4A4}");
+  });
+
+  test("lists bots on a separate tab and does not count them as users", () => {
+    store.dispatch(
+      usersListed([
+        {
+          ...user(1, "Alice"),
+          hGroupConventions: true,
+        },
+        {
+          ...user(2, "Bot-Bob"),
+          hGroupConventions: true,
+          bot: true,
+        },
+      ]),
+    );
+    renderList();
+
+    const [usersTab, botsTab] = screen.getAllByRole("tab");
+    expect(usersTab!.textContent).toBe("Online Users (1)");
+    expect(usersTab!.ariaSelected).toBe("true");
+    expect(botsTab!.textContent).toBe("Bots (1)");
+    expect(rowNames()).toStrictEqual(["Alice"]);
+    const alice = screen.getAllByRole("row")[1]!;
+    expect(alice.querySelector(".fa-heading")).not.toBeNull();
+    expect(alice.textContent).not.toContain("\u{1F916}");
+
+    fireEvent.click(botsTab!);
+    expect(botsTab!.ariaSelected).toBe("true");
+    expect(rowNames()).toStrictEqual(["Bot-Bob"]);
+    const bot = screen.getAllByRole("row")[1]!;
+    expect(bot.querySelector(".fa-heading")).toBeNull();
+    expect(bot.textContent).toContain("\u{1F916}");
+
+    // The tabs disappear when the last bot leaves.
+    act(() => {
+      store.dispatch(userLeft(userIdSchema.parse(2)));
+    });
+    expect(screen.queryByRole("tab")).toBeNull();
+    expect(screen.getByTestId("title").textContent).toBe("Online Users (1)");
+    expect(rowNames()).toStrictEqual(["Alice"]);
+  });
+
+  test("opens a menu that friends and blocks a user when we click on their name", () => {
+    const send = vi.fn();
+    globals.conn = { send } as unknown as NonNullable<typeof globals.conn>;
+    store.dispatch(usersListed([user(1, "me"), user(2, "Alice")]));
+    renderList();
+
+    fireEvent.click(screen.getByText("Alice"));
+    fireEvent.click(screen.getByText("Add to Friends"));
+    expect(send).toHaveBeenCalledWith("friendAdd", { username: "Alice" });
+    expect(screen.queryByText("Add to Friends")).toBeNull();
+
+    fireEvent.click(screen.getByText("Alice"));
+    fireEvent.click(screen.getByText("Block"));
+    expect(send).toHaveBeenCalledWith("blockAdd", {
+      username: "Alice",
+    });
+    act(() => {
+      store.dispatch(blockedChanged(["Alice"]));
+    });
+    fireEvent.click(screen.getByText("Alice"));
+    expect(screen.getByText("Unblock")).toBeDefined();
+    fireEvent.click(screen.getByText("Unblock"));
+
+    // We cannot message, friend, or block ourselves.
+    fireEvent.click(screen.getByText("me"));
+    expect(screen.getByText("Profile")).toBeDefined();
+    expect(screen.queryByText("Private Message")).toBeNull();
+  });
+
+  test("links the status of users at a table, except from the pre-game", () => {
+    const table = { tableId: TABLE_ID } as ServerEventData["table"];
+    store.dispatch(tablesListed([table]));
+    store.dispatch(usersListed([user(1, "Alice", "pregame"), user(2, "Bob")]));
+    renderList();
+
+    expect(screen.getByText("Lobby").tagName).toBe("TD");
+    fireEvent.click(screen.getByText("Pre-Game"));
+    expect(tableJoin).toHaveBeenCalledWith(table);
+
+    act(() => {
+      store.dispatch(screenChanged(Screen.PreGame));
+    });
+    expect(screen.getByText("Pre-Game").tagName).toBe("TD");
+  });
+});

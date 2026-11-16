@@ -1,6 +1,6 @@
 import { getDefaultVariant } from "@hanabi-live/game";
-import { describe, expect, test } from "@jest/globals";
-import { parseNote } from "./notesReducer";
+import { describe, expect, test } from "vitest";
+import { parseNote } from "./notesReducer.ts";
 
 const VARIANT = getDefaultVariant();
 
@@ -32,6 +32,15 @@ describe("parseNote", () => {
       expect(shorthand.clued).toBe(expanded.clued);
     },
   );
+
+  test.each([
+    ["spook", true],
+    ["[Spook]", true],
+    ["boo [spook]", true],
+    ["spooky", false],
+  ])("parses the spook keyword in %j", (text, expected) => {
+    expect(parseNote(VARIANT, text).spook).toBe(expected);
+  });
 
   test("handles a long unterminated bracket sequence", () => {
     const text = "[".repeat(100_000);

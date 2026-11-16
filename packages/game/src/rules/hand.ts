@@ -1,10 +1,11 @@
 // Functions related to hand management.
 
-import type { CardState } from "../interfaces/CardState";
-import type { Options } from "../interfaces/Options";
-import type { CardOrder } from "../types/CardOrder";
-import type { NumPlayers } from "../types/NumPlayers";
-import { isCardClued } from "./cardState";
+import { MIN_PLAYERS } from "../generated/protocol.ts";
+import type { CardState } from "../interfaces/CardState.ts";
+import type { Options } from "../interfaces/Options.ts";
+import type { CardOrder } from "../types/CardOrder.ts";
+import type { NumPlayers } from "../types/NumPlayers.ts";
+import { isCardClued } from "./cardState.ts";
 
 export function getCardsPerHand(options: Options): number {
   return (
@@ -31,6 +32,9 @@ function getCardsPerHandNatural(numPlayers: NumPlayers): number {
     }
   }
 }
+
+/** The largest hand: the fewest players, with one extra card. */
+export const MAX_CARDS_PER_HAND = getCardsPerHandNatural(MIN_PLAYERS) + 1;
 
 /** For example, slot 1 is the newest (left-most) card, which is at index 4 (in a 3-player game). */
 export function getCardSlot(

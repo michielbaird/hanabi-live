@@ -1,19 +1,22 @@
-/* eslint-disable unicorn/no-null */
 /* eslint-disable @typescript-eslint/no-non-null-assertion */
 
-import type { CardIdentity } from "./interfaces/CardIdentity";
-import type { CardNote } from "./interfaces/CardNote";
-import type { CardState } from "./interfaces/CardState";
-import type { Variant } from "./interfaces/Variant";
-import { isCardClued, isCardDiscarded, isCardPlayed } from "./rules/cardState";
-import type { Rank } from "./types/Rank";
-import type { SuitIndex } from "./types/SuitIndex";
-import type { SuitRankTuple } from "./types/SuitRankTuple";
+import type { CardIdentity } from "./interfaces/CardIdentity.ts";
+import type { CardNote } from "./interfaces/CardNote.ts";
+import type { CardState } from "./interfaces/CardState.ts";
+import type { Variant } from "./interfaces/Variant.ts";
+import {
+  isCardClued,
+  isCardDiscarded,
+  isCardPlayed,
+} from "./rules/cardState.ts";
+import type { Rank } from "./types/Rank.ts";
+import type { SuitIndex } from "./types/SuitIndex.ts";
+import type { SuitRankTuple } from "./types/SuitRankTuple.ts";
 
 export enum PipState {
-  Hidden,
-  Eliminated,
-  Visible,
+  Hidden = "Hidden",
+  Eliminated = "Eliminated",
+  Visible = "Visible",
 }
 
 interface CardIdentityPresentationOptions {
@@ -21,6 +24,10 @@ interface CardIdentityPresentationOptions {
   readonly state: CardState;
   readonly note: CardNote;
   readonly empathy: boolean;
+
+  /** Whether the empathy view also applies the possibilities that the viewer's note lists. */
+  readonly empathyIncludesNotes?: boolean;
+
   readonly morphedIdentity?: CardIdentity;
   readonly isStackBase: boolean;
   readonly finished: boolean;
@@ -45,9 +52,21 @@ interface RankPipPresentation {
   readonly positive: boolean;
 }
 
+/** One row of the possibility rows: suits that share the same possible ranks. */
+export interface PossibilityRowPresentation {
+  readonly suitPips: readonly SuitPipPresentation[];
+  readonly rankPips: readonly RankPipPresentation[];
+}
+
 interface CardPipPresentation {
   readonly suitPips: readonly SuitPipPresentation[];
   readonly rankPips: readonly RankPipPresentation[];
+
+  /**
+   * Present when the clues leave a set of cards that the separate suit and rank pips cannot show,
+   * such as "any red card, or a blue 1". Then each row lists suits with the ranks they can be.
+   */
+  readonly possibilityRows: readonly PossibilityRowPresentation[] | undefined;
 }
 
 export function getCardIdentityToShow({
@@ -55,12 +74,13 @@ export function getCardIdentityToShow({
   state,
   note,
   empathy,
+  empathyIncludesNotes = false,
   morphedIdentity,
   isStackBase,
   finished,
 }: CardIdentityPresentationOptions): CardIdentity {
-  let suitIndex: CardIdentity["suitIndex"] = null;
-  let rank: CardIdentity["rank"] = null;
+  let suitIndex: CardIdentity["suitIndex"];
+  let rank: CardIdentity["rank"];
 
   if (empathy) {
     const {
@@ -70,35 +90,68 @@ export function getCardIdentityToShow({
       rankDetermined,
     } = state;
 
-    if (stateSuitIndex !== null && suitDetermined) {
+    if (stateSuitIndex !== undefined && suitDetermined) {
       suitIndex = stateSuitIndex;
     }
-    if (stateRank !== null && rankDetermined) {
+    if (stateRank !== undefined && rankDetermined) {
       rank = stateRank;
+    }
+
+    if (empathyIncludesNotes) {
+      suitIndex ??= getSuitIndexFromNote(note, state);
+      rank ??= getRankFromNote(note, state);
     }
 
     if (morphedIdentity !== undefined) {
       const { suitIndex: morphedSuitIndex, rank: morphedRank } =
         morphedIdentity;
-      if (morphedSuitIndex !== null && morphedRank !== null) {
+      if (morphedSuitIndex !== undefined && morphedRank !== undefined) {
         suitIndex ??= morphedSuitIndex;
         rank ??= morphedRank;
       }
     }
 
-    return { suitIndex, rank };
+    return {
+      suitIndex,
+      rank,
+    };
   }
 
   const { suitIndex: cardSuitIndex, rank: cardRank } = cardIdentity;
   suitIndex = cardSuitIndex ?? getSuitIndexFromNote(note, state);
 
   const rankFromNote = getRankFromNote(note, state);
-  rank = cardRank ?? rankFromNote ?? null;
+  rank = cardRank ?? rankFromNote;
   if (isStackBase && !finished && rankFromNote !== undefined) {
     rank = rankFromNote;
   }
 
-  return { suitIndex, rank };
+  return {
+    suitIndex,
+    rank,
+  };
+}
+
+/** Whether the note changes the suit or rank shown on the card face. */
+export function isCardIdentityFromNote(
+  options: CardIdentityPresentationOptions,
+): boolean {
+  if (options.note.possibilities.length === 0) {
+    return false;
+  }
+
+  const shown = getCardIdentityToShow(options);
+  const shownWithoutNote = getCardIdentityToShow({
+    ...options,
+    note: {
+      ...options.note,
+      possibilities: [],
+    },
+  });
+  return (
+    shown.suitIndex !== shownWithoutNote.suitIndex
+    || shown.rank !== shownWithoutNote.rank
+  );
 }
 
 export function getCardBorderPresentation(
@@ -135,6 +188,16 @@ export function getCardPipPresentation(
   state: CardState,
   note: CardNote,
   empathy: boolean,
+  {
+    rowPerSuit = false,
+    empathyIncludesNotes = false,
+  }: {
+    /** Always return one possibility row for each suit. */
+    readonly rowPerSuit?: boolean;
+
+    /** Whether the empathy view also applies the possibilities that the viewer's note lists. */
+    readonly empathyIncludesNotes?: boolean;
+  } = {},
 ): CardPipPresentation {
   const suitPipStates = variant.suits.map(() => PipState.Hidden);
   const rankPipStates = new Map<Rank, PipState>(
@@ -142,9 +205,10 @@ export function getCardPipPresentation(
   );
 
   const possibilities = possibleCardsFromNoteAndClues(note, state);
-  const possibleCardsFromClues = empathy
-    ? state.possibleCardsFromClues
-    : possibilities;
+  const possibleCardsFromClues =
+    empathy && !empathyIncludesNotes
+      ? state.possibleCardsFromClues
+      : possibilities;
   const possibleCards = empathy
     ? state.possibleCardsForEmpathy
     : state.possibleCards;
@@ -179,16 +243,135 @@ export function getCardPipPresentation(
     ),
   }));
 
+  function isPositiveRank(rank: Rank) {
+    return state.positiveRankClues.some(
+      (positiveRank) => positiveRank === rank,
+    );
+  }
+
   const rankPips = variant.ranks.map((rank) => ({
     rank,
     state: rankPipStates.get(rank) ?? PipState.Hidden,
-    // eslint-disable-next-line unicorn/prefer-includes
-    positive: state.positiveRankClues.some(
-      (positiveRank) => positiveRank === rank,
-    ),
+    positive: isPositiveRank(rank),
   }));
 
-  return { suitPips, rankPips };
+  const possibilityRows = getPossibilityRows(
+    variant,
+    possibleCardsFromClues,
+    possibleCards,
+    suitPips,
+    isPositiveRank,
+    rowPerSuit,
+  );
+
+  return {
+    suitPips,
+    rankPips,
+    possibilityRows,
+  };
+}
+
+function cardKey(suitIndex: number, rank: Rank) {
+  return `${suitIndex},${rank}`;
+}
+
+/**
+ * Returns undefined when the cards that the clues allow are every combination of the suits and
+ * ranks they include, since the separate suit and rank pips show that set exactly. Otherwise,
+ * returns one row for each group of suits that can be the same ranks. With `rowPerSuit`, always
+ * returns one row for each suit.
+ */
+function getPossibilityRows(
+  variant: Variant,
+  possibleCardsFromClues: readonly SuitRankTuple[],
+  possibleCards: readonly SuitRankTuple[],
+  suitPips: readonly SuitPipPresentation[],
+  isPositiveRank: (rank: Rank) => boolean,
+  rowPerSuit: boolean,
+): readonly PossibilityRowPresentation[] | undefined {
+  const fromClues = new Set(
+    possibleCardsFromClues.map(([suitIndex, rank]) => cardKey(suitIndex, rank)),
+  );
+  const possible = new Set(
+    possibleCards.map(([suitIndex, rank]) => cardKey(suitIndex, rank)),
+  );
+  const suitCount = new Set(
+    possibleCardsFromClues.map(([suitIndex]) => suitIndex),
+  ).size;
+  const rankCount = new Set(possibleCardsFromClues.map(([, rank]) => rank))
+    .size;
+  if (!rowPerSuit && fromClues.size === suitCount * rankCount) {
+    return undefined;
+  }
+
+  const suits = suitPips
+    .filter((suitPip) => suitPip.state !== PipState.Hidden)
+    .map((suitPip) => {
+      const rankPips = variant.ranks.map((rank) => {
+        const key = cardKey(suitPip.suitIndex, rank);
+        let pipState = PipState.Hidden;
+        if (fromClues.has(key) && possible.has(key)) {
+          pipState = PipState.Visible;
+        } else if (fromClues.has(key)) {
+          pipState = PipState.Eliminated;
+        }
+        return {
+          rank,
+          state: pipState,
+          positive: isPositiveRank(rank),
+        };
+      });
+      const clueRanksKey = rankPips
+        .map((rankPip) => rankPip.state !== PipState.Hidden)
+        .join(",");
+      const rowKey = rankPips.map((rankPip) => rankPip.state).join(",");
+      return {
+        suitPip,
+        rankPips,
+        clueRanksKey,
+        rowKey,
+      };
+    });
+
+  if (rowPerSuit) {
+    return suits.map(({ suitPip, rankPips }) => ({
+      suitPips: [suitPip],
+      rankPips,
+    }));
+  }
+
+  // A ruled-out suit joins a row of suits that the clues allowed the same ranks, since its
+  // crossed-out suit pip already shows that it is none of them.
+  const possibleSuitForClueRanks = new Map<string, (typeof suits)[number]>();
+  for (const suit of suits) {
+    if (suit.suitPip.state !== PipState.Eliminated) {
+      possibleSuitForClueRanks.set(suit.clueRanksKey, suit);
+    }
+  }
+
+  const rows = new Map<string, PossibilityRowPresentation>();
+  for (const { suitPip, rankPips, clueRanksKey, rowKey } of suits) {
+    const rowSuit =
+      suitPip.state === PipState.Eliminated
+        ? possibleSuitForClueRanks.get(clueRanksKey)
+        : undefined;
+    const key = rowSuit?.rowKey ?? rowKey;
+    const row = rows.get(key);
+    rows.set(
+      key,
+      row === undefined
+        ? {
+            suitPips: [suitPip],
+            rankPips: rowSuit?.rankPips ?? rankPips,
+          }
+        : {
+            ...row,
+            suitPips: [...row.suitPips, suitPip],
+          },
+    );
+  }
+
+  return [...rows.values()];
 }
 
 export function possibleCardsFromNoteAndClues(
@@ -202,17 +385,15 @@ export function possibleCardsFromNoteAndClues(
       ),
   );
 
-  if (possibilitiesWithNotes.length === 0) {
-    return state.possibleCardsFromClues;
-  }
-
-  return possibilitiesWithNotes;
+  return possibilitiesWithNotes.length === 0
+    ? state.possibleCardsFromClues
+    : possibilitiesWithNotes;
 }
 
 function getSuitIndexFromNote(
   note: CardNote,
   state: CardState,
-): SuitIndex | null {
+): SuitIndex | undefined {
   if (note.possibilities.length > 0) {
     const possibilities = possibleCardsFromNoteAndClues(note, state);
     const [candidateSuitIndex] = possibilities[0]!;
@@ -223,7 +404,7 @@ function getSuitIndexFromNote(
     }
   }
 
-  return null;
+  return undefined;
 }
 
 function getRankFromNote(note: CardNote, state: CardState): Rank | undefined {

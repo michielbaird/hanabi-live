@@ -1,18 +1,13 @@
-import { globals } from "./UIGlobals";
-import { onSpectatorsChanged } from "./reactive/views/spectatorsView";
+import { globals as lobbyGlobals } from "../../Globals.ts";
+import * as zen from "../zen.ts";
+import { globals } from "./UiGlobals.ts";
+import { onSpectatorsChanged } from "./reactive/views/spectatorsView.ts";
 
+/** Turns zen mode on or off, and shows it on the classic screen. */
 export function toggleZen(): void {
-  globals.lobby.zenModeEnabled = globals.state.finished
-    ? false
-    : !globals.lobby.zenModeEnabled;
+  zen.toggleZen();
 
-  if (globals.lobby.zenModeEnabled) {
-    globals.game!.chat.hide();
-  }
-
-  if (globals.lobby.ui !== null) {
-    globals.lobby.ui.updateChatLabel();
-  }
+  lobbyGlobals.ui?.updateChatLabel();
 
   onSpectatorsChanged({
     spectators: globals.state.spectators,

@@ -1,9 +1,14 @@
 {
   "name": "@hanabi-live/data",
   "private": true,
+  "sideEffects": false,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "lint": "bash ../../scripts/lint/check-typescript.sh"
+  },
   "dependencies": {
-    "@hanabi-live/game": "file:../game",
-    "complete-common": "2.32.0",
-    "zod": "4.6.5"
+    "@hanabi-live/game": "workspace:*",
+    "zod": "catalog:"
   }
 }

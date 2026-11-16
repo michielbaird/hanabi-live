@@ -1,0 +1,50 @@
+// Test-only verification of the session cookies that the server signs.
+import type { UserId } from "@hanabi-live/data";
+import { createHmac, timingSafeEqual } from "node:crypto";
+
+const SESSION_COOKIE_NAME = "hanabi.sid";
+
+const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 365;
+
+/** Decodes a cookie in the form `{id}.{timestamp}.{signature}`. */
+export function decodeSessionCookie(
+  encoded: string,
+  secret: string,
+  now = Math.floor(Date.now() / 1000),
+): UserId | undefined {
+  const match = /^(?<id>\d+)\.(?<timestamp>\d+)\.(?<signature>[\w-]+)$/u.exec(
+    encoded,
+  );
+  if (match?.groups === undefined) {
+    return undefined;
+  }
+  const {
+    id: idText,
+    timestamp: timestampText,
+    signature: signatureText,
+  } = match.groups;
+  if (
+    idText === undefined
+    || timestampText === undefined
+    || signatureText === undefined
+  ) {
+    return undefined;
+  }
+  if (secret === "") {
+    throw new Error("Missing session signing key.");
+  }
+  const expected = createHmac("sha256", secret)
+    .update(`${SESSION_COOKIE_NAME}|${idText}.${timestampText}`)
+    .digest();
+  const actual = Buffer.from(signatureText, "base64url");
+  if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) {
+    return undefined;
+  }
+  const id = Number(idText);
+  const timestamp = Number(timestampText);
+  return id < 1
+    || id > 2_147_483_647
+    || timestamp < now - SESSION_MAX_AGE_SECONDS
+    ? undefined
+    : (id as UserId);
+}

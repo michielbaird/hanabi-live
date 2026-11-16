@@ -1,8 +1,10 @@
 import { eRange } from "complete-common";
 import Konva from "konva";
-import type { LayoutChild } from "./LayoutChild";
-import { globals } from "./UIGlobals";
-import { animate } from "./konvaHelpers";
+import { store } from "../../store.ts";
+import type { LayoutChild } from "./LayoutChild.ts";
+import { globals } from "./UiGlobals.ts";
+import { PLAY_ANIMATION_SECONDS } from "./constants.ts";
+import { animate } from "./konvaHelpers.ts";
 
 /**
  * Represents the stack in the middle of the table for each suit. It is composed of `LayoutChild`
@@ -11,7 +13,7 @@ import { animate } from "./konvaHelpers";
 export class PlayStack extends Konva.Group {
   addChild(layoutChild: LayoutChild): void {
     const pos = layoutChild.getAbsolutePosition();
-    this.add(layoutChild as unknown as Konva.Group);
+    this.add(layoutChild);
     layoutChild.setAbsolutePosition(pos);
     this.doLayout();
   }
@@ -19,24 +21,35 @@ export class PlayStack extends Konva.Group {
   doLayout(): void {
     const lh = this.height();
 
-    const layoutChildren = this.children.toArray() as LayoutChild[];
+    const layoutChildren = [...this.children] as LayoutChild[];
     const layoutChild = layoutChildren.at(-1)!;
     const scale = lh / layoutChild.height();
     const stackBase = layoutChild.card.isStackBase;
 
     // Hide cards in "Throw It in a Hole" variants.
-    const opacity =
+    const hidden =
       globals.variant.throwItInAHole
       && (globals.state.playing || globals.state.shadowing) // Revert to the normal behavior for spectators of ongoing games
       && !globals.state.finished // Revert to the normal behavior for dedicated replays
-      && !stackBase // We want the stack bases to always be visible
-        ? 0
-        : 1;
+      && !stackBase; // We want the stack bases to always be visible
 
-    if (layoutChild.tween !== null) {
-      layoutChild.tween.destroy();
-      layoutChild.tween = null;
+    // Instead of fading out, the card is sucked into the hole; it is hidden once it has vanished.
+    // With reduced motion, it fades out.
+    const vortex =
+      hidden
+      && !globals.animateFast
+      && !store.getState().session.settings.reducedMotion;
+    if (vortex) {
+      layoutChild.card.vortex(PLAY_ANIMATION_SECONDS, () => {
+        layoutChild.opacity(0);
+      });
     }
+
+    if (layoutChild.tween !== undefined) {
+      layoutChild.tween.destroy();
+      layoutChild.tween = undefined;
+    }
+    layoutChild.stopAnimations();
 
     // Animate the card leaving the hand to the play stacks (or vice versa). (Tweening from the hand
     // to the discard pile is handled in the "CardLayout" object.)
@@ -46,18 +59,18 @@ export class PlayStack extends Konva.Group {
     animate(
       layoutChild,
       {
-        duration: 0.8,
+        duration: PLAY_ANIMATION_SECONDS,
         x: 0,
         y: 0,
         scale,
         rotation: 0,
-        opacity,
+        ...(!vortex && { opacity: hidden ? 0 : 1 }),
         // eslint-disable-next-line @typescript-eslint/unbound-method
         easing: Konva.Easings.EaseOut,
         onFinish: () => {
-          if (layoutChild.tween !== null) {
+          if (layoutChild.tween !== undefined) {
             layoutChild.tween.destroy();
-            layoutChild.tween = null;
+            layoutChild.tween = undefined;
           }
           layoutChild.card.finishedTweening();
           layoutChild.checkSetDraggable();
@@ -76,7 +89,7 @@ export class PlayStack extends Konva.Group {
         continue;
       }
 
-      if (layoutChild.tween !== null) {
+      if (layoutChild.tween !== undefined) {
         // Do not hide anything if one of the cards on the stack is still tweening.
         return;
       }

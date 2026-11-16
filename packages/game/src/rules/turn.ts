@@ -1,12 +1,14 @@
-/* eslint-disable unicorn/no-null */
+import { getCharacter } from "../gameData.ts";
+import { PANICKY_MAX_CLUES } from "../generated/protocol.ts";
+import type { GameMetadata } from "../interfaces/GameMetadata.ts";
+import type { Options } from "../interfaces/Options.ts";
+import type { Variant } from "../interfaces/Variant.ts";
+import type { NumPlayers } from "../types/NumPlayers.ts";
+import type { PlayerIndex } from "../types/PlayerIndex.ts";
+import { getAdjustedClueTokens } from "./clueTokens.ts";
 
-import { getCharacter } from "../gameData";
-import type { GameMetadata } from "../interfaces/GameMetadata";
-import type { Options } from "../interfaces/Options";
-import type { Variant } from "../interfaces/Variant";
-import type { NumPlayers } from "../types/NumPlayers";
-import type { PlayerIndex } from "../types/PlayerIndex";
-import { getAdjustedClueTokens } from "./clueTokens";
+/** The clues that a Genius gives on each turn: a color clue, then a rank clue. */
+const GENIUS_CLUES_PER_TURN = 2;
 
 export function shouldEndTurnAfterDraw(
   cardsPlayedOrDiscardedThisTurn: number,
@@ -17,10 +19,10 @@ export function shouldEndTurnAfterDraw(
 ): boolean {
   // Some "Detrimental Characters" are able to perform two actions.
 
-  // Panicky - After discarding, discards again if there are 4 clues or less.
+  // Panicky - After discarding, discards again if there are few enough clues.
   const panickyFirstDiscard =
     cardsDiscardedThisTurn === 1
-    && clueTokens <= getAdjustedClueTokens(4, variant)
+    && clueTokens <= getAdjustedClueTokens(PANICKY_MAX_CLUES, variant)
     && characterName === "Panicky";
 
   // Otherwise, the turn always increments when:
@@ -35,7 +37,9 @@ export function shouldEndTurnAfterClue(
 ): boolean {
   // Some "Detrimental Characters" are able to perform two clues. Otherwise, the turn always
   // increments when a clue is given.
-  return characterName !== "Genius" || cluesGivenThisTurn === 2;
+  return (
+    characterName !== "Genius" || cluesGivenThisTurn === GENIUS_CLUES_PER_TURN
+  );
 }
 
 export function shouldPlayOrderInvert(characterName: string): boolean {
@@ -44,13 +48,13 @@ export function shouldPlayOrderInvert(characterName: string): boolean {
 }
 
 export function getNextPlayerIndex(
-  currentPlayerIndex: PlayerIndex | null,
+  currentPlayerIndex: PlayerIndex | undefined,
   numPlayers: NumPlayers,
   turnsInverted: boolean,
-): PlayerIndex | null {
+): PlayerIndex | undefined {
   // If the game is already over, then there is no next player.
-  if (currentPlayerIndex === null) {
-    return null;
+  if (currentPlayerIndex === undefined) {
+    return undefined;
   }
 
   if (turnsInverted) {
@@ -72,16 +76,18 @@ export function getNextPlayerIndex(
 
 export function getEndGameLength(
   options: Options,
-  characterAssignments: Readonly<Array<number | null>>,
+  characterAssignments: Readonly<Array<number | undefined>>,
 ): number {
   // The Contrarian detrimental character has a 2-turn end game.
   if (options.detrimentalCharacters) {
-    for (const characterID of characterAssignments) {
-      if (characterID !== null) {
-        const character = getCharacter(characterID);
-        if (character.name === "Contrarian") {
-          return 2;
-        }
+    for (const characterId of characterAssignments) {
+      if (characterId === undefined) {
+        continue;
+      }
+
+      const character = getCharacter(characterId);
+      if (character.name === "Contrarian") {
+        return 2;
       }
     }
   }

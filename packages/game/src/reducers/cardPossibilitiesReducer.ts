@@ -1,16 +1,14 @@
 // Calculates the state of a card after a clue.
 
-/* eslint-disable unicorn/no-null */
-
 import { newArray } from "complete-common";
-import { MAX_PLAYERS } from "../constants";
-import { ClueType } from "../enums/ClueType";
-import { getVariant } from "../gameData";
-import type { CardState } from "../interfaces/CardState";
-import type { GameMetadata } from "../interfaces/GameMetadata";
-import { isCardTouchedByClue } from "../rules/clues";
-import type { Clue } from "../types/Clue";
-import type { SuitRankTuple } from "../types/SuitRankTuple";
+import { EVEN_CARD_RANKS, ODD_CARD_RANKS } from "../constants.ts";
+import { getVariantById } from "../gameData.ts";
+import { MAX_PLAYERS, ODD_RANK_CLUE } from "../generated/protocol.ts";
+import type { CardState } from "../interfaces/CardState.ts";
+import type { GameMetadata } from "../interfaces/GameMetadata.ts";
+import { isCardTouchedByClue } from "../rules/clues.ts";
+import type { Clue } from "../types/Clue.ts";
+import type { SuitRankTuple } from "../types/SuitRankTuple.ts";
 
 export function cardPossibilitiesReducer(
   state: CardState,
@@ -23,7 +21,7 @@ export function cardPossibilitiesReducer(
     return state;
   }
 
-  const variant = getVariant(metadata.options.variantName);
+  const variant = getVariantById(metadata.options.variantId);
 
   // Apply the clue and check what is eliminated.
   const possibleCardsFromClues = state.possibleCardsFromClues.filter(
@@ -42,7 +40,7 @@ export function cardPossibilitiesReducer(
   let { positiveColorClues } = state;
   if (
     positive
-    && clue.type === ClueType.Color
+    && clue.type === "color"
     && !positiveColorClues.includes(clue.value)
   ) {
     positiveColorClues = [...positiveColorClues, clue.value];
@@ -51,14 +49,14 @@ export function cardPossibilitiesReducer(
   let { positiveRankClues } = state;
   if (
     positive
-    && clue.type === ClueType.Rank
+    && clue.type === "rank"
     && !positiveRankClues.includes(clue.value)
   ) {
     if (variant.oddsAndEvens) {
-      positiveRankClues =
-        clue.value === 1
-          ? [...positiveRankClues, 1, 3, 5]
-          : [...positiveRankClues, 2, 4];
+      positiveRankClues = [
+        ...positiveRankClues,
+        ...(clue.value === ODD_RANK_CLUE ? ODD_CARD_RANKS : EVEN_CARD_RANKS),
+      ];
     } else {
       positiveRankClues = [...positiveRankClues, clue.value];
     }
@@ -98,7 +96,7 @@ function updateIdentity(
   const suitDetermined = possibleSuitsSet.size === 1;
 
   if (suitDetermined) {
-    suitIndex = possibleSuits[0] ?? null;
+    suitIndex = possibleSuits[0];
   }
 
   const possibleRanks = possibleCardsFromClues.map(
@@ -108,7 +106,7 @@ function updateIdentity(
   const rankDetermined = possibleRanksSet.size === 1;
 
   if (rankDetermined) {
-    rank = possibleRanks[0] ?? null;
+    rank = possibleRanks[0];
   }
 
   return {

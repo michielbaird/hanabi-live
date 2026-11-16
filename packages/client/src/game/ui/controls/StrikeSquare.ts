@@ -1,12 +1,14 @@
 import Konva from "konva";
+import type { GameTooltipName } from "../../../tooltips.ts";
+import type { StrikeIndex } from "../constants.ts";
 
 export class StrikeSquare extends Konva.Rect {
-  num: 0 | 1 | 2;
+  readonly num: StrikeIndex;
 
-  tooltipName = "";
+  tooltipName?: GameTooltipName;
   tooltipContent = "";
 
-  constructor(config: Konva.ShapeConfig, num: 0 | 1 | 2) {
+  constructor(config: Konva.ShapeConfig, num: StrikeIndex) {
     super(config);
     this.num = num;
   }

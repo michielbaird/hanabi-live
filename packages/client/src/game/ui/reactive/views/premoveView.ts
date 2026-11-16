@@ -1,11 +1,10 @@
-import { ActionType } from "../../../types/ActionType";
-import type { ClientAction } from "../../../types/ClientAction";
-import type { State } from "../../../types/State";
-import { globals } from "../../UIGlobals";
-import * as ourHand from "../../ourHand";
+import type { ClientAction } from "../../../types/ClientAction.ts";
+import type { State } from "../../../types/State.ts";
+import { globals } from "../../UiGlobals.ts";
+import * as ourHand from "../../ourHand.ts";
 
 export function shouldShowCancelButton(state: State): boolean {
-  return !state.replay.active && state.premove !== null;
+  return state.replay.segment === undefined && state.premove !== undefined;
 }
 
 export function shouldShowCancelButtonChanged(shouldShow: boolean): void {
@@ -14,43 +13,37 @@ export function shouldShowCancelButtonChanged(shouldShow: boolean): void {
 }
 
 export function onChanged(
-  action: ClientAction | null,
-  previousAction: ClientAction | null | undefined,
+  action: ClientAction | undefined,
+  previousAction: ClientAction | undefined,
+  initializing: boolean,
 ): void {
-  if (previousAction === undefined) {
-    // The state is initializing to a null action.
+  if (initializing) {
     return;
   }
 
-  if (action === null && previousAction !== null) {
+  if (action === undefined && previousAction !== undefined) {
     // We just canceled a premove action.
 
     // If we dragged a card, we have to make the card tween back to the hand.
-    if (
-      previousAction.type === ActionType.Play
-      || previousAction.type === ActionType.Discard
-    ) {
+    if (previousAction.type === "play" || previousAction.type === "discard") {
       ourHand.get().doLayout();
       globals.layers.card.draw();
     }
-  } else if (action !== null && previousAction === null) {
+  } else if (action !== undefined && previousAction === undefined) {
     // We just specified a premove action.
-    ourHand.checkSetDraggableAll();
-
     let text = "Cancel Pre-";
     switch (action.type) {
-      case ActionType.Play: {
+      case "play": {
         text += "Play";
         break;
       }
 
-      case ActionType.Discard: {
+      case "discard": {
         text += "Discard";
         break;
       }
 
-      case ActionType.ColorClue:
-      case ActionType.RankClue: {
+      case "clue": {
         text += "Clue";
         break;
       }

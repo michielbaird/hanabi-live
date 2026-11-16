@@ -1,6 +1,6 @@
-import { describe, expect, test } from "@jest/globals";
-import { createStore } from "redux";
-import { observeStore } from "./observeStore";
+import { configureStore } from "@reduxjs/toolkit";
+import { describe, expect, test } from "vitest";
+import { observeStore } from "./observeStore.ts";
 
 function stepReducer(
   state: { step: number } | undefined,
@@ -14,15 +14,21 @@ function counterReducer(
   state: { count: number; label: string } | undefined,
   action: { type: string },
 ) {
-  const current = state ?? { count: 0, label: "original" };
+  const current = state ?? {
+    count: 0,
+    label: "original",
+  };
   return action.type === "advance"
-    ? { ...current, count: current.count + 1 }
+    ? {
+        ...current,
+        count: current.count + 1,
+      }
     : current;
 }
 
 describe("observeStore", () => {
   test("applies nested dispatch updates in order without reverting the UI", () => {
-    const store = createStore(stepReducer);
+    const store = configureStore({ reducer: stepReducer });
     const rendered: number[] = [];
 
     const unsubscribe = observeStore(store, [
@@ -31,7 +37,10 @@ describe("observeStore", () => {
         onChange: (step) => {
           // A callback may trigger a synchronous Redux dispatch.
           if (step === 1) {
-            store.dispatch({ type: "advance", step: 2 });
+            store.dispatch({
+              type: "advance",
+              step: 2,
+            });
           }
         },
       },
@@ -43,7 +52,10 @@ describe("observeStore", () => {
       },
     ]);
 
-    store.dispatch({ type: "advance", step: 1 });
+    store.dispatch({
+      type: "advance",
+      step: 1,
+    });
 
     expect(store.getState().step).toBe(2);
     expect(rendered).toEqual([0, 1, 2]);
@@ -52,7 +64,7 @@ describe("observeStore", () => {
   });
 
   test("skips unchanged selectors", () => {
-    const store = createStore(counterReducer);
+    const store = configureStore({ reducer: counterReducer });
     const updates: string[] = [];
 
     const unsubscribe = observeStore(store, [

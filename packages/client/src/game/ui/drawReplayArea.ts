@@ -1,43 +1,107 @@
 import Konva from "konva";
-import { getCanvasColors } from "../../theme";
-import { globals } from "./UIGlobals";
-import * as analysis from "./analysis";
-import { Button } from "./controls/Button";
-import { EnterHypoButton } from "./controls/EnterHypoButton";
-import { SharedTurnsButton } from "./controls/SharedTurnsButton";
-import { Shuttle } from "./controls/Shuttle";
-import * as hypothetical from "./hypothetical";
-import { initKonvaTooltips } from "./konvaTooltips";
-import * as replay from "./replay";
-import { getReplayButtonRow } from "./replayButtonRow";
+import { globals as lobbyGlobals } from "../../Globals.ts";
+import { store } from "../../store.ts";
+import { getCanvasColors } from "../../theme.ts";
+import * as hypothetical from "../hypothetical.ts";
+import { globals } from "./UiGlobals.ts";
+import * as analysis from "./analysis.ts";
+import { BGA_ACTION_LOG, THIN_STROKE_WIDTH } from "./constants.ts";
+import { Button } from "./controls/Button.ts";
+import { EnterHypoButton } from "./controls/EnterHypoButton.ts";
+import { SharedTurnsButton } from "./controls/SharedTurnsButton.ts";
+import { Shuttle } from "./controls/Shuttle.ts";
+import { initKonvaTooltips } from "./konvaTooltips.ts";
+import * as replay from "./replay.ts";
+import { getReplayButtonRow } from "./replayButtonRow.ts";
 
-export function drawReplayArea(winW: number, winH: number): void {
-  const replayAreaValues = {
+/** Clicks on the replay buttons closer together than this are treated as accidental. */
+const ACCIDENTAL_DOUBLE_CLICK_MILLISECONDS = 50;
+
+/** Blue, for the normal replay shuttle. */
+const REPLAY_SHUTTLE_COLOR = "#0000cc";
+
+/** The row of replay buttons: back to the start, back, forward, and forward to the end. */
+const NUM_REPLAY_BUTTONS = 4;
+
+/** The replay area, in fractions of the stage. */
+const REPLAY_AREA = {
+  keldon: {
     x: 0.15,
     y: 0.51,
     w: 0.5,
-  };
-  if (!globals.lobby.settings.keldonMode) {
-    replayAreaValues.x = 0.01;
-    replayAreaValues.y = 0.49;
-    replayAreaValues.w = 0.4;
-  }
+  },
+  /** In the BGA layout, the replay area lines up with the action log above it. */
+  bga: {
+    x: BGA_ACTION_LOG.x,
+    y: 0.49,
+    w: BGA_ACTION_LOG.w,
+  },
+  h: 0.27,
+} as const;
+
+/** The thin black bar that the replay shuttles slide on, in fractions of the stage. */
+const REPLAY_BAR = {
+  /** In the Keldon layout, the bar is inset by this much from both sides of the replay area. */
+  keldonInsetX: 0.01,
+  y: 0.0425,
+  h: 0.01,
+  /** In fractions of the stage height. */
+  cornerRadius: 0.005,
+  /**
+   * The height of the invisible rectangle over the bar, which is taller than the bar so that it is
+   * easier to click on.
+   */
+  clickH: 0.07,
+} as const;
+
+/** The replay shuttles, in fractions of the stage. */
+const REPLAY_SHUTTLE = {
+  w: 0.03,
+  h: 0.03,
+  /** In fractions of the stage width. */
+  cornerRadius: 0.01,
+} as const;
+
+/** The row of replay buttons, in fractions of the stage. */
+const REPLAY_BUTTON = {
+  keldonX: 0.1,
+  bgaX: 0.05,
+  y: 0.07,
+  w: 0.06,
+  h: 0.08,
+  spacing: 0.02,
+} as const;
+
+/** The row of wider buttons below the replay buttons, in fractions of the stage. */
+const REPLAY_BOTTOM_BUTTON = {
+  y: 0.17,
+  h: 0.06,
+  /**
+   * How much wider each button is than two replay buttons and the gap between them. The left-hand
+   * position sticks out by this much past the left-most replay button.
+   */
+  extraW: 0.04,
+} as const;
+
+export function drawReplayArea(winW: number, winH: number): void {
+  const { keldonMode } = store.getState().session.settings;
+  const replayAreaValues = keldonMode ? REPLAY_AREA.keldon : REPLAY_AREA.bga;
 
   globals.elements.replayArea = new Konva.Group({
     x: replayAreaValues.x * winW,
     y: replayAreaValues.y * winH,
     width: replayAreaValues.w * winW,
-    height: 0.27 * winH,
+    height: REPLAY_AREA.h * winH,
     visible: false,
-    listening: false,
   });
 
-  // The thin black rectangle that the replay slider slides on.
+  // The thin black rectangle that the replay slider slides on. In the Keldon layout, it is inset
+  // from both sides of the replay area.
+  const replayBarInset = keldonMode ? REPLAY_BAR.keldonInsetX : 0;
   const replayBarValues = {
-    x: globals.lobby.settings.keldonMode ? 0.01 : 0,
-    y: 0.0425,
-    w: globals.lobby.settings.keldonMode ? 0.481 : replayAreaValues.w,
-    h: 0.01,
+    ...REPLAY_BAR,
+    x: replayBarInset,
+    w: replayAreaValues.w - 2 * replayBarInset,
   };
   globals.elements.replayBar = new Konva.Rect({
     x: replayBarValues.x * winW,
@@ -45,7 +109,7 @@ export function drawReplayArea(winW: number, winH: number): void {
     width: replayBarValues.w * winW,
     height: replayBarValues.h * winH,
     fill: "black",
-    cornerRadius: 0.005 * winH,
+    cornerRadius: replayBarValues.cornerRadius * winH,
     listening: false,
   });
   globals.elements.replayArea.add(globals.elements.replayBar);
@@ -56,7 +120,7 @@ export function drawReplayArea(winW: number, winH: number): void {
     x: replayBarValues.x * winW,
     y: 0,
     width: replayBarValues.w * winW,
-    height: 0.07 * winH,
+    height: REPLAY_BAR.clickH * winH,
     listening: true,
   });
   replayBarClickRect.on("click tap", replay.barClick);
@@ -64,11 +128,9 @@ export function drawReplayArea(winW: number, winH: number): void {
   globals.elements.replayArea.add(replayBarClickRect);
 
   const shuttleValues = {
-    w: 0.03,
-    h: 0.03,
-    cornerRadius: 0.01,
+    ...REPLAY_SHUTTLE,
     stroke: "black",
-    strokeWidth: 0.001_217,
+    strokeWidth: THIN_STROKE_WIDTH,
   };
 
   // The shared (white) replay shuttle. (We want it to be behind the normal replay shuttle, so we
@@ -78,17 +140,17 @@ export function drawReplayArea(winW: number, winH: number): void {
     height: shuttleValues.h * winH,
     offset: {
       x: (shuttleValues.w / 2) * winW,
-      y: (shuttleValues.h / 2) * winW,
+      y: (shuttleValues.h / 2) * winH,
     },
     cornerRadius: shuttleValues.cornerRadius * winW,
     fill: getCanvasColors().replayShuttle,
     stroke: shuttleValues.stroke,
-    strokeWidth: shuttleValues.strokeWidth * winW,
+    strokeWidth: shuttleValues.strokeWidth * winH,
     visible: false,
     listening: true,
   });
   globals.elements.replayShuttleShared.on("click tap", () => {
-    if (globals.state.replay.shared !== null) {
+    if (globals.state.replay.shared !== undefined) {
       replay.goToSegment(globals.state.replay.shared.segment, true);
     }
   });
@@ -100,25 +162,25 @@ export function drawReplayArea(winW: number, winH: number): void {
     height: shuttleValues.h * winH,
     offset: {
       x: (shuttleValues.w / 2) * winW,
-      y: (shuttleValues.h / 2) * winW,
+      y: (shuttleValues.h / 2) * winH,
     },
     cornerRadius: shuttleValues.cornerRadius * winW,
-    fill: "#0000cc", // Blue
+    fill: REPLAY_SHUTTLE_COLOR,
     draggable: true,
     dragBoundFunc: replay.shuttleDragBound,
     stroke: shuttleValues.stroke,
-    strokeWidth: shuttleValues.strokeWidth * winW,
+    strokeWidth: shuttleValues.strokeWidth * winH,
     listening: true,
   });
   globals.elements.replayShuttle.on("dragmove", replay.shuttleDragMove);
   globals.elements.replayShuttle.on("wheel", replay.barScroll);
   globals.elements.replayArea.add(globals.elements.replayShuttle);
 
-  const row = getReplayButtonRow(globals.lobby.settings.keldonMode, false);
+  const row = getReplayButtonRow(keldonMode, false);
   const replayButtonValues = {
+    ...REPLAY_BUTTON,
     x: row.x,
     w: row.buttonWidth,
-    h: 0.08,
     spacing: row.spacing,
   };
 
@@ -129,96 +191,94 @@ export function drawReplayArea(winW: number, winH: number): void {
     globals.elements.replayBackFullButton = new Button(
       {
         x: x * winW,
-        y: 0.07 * winH,
+        y: replayButtonValues.y * winH,
         width: replayButtonValues.w * winW,
         height: replayButtonValues.h * winH,
         listening: true,
       },
       [
-        globals.imageLoader!.get("replay-back-full"),
-        globals.imageLoader!.get("replay-back-full-disabled"),
+        lobbyGlobals.imageLoader.get("replay-back-full"),
+        lobbyGlobals.imageLoader.get("replay-back-full-disabled"),
       ],
     );
     globals.elements.replayBackFullButton.on("click tap", replay.backFull);
-    globals.elements.replayArea.add(
-      globals.elements.replayBackFullButton as unknown as Konva.Group,
-    );
+    globals.elements.replayArea.add(globals.elements.replayBackFullButton);
 
     // Go back one turn (the second left-most button).
     x += replayButtonValues.w + replayButtonValues.spacing;
     globals.elements.replayBackButton = new Button(
       {
         x: x * winW,
-        y: 0.07 * winH,
+        y: replayButtonValues.y * winH,
         width: replayButtonValues.w * winW,
         height: replayButtonValues.h * winH,
       },
       [
-        globals.imageLoader!.get("replay-back"),
-        globals.imageLoader!.get("replay-back-disabled"),
+        lobbyGlobals.imageLoader.get("replay-back"),
+        lobbyGlobals.imageLoader.get("replay-back-disabled"),
       ],
     );
     globals.elements.replayBackButton.on("click tap", () => {
       // Prevent accidental double clicks.
-      if (Date.now() - globals.UIClickTime < 50) {
+      if (
+        Date.now() - globals.uiClickTime
+        < ACCIDENTAL_DOUBLE_CLICK_MILLISECONDS
+      ) {
         return;
       }
-      globals.UIClickTime = Date.now();
+      globals.uiClickTime = Date.now();
 
       replay.back();
     });
-    globals.elements.replayArea.add(
-      globals.elements.replayBackButton as unknown as Konva.Group,
-    );
+    globals.elements.replayArea.add(globals.elements.replayBackButton);
 
     // Go forward one turn (the second right-most button).
     x += replayButtonValues.w + replayButtonValues.spacing;
     globals.elements.replayForwardButton = new Button(
       {
         x: x * winW,
-        y: 0.07 * winH,
+        y: replayButtonValues.y * winH,
         width: replayButtonValues.w * winW,
         height: replayButtonValues.h * winH,
       },
       [
-        globals.imageLoader!.get("replay-forward"),
-        globals.imageLoader!.get("replay-forward-disabled"),
+        lobbyGlobals.imageLoader.get("replay-forward"),
+        lobbyGlobals.imageLoader.get("replay-forward-disabled"),
       ],
     );
     globals.elements.replayForwardButton.on("click tap", () => {
       // Prevent accidental double clicks.
-      if (Date.now() - globals.UIClickTime < 50) {
+      if (
+        Date.now() - globals.uiClickTime
+        < ACCIDENTAL_DOUBLE_CLICK_MILLISECONDS
+      ) {
         return;
       }
-      globals.UIClickTime = Date.now();
+      globals.uiClickTime = Date.now();
 
       replay.forward();
     });
-    globals.elements.replayArea.add(
-      globals.elements.replayForwardButton as unknown as Konva.Group,
-    );
+    globals.elements.replayArea.add(globals.elements.replayForwardButton);
 
     // Go forward to the end (the right-most button).
     x += replayButtonValues.w + replayButtonValues.spacing;
     globals.elements.replayForwardFullButton = new Button(
       {
         x: x * winW,
-        y: 0.07 * winH,
+        y: replayButtonValues.y * winH,
         width: replayButtonValues.w * winW,
         height: replayButtonValues.h * winH,
       },
       [
-        globals.imageLoader!.get("replay-forward-full"),
-        globals.imageLoader!.get("replay-forward-full-disabled"),
+        lobbyGlobals.imageLoader.get("replay-forward-full"),
+        lobbyGlobals.imageLoader.get("replay-forward-full-disabled"),
       ],
     );
     globals.elements.replayForwardFullButton.on(
       "click tap",
       replay.forwardFull,
     );
-    globals.elements.replayArea.add(
-      globals.elements.replayForwardFullButton as unknown as Konva.Group,
-    );
+    globals.elements.replayArea.add(globals.elements.replayForwardFullButton);
 
     // The bot analysis' buttons for the previous and the next move that the bot would have played
     // differently. They are only shown once there is an analysis (see "analysis.ts"), which also
@@ -229,7 +289,7 @@ export function drawReplayArea(winW: number, winH: number): void {
     ] as const) {
       const button = new Button({
         x: 0,
-        y: 0.07 * winH,
+        y: replayButtonValues.y * winH,
         width: replayButtonValues.w * winW,
         height: replayButtonValues.h * winH,
         text,
@@ -240,24 +300,27 @@ export function drawReplayArea(winW: number, winH: number): void {
         analysis.goToFlagged(direction);
       });
       globals.elements[name] = button;
-      globals.elements.replayArea.add(button as unknown as Konva.Group);
+      globals.elements.replayArea.add(button);
     }
   }
 
-  const extra = 0.04;
-  const totalWidth = replayButtonValues.w * 4 + replayButtonValues.spacing * 3;
+  const extra = REPLAY_BOTTOM_BUTTON.extraW;
+  const totalWidth =
+    replayButtonValues.w * NUM_REPLAY_BUTTONS
+    + replayButtonValues.spacing * (NUM_REPLAY_BUTTONS - 1);
   // The bot analysis' button is a small square between the two buttons on the bottom row, so those
   // are a little narrower than two of the buttons above them side by side. Together they take the
   // same width as before.
   const analysisButtonWidth = 0.035;
   const analysisButtonGap = 0.005;
   const bottomRowWidth =
-    2 * (replayButtonValues.w * 2 + replayButtonValues.spacing + extra)
+    2
+      * (replayButtonValues.w * 2 + replayButtonValues.spacing + extra)
     + replayButtonValues.spacing;
   const bottomButtonValues = {
-    y: 0.17,
+    y: REPLAY_BOTTOM_BUTTON.y,
     w: (bottomRowWidth - analysisButtonWidth - 2 * analysisButtonGap) / 2,
-    h: 0.06,
+    h: REPLAY_BOTTOM_BUTTON.h,
   };
   const bottomLeftReplayButtonX = replayButtonValues.x - extra;
   const bottomCenterReplayButtonX =
@@ -272,14 +335,12 @@ export function drawReplayArea(winW: number, winH: number): void {
     x: bottomRightReplayButtonX * winW,
     y: bottomButtonValues.y * winH,
     width: bottomButtonValues.w * winW,
-    height: replayButtonValues.w * winH,
+    height: bottomButtonValues.h * winH,
     text: "Exit Replay",
     visible: !globals.state.finished,
   });
   globals.elements.replayExitButton.on("click tap", replay.exitButton);
-  globals.elements.replayArea.add(
-    globals.elements.replayExitButton as unknown as Konva.Group,
-  );
+  globals.elements.replayArea.add(globals.elements.replayExitButton);
 
   // The next two buttons will be moved to the left for replay leaders and centered for
   // non-replay-leaders.
@@ -307,9 +368,7 @@ export function drawReplayArea(winW: number, winH: number): void {
   globals.elements.pauseSharedTurnsButton.setCenter = setCenter;
   globals.elements.pauseSharedTurnsButton.setCenter(); // Set it to be center by default
   globals.elements.pauseSharedTurnsButton.setLeft = setLeft;
-  globals.elements.replayArea.add(
-    globals.elements.pauseSharedTurnsButton as unknown as Konva.Group,
-  );
+  globals.elements.replayArea.add(globals.elements.pauseSharedTurnsButton);
 
   // The "Use Shared Turns" button. (This will be shown when the client receives the "replayLeader"
   // command.)
@@ -327,9 +386,7 @@ export function drawReplayArea(winW: number, winH: number): void {
   globals.elements.useSharedTurnsButton.setCenter = setCenter;
   globals.elements.useSharedTurnsButton.setCenter(); // Set it to be center by default
   globals.elements.useSharedTurnsButton.setLeft = setLeft;
-  globals.elements.replayArea.add(
-    globals.elements.useSharedTurnsButton as unknown as Konva.Group,
-  );
+  globals.elements.replayArea.add(globals.elements.useSharedTurnsButton);
 
   // The "Enter Hypothetical" button.
   globals.elements.enterHypoButton = new EnterHypoButton({
@@ -342,9 +399,7 @@ export function drawReplayArea(winW: number, winH: number): void {
     "click tap",
     hypothetical.startHypothetical,
   );
-  globals.elements.replayArea.add(
-    globals.elements.enterHypoButton as unknown as Konva.Group,
-  );
+  globals.elements.replayArea.add(globals.elements.enterHypoButton);
 
   // This button will be moved to the left during in-game replay, centered during private replay,
   // and right during shared replay.
@@ -385,7 +440,7 @@ export function drawReplayArea(winW: number, winH: number): void {
     "Bot analysis: the bot goes through this game in your browser and marks every move it would have played differently.";
   initKonvaTooltips(analysisButton, true, false);
   globals.elements.analysisButton = analysisButton;
-  globals.elements.replayArea.add(analysisButton as unknown as Konva.Group);
+  globals.elements.replayArea.add(analysisButton);
 
   // The robot follows the "Enter Hypothetical" button, which moves depending on the kind of replay.
   // It goes on the left of it (between it and the "Use Shared Turns" button in a shared replay), so

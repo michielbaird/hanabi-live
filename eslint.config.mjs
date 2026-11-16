@@ -11,127 +11,73 @@ export const hanabiConfigBase = defineConfig(
 
   {
     rules: {
-      // Insert changed or disabled rules here, if necessary.
-      // @template-customization-start
+      // Properties follow a meaningful order, such as `x, y, w, h` for geometry, not alphabetical
+      // order.
+      "complete/sort-objects": "off",
 
-      /**
-       * Documentation:
-       * https://eslint.org/docs/latest/rules/func-style
-       *
-       * Enforce the "normal" function style throughout the entire project.
-       */
-      "func-style": ["error", "declaration"],
-
-      /**
-       * Documentation:
-       * https://typescript-eslint.io/rules/prefer-enum-initializers/
-       *
-       * We intentionally number enums to save bandwidth between the client and server. Number enums
-       * are almost always safe with the `complete/strict-enums` rule.
-       */
-      "@typescript-eslint/prefer-enum-initializers": "off",
-
-      /**
-       * Documentation:
-       * TODO
-       *
-       * We use number enums to save bandwidth between client and server. Number enums are almost
-       * always safe with the `isaacscript/strict-enums` rule.
-       */
-      "complete/no-number-enums": "off",
-
-      // State interfaces and third-party declarations intentionally contain mutable fields.
+      // The rule checks types deeply, so it rejects branded numbers, Zod-inferred types, and the
+      // Window and Konva declarations, which must be mutable.
       "complete/type-declaration-immutability": "off",
 
-      // Application entry points initialize shared state and register handlers at module scope.
-      "unicorn/no-top-level-side-effects": "off",
-      "unicorn/no-top-level-assignment-in-function": "off",
-      "unicorn/no-global-object-property-assignment": "off",
+      // Enforce the "normal" function style throughout the entire project.
+      "func-style": ["error", "declaration"],
 
-      // Preserve compatibility with browsers without the newest collection and encoding APIs.
-      "unicorn/prefer-iterator-to-array": "off",
-      "unicorn/prefer-set-methods": "off",
-      "unicorn/prefer-uint8array-base64": "off",
+      // The "v" flag needs Safari 17, but Vite's default build target still includes Safari 16.4.
+      // iOS 17 dropped the iPhone 8, iPhone X, and first iPad Pro, so they stay on Safari 16.
       "regexp/require-unicode-sets-regexp": "off",
 
-      // Keep domain-specific property ordering and let Prettier format object literals.
-      "complete/sort-objects": "off",
-      "complete/sort-destructured-properties": "off",
-      "complete/consistent-object-braces": "off",
+      // Modules keep their state in top-level variables that functions set. Most of this state
+      // exists once per page: the WebSocket connection and its timers, the open modal, the chat
+      // input, and the React roots. A class would not make it safer, because the page would still
+      // have one instance. Keep the state of a game in the store, or reset it in `closeGame`, so
+      // that it does not carry into the next game.
+      "unicorn/no-top-level-assignment-in-function": "off",
 
-      // Preserve the existing grouping of fractional drawing coordinates.
-      "unicorn/numeric-separators-style": [
-        "error",
-        { number: { fractionGroupLength: 3 } },
-      ],
-
-      // Keep explicit branches and nearby declarations in the game rules and event handlers.
-      "unicorn/consistent-destructuring": "off",
-      "unicorn/no-declarations-before-early-exit": "off",
-      "unicorn/prefer-early-return": "off",
-      "unicorn/prefer-continue": "off",
-      "unicorn/prefer-ternary": "off",
-      // Factoring ternaries can erase the correlation between discriminated union members.
-      "unicorn/prefer-minimal-ternary": "off",
-      "unicorn/prefer-simple-condition-first": "off",
-      "unicorn/prefer-logical-operator-over-ternary": "off",
-      "unicorn/try-complexity": "off",
-      "unicorn/no-duplicate-if-branches": "off",
-      "unicorn/no-subtraction-comparison": "off",
-
-      // Promise callbacks are used for fire-and-forget operations and CommonJS entry points.
-      "unicorn/prefer-await": "off",
-
-      // Class members, namespace imports, and constructor expressions follow the existing UI style.
-      "unicorn/consistent-class-member-order": "off",
-      "unicorn/no-non-function-verb-prefix": "off",
-      "unicorn/no-unreadable-new-expression": "off",
+      // This flags loops over common expressions, such as `eRange(n + 1)` and
+      // `CHAT_EMOTES[category]`, which a temporary variable would not make clearer.
       "unicorn/no-unreadable-for-of-expression": "off",
 
-      // Ordered hands and action queues intentionally insert and remove their first element.
-      "unicorn/no-array-front-mutation": "off",
+      // This flags common one-line idioms, such as `new Set(items).size`, which a temporary
+      // variable would not make clearer.
+      "unicorn/no-unreadable-new-expression": "off",
 
-      // The client uses positional captures in URL, chat, and note parsers.
-      "regexp/prefer-named-capture-group": "off",
-      // Unicode code point escapes are enforced by Unicorn, including values below 256.
-      "regexp/hexadecimal-escape": "off",
+      // Event handlers, timers, and other functions that do not wait start async work with
+      // `.then()` and `.catch()`. With `await`, each one would need an async wrapper that nothing
+      // waits for.
+      "unicorn/prefer-await": "off",
 
-      // BEGIN ESM EXCEPTIONS
+      // `Iterator.prototype.toArray` needs Safari 18.4, but Vite's default build target still
+      // includes Safari 16.4.
+      "unicorn/prefer-iterator-to-array": "off",
 
-      /**
-       * Documentation:
-       * https://github.com/mysticatea/eslint-plugin-node/blob/master/docs/rules/file-extension-in-import.md
-       *
-       * Keep this rule disabled until the project can be moved to ESM (which is contingent upon the
-       * dependencies being up to date).
-       */
-      "n/file-extension-in-import": "off",
+      // The `Set` methods, such as `union`, need Safari 17, but Vite's default build target still
+      // includes Safari 16.4.
+      "unicorn/prefer-set-methods": "off",
 
-      /**
-       * Documentation:
-       * https://github.com/sindresorhus/eslint-plugin-unicorn/blob/main/docs/rules/prefer-module.md
-       *
-       * Keep this rule disabled until the project can be moved to ESM (which is contingent upon the
-       * dependencies being up to date).
-       */
-      "unicorn/prefer-module": "off",
+      // `Uint8Array.fromBase64` and `toBase64` need Chrome 140 and Safari 18.2, but Vite's default
+      // build target still includes Chrome 111 and Safari 16.4.
+      "unicorn/prefer-uint8array-base64": "off",
 
-      /**
-       * Documentation:
-       * https://github.com/sindresorhus/eslint-plugin-unicorn/blob/main/docs/rules/prefer-top-level-await.md
-       *
-       * Keep this rule disabled until the project can be moved to ESM (which is contingent upon the
-       * dependencies being up to date).
-       */
-      "unicorn/prefer-top-level-await": "off",
-
-      // END ESM EXCEPTIONS
-
-      // @template-customization-end
+      // This flags any branch in a `try` block, even a ternary for the value that it returns, and
+      // the `try`/`finally` blocks that make sure that cleanup happens after a whole test.
+      "unicorn/try-complexity": "off",
     },
   },
 
-  // @template-customization-start
+  // The wire contracts generated from "server/protocol" keep the line breaks of their Rust doc
+  // comments and the generator's object layout, and their enums have the values that the wire
+  // sends.
+  {
+    files: ["**/src/generated/**"],
+    rules: {
+      "complete/consistent-enum-values": "off",
+      "complete/consistent-object-braces": "off",
+      "complete/format-jsdoc-comments": "off",
+
+      // Names follow the Rust types, such as "CreateTableSettings".
+      "unicorn/no-non-function-verb-prefix": "off",
+    },
+  },
 
   {
     ignores: [
@@ -139,8 +85,6 @@ export const hanabiConfigBase = defineConfig(
       "packages/game/docs/assets/main.js",
     ],
   },
-
-  // @template-customization-end
 );
 
 export default defineConfig(...hanabiConfigBase);

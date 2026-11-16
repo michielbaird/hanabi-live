@@ -1,7 +1,7 @@
 import type { Tuple } from "complete-common";
-import type { NumPlayers } from "../types/NumPlayers";
-import type { PlayerIndex } from "../types/PlayerIndex";
-import type { Options } from "./Options";
+import type { NumPlayers } from "../types/NumPlayers.ts";
+import type { PlayerIndex } from "../types/PlayerIndex.ts";
+import type { Options } from "./Options.ts";
 
 /** This is for data that does not change once a game starts. */
 export interface GameMetadata {
@@ -10,13 +10,17 @@ export interface GameMetadata {
   readonly playerNames: Readonly<Tuple<string, NumPlayers>>;
 
   /**
-   * If in a game, equal to the player index that we correspond to. If spectating an ongoing game or
-   * a replay, equal to the player index that we are observing from.
+   * Our seat: the one that we play in, the one that we shadow, or, in a replay, the one that we
+   * played in. Absent when we have none, such as when we spectate without shadowing. Then we see
+   * every card.
    */
-  readonly ourPlayerIndex: PlayerIndex;
+  readonly ourPlayerIndex: PlayerIndex | undefined;
 
-  readonly characterAssignments: Readonly<Tuple<number | null, NumPlayers>>;
-  readonly characterMetadata: Readonly<Tuple<number, NumPlayers>>;
+  readonly characterAssignments: Readonly<
+    Tuple<number | undefined, NumPlayers>
+  >;
+  /** Absent for a player whose character uses no metadata. */
+  readonly characterMetadata: Readonly<Tuple<number | undefined, NumPlayers>>;
 
   /** The minimum efficiency required in order to get a perfect score in the chosen variant. */
   readonly minEfficiency: number;
@@ -24,6 +28,7 @@ export interface GameMetadata {
   /** Whether or not this is considered a "hard" variant by the H-Group. */
   readonly hardVariant: boolean;
 
-  readonly hasCustomSeed: boolean;
-  readonly seed: string;
+  readonly customDeal: boolean;
+  /** Absent for a game with its own deck instead of a seed, such as an imported one. */
+  readonly seed: string | undefined;
 }

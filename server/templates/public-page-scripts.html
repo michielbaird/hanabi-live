@@ -1,0 +1,11 @@
+{% if page == "seed" %}
+<script src="/public/js/lib/chart.min.js"></script>
+<script src="/public/js/lib/chartjs-plugin-datalabels.min.js"></script>
+{% endif %} {% if isDev %} {% include "vite-dev.html" %}
+<script
+  type="module"
+  src="http://localhost:5173/src/publicPages/index.tsx"
+></script>
+{% else %}
+<script src="/public/js/bundles/public-pages.min.js?{{ version }}"></script>
+{% endif %}

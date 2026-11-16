@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+
+# Get the directory of this script:
+# https://stackoverflow.com/questions/59895/getting-the-source-directory-of-a-bash-script-from-within
+DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &> /dev/null && pwd)
+
+# Import the localhost port.
+# shellcheck source=../lib/env.sh
+source "$DIR/../lib/env.sh"
+if [[ -z ${LOCALHOST_PORT-} ]]; then
+  LOCALHOST_PORT=8081
+fi
+
+function admin_request {
+  # Omit --fail to preserve HTTP error bodies; check the status below for a nonzero exit.
+  local response status
+  if response=$(curl --silent --show-error --location --write-out $'\n%{http_code}' "$@"); then
+    status=${response##*$'\n'}
+    printf '%s\n' "${response%$'\n'*}"
+    if ((status >= 400)); then
+      printf 'Admin request failed with HTTP %s.\n' "$status" >&2
+      return 22
+    fi
+  else
+    return "$?"
+  fi
+}
+
+function admin_command {
+  if [[ $# -ne 1 ]]; then
+    echo "usage: admin_command [command]"
+    exit 1
+  fi
+
+  # Perform a GET request.
+  admin_request "http://localhost:$LOCALHOST_PORT/$1"
+}
+
+function admin_command_post {
+  if [[ $# -ne 2 ]]; then
+    echo "usage: admin_command_post [command] [data]"
+    exit 1
+  fi
+
+  # Perform a POST request (since we include the "data" flag).
+  admin_request "http://localhost:$LOCALHOST_PORT/$1" --data "$2"
+}

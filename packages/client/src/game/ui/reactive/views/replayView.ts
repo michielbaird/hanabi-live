@@ -1,32 +1,30 @@
-import type { Spectator } from "@hanabi-live/data";
 import Konva from "konva";
-import * as tooltips from "../../../../tooltips";
-import { escapeHtml } from "../../../../utils";
-import { ReplayActionType } from "../../../types/ReplayActionType";
-import * as analysis from "../../analysis";
-import * as ourHand from "../../ourHand";
-import * as replay from "../../replay";
-import * as timer from "../../timer";
-import { globals } from "../../UIGlobals";
-import { toggleZen } from "../../zen";
-import * as cluesView from "./cluesView";
+import * as tooltips from "../../../../tooltips.ts";
+import { escapeHtml } from "../../../../utils.ts";
+import type { SharedReplayState } from "../../../types/SharedReplayState.ts";
+import type { State } from "../../../types/State.ts";
+import * as analysis from "../../analysis.ts";
+import * as replay from "../../replay.ts";
+import * as restart from "../../restart.ts";
+import { globals } from "../../UiGlobals.ts";
+import { toggleZen } from "../../zen.ts";
+import * as cluesView from "./cluesView.ts";
+
+/** How long the shared replay forward and backward indicators take to fade out. */
+const SHARED_REPLAY_INDICATOR_FADE_SECONDS = 1;
 
 export function onActiveChanged(active: boolean): void {
   const { replayArea } = globals.elements;
-  if (replayArea === null) {
+  if (replayArea === undefined) {
     return;
   }
 
   if (active) {
     // Visibility is handled by hypotheticalView.shouldShowReplayAreaChanged.
     replay.adjustShuttles(true); // We want it to immediately snap to the end
-  } else if (globals.state.premove !== null) {
-    // We are exiting a replay.
-    globals.elements.premoveCancelButton?.show();
   }
 
   cluesView.refreshArrows(active);
-  ourHand.checkSetDraggableAll();
   analysis.refresh();
 
   globals.layers.UI.batchDraw();
@@ -35,18 +33,18 @@ export function onActiveChanged(active: boolean): void {
 export function onSegmentChanged(
   data: {
     active: boolean;
-    replaySegment: number | null;
-    ongoingGameSegment: number | null;
+    replaySegment: number | undefined;
+    ongoingGameSegment: number | undefined;
   },
   previousData:
     | {
         active: boolean;
-        replaySegment: number | null;
-        ongoingGameSegment: number | null;
+        replaySegment: number | undefined;
+        ongoingGameSegment: number | undefined;
       }
     | undefined,
 ): void {
-  if (data.replaySegment === null) {
+  if (data.replaySegment === undefined) {
     return;
   }
 
@@ -60,12 +58,14 @@ export function onSegmentChanged(
   // If we are on the last segment, disable the forward replay buttons.
   const onFinalSegment = data.replaySegment !== data.ongoingGameSegment;
   globals.elements.replayForwardButton?.setEnabled(onFinalSegment);
-  globals.elements.replayForwardFullButton?.setEnabled(onFinalSegment);
+  globals.elements.replayForwardFullButton?.setEnabled(
+    onFinalSegment && !replay.isSpoilerFree(),
+  );
 
   if (
     previousData === undefined
     || !data.active
-    || data.ongoingGameSegment === null
+    || data.ongoingGameSegment === undefined
   ) {
     return;
   }
@@ -109,28 +109,16 @@ export function onSharedSegmentChanged(
     return;
   }
 
-  if (data.useSharedSegments) {
-    if (data.amLeader === true && previousData !== undefined) {
-      // Tell the rest of the spectators to go to the turn that we are now on.
-      globals.lobby.conn!.send("replayAction", {
-        tableID: globals.lobby.tableID,
-        type: ReplayActionType.Segment,
-        segment: data.sharedSegment,
-      });
-    } else {
-      // Go to the turn where the shared replay leader is at. (We set force to true in case a
-      // hypothetical just started and we are being dragged to the starting turn of the
-      // hypothetical.)
-      replay.goToSegment(data.sharedSegment, false, true);
-
-      if (
-        previousData !== undefined
-        && previousData.sharedSegment !== undefined
-        && data.useSharedSegments === previousData.useSharedSegments
-      ) {
-        playSharedReplayTween(data.sharedSegment, previousData.sharedSegment);
-      }
-    }
+  // "gameObservers.ts" sends the leader's turn and takes the spectators to it. When the leader
+  // moves, the spectators see which way.
+  if (
+    previousData !== undefined
+    && data.useSharedSegments
+    && data.amLeader !== true
+    && previousData.sharedSegment !== undefined
+    && data.useSharedSegments === previousData.useSharedSegments
+  ) {
+    playSharedReplayTween(data.sharedSegment, previousData.sharedSegment);
   }
 
   globals.elements.pauseSharedTurnsButton?.visible(data.useSharedSegments);
@@ -171,51 +159,63 @@ function playSharedReplayTween(
   sharedSegment: number,
   previousSharedSegment: number,
 ) {
-  const duration = 1;
   const opacity = 0;
   if (sharedSegment < previousSharedSegment) {
-    globals.elements.sharedReplayBackward?.show();
-    globals.elements.sharedReplayBackward?.opacity(1);
-    if (globals.elements.sharedReplayBackwardTween !== null) {
+    const indicator = globals.elements.sharedReplayBackward;
+    if (indicator === undefined) {
+      return;
+    }
+    indicator.show();
+    indicator.opacity(1);
+    if (globals.elements.sharedReplayBackwardTween !== undefined) {
       globals.elements.sharedReplayBackwardTween.destroy();
-      globals.elements.sharedReplayBackwardTween = null;
+      globals.elements.sharedReplayBackwardTween = undefined;
     }
     globals.elements.sharedReplayBackwardTween = new Konva.Tween({
-      node: globals.elements.sharedReplayBackward,
-      duration,
+      node: indicator,
+      duration: SHARED_REPLAY_INDICATOR_FADE_SECONDS,
       opacity,
     }).play();
   } else if (sharedSegment > previousSharedSegment) {
-    globals.elements.sharedReplayForward?.show();
-    globals.elements.sharedReplayForward?.opacity(1);
-    if (globals.elements.sharedReplayForwardTween !== null) {
+    const indicator = globals.elements.sharedReplayForward;
+    if (indicator === undefined) {
+      return;
+    }
+    indicator.show();
+    indicator.opacity(1);
+    if (globals.elements.sharedReplayForwardTween !== undefined) {
       globals.elements.sharedReplayForwardTween.destroy();
-      globals.elements.sharedReplayForwardTween = null;
+      globals.elements.sharedReplayForwardTween = undefined;
     }
     globals.elements.sharedReplayForwardTween = new Konva.Tween({
-      node: globals.elements.sharedReplayForward,
-      duration,
+      node: indicator,
+      duration: SHARED_REPLAY_INDICATOR_FADE_SECONDS,
       opacity,
     }).play();
   }
 }
 
-export function onDatabaseIDChanged(databaseID: number | null): void {
-  if (databaseID === null) {
-    return;
+/** The label near the deck: the game's database ID, or nothing while the game is ongoing. */
+export function getGameIdLabel(state: State): string | undefined {
+  if (!state.finished) {
+    return undefined;
   }
 
-  // JSON replays are hard-coded to have a database ID of 0.
-  const text = databaseID === 0 ? "JSON replay" : `ID: ${databaseID}`;
-  globals.elements.gameIDLabel?.text(text);
-  globals.elements.gameIDLabel?.show();
+  return state.replay.gameId === undefined
+    ? "JSON replay"
+    : `ID: ${state.replay.gameId}`;
+}
+
+export function onGameIdLabelChanged(text: string): void {
+  globals.elements.gameIdLabel?.text(text);
+  globals.elements.gameIdLabel?.show();
 
   // Also move the card count label on the deck downwards.
   if (globals.state.visibleState!.cardsRemainingInTheDeck === 0) {
     globals.elements.deck?.nudgeCountDownwards();
   }
 
-  globals.layers.arrow.batchDraw(); // gameIDLabel is on the arrow layer
+  globals.layers.arrow.batchDraw(); // gameIdLabel is on the arrow layer
   globals.layers.card.batchDraw(); // deck is on the card layer
 }
 
@@ -233,7 +233,6 @@ export function onFinishedChanged(
   // If the timers are showing, hide them.
   globals.elements.timer1?.hide();
   globals.elements.timer2?.hide();
-  timer.stop();
 
   // Hide the "Exit Replay" button in the center of the screen, since it is no longer necessary.
   globals.elements.replayExitButton?.hide();
@@ -241,11 +240,12 @@ export function onFinishedChanged(
   // Hide/show some buttons in the bottom-left-hand corner.
   globals.elements.replayButton?.hide();
 
-  // Hide the terminate button and show the 3rd strike UI.
-  if (globals.elements.terminateButton !== null) {
+  // Hide the terminate button and show the last strike UI.
+  if (globals.elements.terminateButton !== undefined) {
     globals.elements.terminateButton.hide();
-    globals.elements.strikeSquares[2]!.show();
-    globals.elements.strikeXs[2]!.show();
+    globals.elements.terminateMenu?.close();
+    globals.elements.strikeSquares.at(-1)!.show();
+    globals.elements.strikeXs.at(-1)!.show();
   }
 
   // Re-draw the deck tooltip. (It will show more information when you are in a replay.)
@@ -258,6 +258,7 @@ export function onFinishedChanged(
     globals.elements.maxScoreNumberLabel?.show();
     globals.elements.playsTextLabel?.hide();
     globals.elements.playsNumberLabel?.hide();
+    globals.elements.holeCounter?.hide();
     for (const label of globals.elements.questionMarkLabels) {
       label.hide();
     }
@@ -285,9 +286,44 @@ export function onSharedLeaderChanged(
   }
 }
 
+/** Shows the leader whether they can restart, and the other players whether they declined. */
+export function onRestartChanged(
+  shared:
+    | Pick<
+        SharedReplayState,
+        "leader" | "amLeader" | "canPlayAgain" | "restartDeclined"
+      >
+    | undefined,
+): void {
+  const { ourUsername, playerNames } = globals.metadata;
+  const amLeader = shared?.amLeader === true;
+  const canPlayAgain = shared?.canPlayAgain === true;
+  const canRestart =
+    shared !== undefined && restart.canRestart(shared, playerNames);
+  // The button stays hidden during a hypothetical (see "hypotheticalView.ts").
+  globals.elements.restartButton?.visible(
+    amLeader && canPlayAgain && globals.state.replay.hypothetical === undefined,
+  );
+
+  const { readyCheckbox } = globals.elements;
+  readyCheckbox?.visible(!amLeader && canPlayAgain);
+  readyCheckbox?.setChecked(
+    shared?.restartDeclined.includes(ourUsername) !== true,
+  );
+
+  const declined = shared === undefined ? [] : restart.declinedPlayers(shared);
+  globals.elements.restartGameButton?.setEnabled(declined.length === 0);
+  globals.elements.restartTableButton?.setEnabled(canRestart);
+  globals.elements.restartText?.text(
+    declined.length === 0 ? "" : `Not ready: ${declined.join(", ")}`,
+  );
+
+  globals.layers.UI.batchDraw();
+  globals.layers.UI2.batchDraw();
+}
+
 export function onSharedAmLeaderChanged(amLeader: boolean): void {
   globals.elements.sharedReplayLeaderCircle?.visible(amLeader);
-  globals.elements.restartButton?.visible(amLeader);
   globals.elements.enterHypoButton?.visible(amLeader);
 
   // Arrange the buttons in the center of the screen in a certain way depending on whether we are
@@ -303,27 +339,21 @@ export function onSharedAmLeaderChanged(amLeader: boolean): void {
   globals.layers.UI.batchDraw();
 }
 
-export function onLeaderOrSpectatorsChanged(data: {
-  leader: string | undefined;
-  spectators: Spectator[];
-}): void {
-  if (data.leader === undefined) {
+export function onLeaderChanged(leader: string | undefined): void {
+  if (leader === undefined) {
     return;
   }
 
-  // Find out if the leader is away.
-  let away = true;
-  for (const spectator of data.spectators) {
-    if (spectator.name === data.leader) {
-      away = false;
-      break;
-    }
-  }
+  tooltips.setContent(
+    "leader",
+    `<strong>Leader:</strong> ${escapeHtml(leader)}`,
+  );
+}
 
-  // Update the tooltip
-  let content = `<strong>Leader:</strong> ${escapeHtml(data.leader)}`;
-  if (away) {
-    content += " (away)";
-  }
-  tooltips.setInstanceContent("#tooltip-leader", content);
+/** Paused spectators can see that the leader is in a hypothetical, and join it. */
+export function onSharedHypotheticalChanged(active: boolean): void {
+  globals.elements.useSharedTurnsButton?.text(
+    active ? "Join Hypothetical" : "Use Shared Turns",
+  );
+  globals.layers.UI.batchDraw();
 }

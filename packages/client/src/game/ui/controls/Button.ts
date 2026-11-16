@@ -1,7 +1,21 @@
-import { assertNotNull } from "complete-common";
+import { assertDefined } from "complete-common";
 import Konva from "konva";
-import { drawLayer } from "../konvaHelpers";
-import { FitText } from "./FitText";
+import type { GameTooltipName } from "../../../tooltips.ts";
+import {
+  BUTTON_CORNER_RADIUS,
+  BUTTON_DISABLED_TEXT_COLOR,
+  BUTTON_HOVER_COLOR,
+  BUTTON_OPACITY,
+  BUTTON_PRESSED_COLOR,
+  BUTTON_TEXT_MIDDLE,
+  BUTTON_TEXT_SIZE,
+  FONT_FAMILY,
+} from "../constants.ts";
+import { drawLayer } from "../konvaHelpers.ts";
+import { FitText } from "./FitText.ts";
+
+/** How much of the button's width and height its image fills, centered with an equal margin. */
+const BUTTON_IMAGE_SCALE = 0.6;
 
 export class Button extends Konva.Group {
   enabled = true;
@@ -9,11 +23,11 @@ export class Button extends Konva.Group {
   assignedTextSize = false;
 
   background: Konva.Rect;
-  textElement: FitText | null = null;
-  imageElement: Konva.Image | null = null;
-  imageDisabledElement: Konva.Image | null = null;
+  textElement: FitText | undefined = undefined;
+  imageElement: Konva.Image | undefined = undefined;
+  imageDisabledElement: Konva.Image | undefined = undefined;
 
-  tooltipName = "";
+  tooltipName?: GameTooltipName;
   tooltipContent = "";
 
   constructor(
@@ -25,7 +39,8 @@ export class Button extends Konva.Group {
 
     const w = this.width();
     const h = this.height();
-    const textSize = (config["fontSize"] as number | undefined) ?? 0.5 * h;
+    const textSize =
+      (config["fontSize"] as number | undefined) ?? BUTTON_TEXT_SIZE * h;
     if (config["fontSize"] !== undefined) {
       this.assignedTextSize = true;
     }
@@ -35,23 +50,23 @@ export class Button extends Konva.Group {
       y: 0,
       width: w,
       height: h,
-      cornerRadius: 0.12 * h,
+      cornerRadius: BUTTON_CORNER_RADIUS * h,
       fill: "black",
-      opacity: 0.6,
+      opacity: BUTTON_OPACITY,
       listening: true,
     });
     this.add(this.background);
 
-    this.textElement = null;
-    this.imageElement = null;
+    this.textElement = undefined;
+    this.imageElement = undefined;
     if (config["text"] !== undefined) {
       this.textElement = new FitText({
         x: 0,
-        y: (0.525 - textSize / 2 / h) * h, // A smidgeon higher than vertically centered
+        y: (BUTTON_TEXT_MIDDLE - textSize / 2 / h) * h,
         width: w,
-        height: 0.5 * h,
+        height: BUTTON_TEXT_SIZE * h,
         fontSize: textSize,
-        fontFamily: "Verdana",
+        fontFamily: FONT_FAMILY,
         fill: "white",
         align: "center",
         text: config["text"] as string,
@@ -59,11 +74,17 @@ export class Button extends Konva.Group {
       });
       this.add(this.textElement);
     } else if (images !== undefined && images.length > 0) {
+      // The image fills the middle of the button, with an equal margin on every side.
+      const imageScale = BUTTON_IMAGE_SCALE;
+      const imageMargin = (1 - imageScale) / 2;
+      const imageBox = {
+        x: imageMargin * w,
+        y: imageMargin * h,
+        width: imageScale * w,
+        height: imageScale * h,
+      };
       this.imageElement = new Konva.Image({
-        x: 0.2 * w,
-        y: 0.2 * h,
-        width: 0.6 * w,
-        height: 0.6 * h,
+        ...imageBox,
         image: images[0]!,
         listening: false,
       });
@@ -71,10 +92,7 @@ export class Button extends Konva.Group {
 
       if (images.length >= 2) {
         this.imageDisabledElement = new Konva.Image({
-          x: 0.2 * w,
-          y: 0.2 * h,
-          width: 0.6 * w,
-          height: 0.6 * h,
+          ...imageBox,
           image: images[1]!,
           visible: false,
           listening: false,
@@ -84,7 +102,7 @@ export class Button extends Konva.Group {
     }
 
     this.background.on("mousedown", () => {
-      this.background.fill("#888888");
+      this.background.fill(BUTTON_HOVER_COLOR);
       drawLayer(this);
 
       this.background.on("mouseout", () => {
@@ -110,11 +128,14 @@ export class Button extends Konva.Group {
     }
     this.enabled = enabled;
 
-    if (this.textElement !== null) {
-      this.textElement.fill(enabled ? "white" : "#444444");
+    if (this.textElement !== undefined) {
+      this.textElement.fill(enabled ? "white" : BUTTON_DISABLED_TEXT_COLOR);
     }
 
-    if (this.imageElement !== null && this.imageDisabledElement !== null) {
+    if (
+      this.imageElement !== undefined
+      && this.imageDisabledElement !== undefined
+    ) {
       this.imageElement.visible(enabled);
       this.imageDisabledElement.visible(!enabled);
     }
@@ -126,12 +147,12 @@ export class Button extends Konva.Group {
 
   setPressed(pressed: boolean): void {
     this.pressed = pressed;
-    this.background.fill(pressed ? "#cccccc" : "black");
+    this.background.fill(pressed ? BUTTON_PRESSED_COLOR : "black");
     drawLayer(this);
   }
 
   text(newText: string): void {
-    assertNotNull(
+    assertDefined(
       this.textElement,
       'The "text()" method was called on a non-text Button.',
     );
@@ -145,7 +166,7 @@ export class Button extends Konva.Group {
   }
 
   fill(newFill: string): void {
-    assertNotNull(
+    assertDefined(
       this.textElement,
       'The "fill()" method was called on a non-text Button.',
     );

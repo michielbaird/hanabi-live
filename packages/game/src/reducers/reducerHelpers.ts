@@ -1,41 +1,35 @@
 // Miscellaneous helpers used by several reducers.
 
-import { assertDefined } from "complete-common";
-import { getCharacter } from "../gameData";
-import type { GameState } from "../interfaces/GameState";
-import { getEfficiency } from "../rules/stats";
-import type { PlayerIndex } from "../types/PlayerIndex";
+import { getCharacter } from "../gameData.ts";
+import type { GameState } from "../interfaces/GameState.ts";
+import { getEfficiency } from "../rules/stats.ts";
+import type { PlayerIndex } from "../types/PlayerIndex.ts";
 
 export function getCharacterNameForPlayer(
-  playerIndex: PlayerIndex | null,
-  characterAssignments: Readonly<Array<number | null>>,
+  playerIndex: PlayerIndex | undefined,
+  characterAssignments: Readonly<Array<number | undefined>>,
 ): string {
-  const characterID = getCharacterIDForPlayer(
+  const characterId = getCharacterIdForPlayer(
     playerIndex,
     characterAssignments,
   );
 
-  return characterID === null ? "" : getCharacter(characterID).name;
+  return characterId === undefined ? "" : getCharacter(characterId).name;
 }
 
-function getCharacterIDForPlayer(
-  playerIndex: PlayerIndex | null,
-  characterAssignments: Readonly<Array<number | null>>,
-): number | null {
-  if (playerIndex === null) {
-    return null; // eslint-disable-line unicorn/no-null
-  }
-
-  const characterID = characterAssignments[playerIndex];
-  assertDefined(
-    characterID,
-    `The character ID for player ${playerIndex} was undefined.`,
-  );
-
-  return characterID;
+function getCharacterIdForPlayer(
+  playerIndex: PlayerIndex | undefined,
+  characterAssignments: Readonly<Array<number | undefined>>,
+): number | undefined {
+  // Undefined when the player has no character.
+  return playerIndex === undefined
+    ? undefined
+    : characterAssignments[playerIndex];
 }
 
-export function getEfficiencyFromGameState(gameState: GameState): number {
+export function getEfficiencyFromGameState(
+  gameState: GameState,
+): number | undefined {
   return getEfficiency(
     gameState.stats.cardsGotten,
     gameState.stats.potentialCluesLost,

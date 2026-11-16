@@ -6,11 +6,11 @@ import {
   reversibleIsCardCritical,
   START_CARD_RANK,
 } from "@hanabi-live/game";
-import { beforeAll, describe, expect, test } from "@jest/globals";
 import { assertDefined } from "complete-common";
-import { loadGameJSON } from "../../../test/loadGameJSON";
+import { beforeAll, describe, expect, test } from "vitest";
+import { loadGameJson } from "../../../test/loadGameJson.ts";
 import upOrDownGame from "../../../test_data/up_or_down_critical.json";
-import type { State } from "../types/State";
+import type { State } from "../types/State.ts";
 
 let testState: State;
 
@@ -21,7 +21,7 @@ describe("UI", () => {
   describe("Up or Down test game", () => {
     beforeAll(() => {
       // Load the game and get the final state.
-      testState = loadGameJSON(upOrDownGame);
+      testState = loadGameJson(upOrDownGame);
     });
 
     describe("at turn 3", () => {

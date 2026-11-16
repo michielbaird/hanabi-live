@@ -1,7 +1,4 @@
-import { z } from "zod";
-import { VALID_NUM_PLAYERS } from "../constants";
-
-export const numPlayers = z.custom<NumPlayers>(isValidNumPlayers);
+import { VALID_NUM_PLAYERS } from "../constants.ts";
 
 export type NumPlayers = (typeof VALID_NUM_PLAYERS)[number];
 

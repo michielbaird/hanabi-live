@@ -1,8 +1,8 @@
 // Helper functions for doing actions to our own hand.
 
 import { assertDefined } from "complete-common";
-import type { CardLayout } from "./CardLayout";
-import { globals } from "./UIGlobals";
+import type { CardLayout } from "./CardLayout.ts";
+import { globals } from "./UiGlobals.ts";
 
 export function get(): CardLayout {
   if (!globals.state.playing) {
@@ -12,26 +12,14 @@ export function get(): CardLayout {
   }
 
   const { ourPlayerIndex } = globals.metadata;
-  const ourHand = globals.elements.playerHands[ourPlayerIndex];
+  const ourHand =
+    ourPlayerIndex === undefined
+      ? undefined
+      : globals.elements.playerHands[ourPlayerIndex];
   assertDefined(
     ourHand,
     `Failed to get our hand with an index of: ${ourPlayerIndex}`,
   );
 
   return ourHand;
-}
-
-export function checkSetDraggableAll(): void {
-  if (!globals.state.playing) {
-    return;
-  }
-
-  const { ourPlayerIndex } = globals.metadata;
-  const ourHand = globals.elements.playerHands[ourPlayerIndex];
-  assertDefined(
-    ourHand,
-    `Failed to get our hand with an index of: ${ourPlayerIndex}`,
-  );
-
-  ourHand.checkSetDraggableAll();
 }

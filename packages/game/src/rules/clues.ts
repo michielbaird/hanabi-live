@@ -1,61 +1,87 @@
 // Functions related to the clue objects themselves: converting, getting names, etc.
 
 import { assertDefined } from "complete-common";
-import { START_CARD_RANK } from "../constants";
-import { ClueType } from "../enums/ClueType";
-import type { Color } from "../interfaces/Color";
-import type { GameMetadata } from "../interfaces/GameMetadata";
-import type { Suit } from "../interfaces/Suit";
-import type { Variant } from "../interfaces/Variant";
-import { getCharacterNameForPlayer } from "../reducers/reducerHelpers";
-import type { Clue } from "../types/Clue";
-import { newColorClue, newRankClue } from "../types/Clue";
-import type { MsgClue } from "../types/MsgClue";
-import type { PlayerIndex } from "../types/PlayerIndex";
-import type { Rank } from "../types/Rank";
-import type { RankClueNumber } from "../types/RankClueNumber";
-import type { SuitIndex } from "../types/SuitIndex";
+import { EVEN_CARD_RANKS, ODD_CARD_RANKS } from "../constants.ts";
+import {
+  EVEN_RANK_CLUE,
+  MIN_RANK,
+  ODD_RANK_CLUE,
+  START_CARD_RANK,
+} from "../generated/protocol.ts";
+import type { Color } from "../interfaces/Color.ts";
+import type { GameMetadata } from "../interfaces/GameMetadata.ts";
+import type { Suit } from "../interfaces/Suit.ts";
+import type { Variant } from "../interfaces/Variant.ts";
+import { getCharacterNameForPlayer } from "../reducers/reducerHelpers.ts";
+import type { Clue } from "../types/Clue.ts";
+import { newColorClue, newRankClue } from "../types/Clue.ts";
+import type { ClueRank } from "../types/ClueRank.ts";
+import type { ClueType } from "../types/ClueType.ts";
+import type { HiddenClue } from "../types/HiddenClue.ts";
+import type { MsgClue } from "../types/MsgClue.ts";
+import type { PlayerIndex } from "../types/PlayerIndex.ts";
+import type { Rank } from "../types/Rank.ts";
+import type { SuitIndex } from "../types/SuitIndex.ts";
+import type { ActionClue } from "../types/gameActions.ts";
+
+/**
+ * In a hypothetical, a player can pass the turn, spending a clue without giving one. It is recorded
+ * as a hidden clue that the player gives to themselves, which a real game cannot contain.
+ */
+export function isPassTurnClue(action: ActionClue): boolean {
+  return action.playerIndex === action.receiverIndex;
+}
+
+/** The clue's type, unless the server hid it from the recipient. */
+export function getVisibleClueType(
+  clue: MsgClue | HiddenClue,
+): ClueType | undefined {
+  return clue.type ?? clue.visibleType;
+}
 
 export function getClueName(
-  clueType: ClueType,
-  clueValue: number,
+  clue: MsgClue | HiddenClue,
   variant: Variant,
   characterName: string,
 ): string {
   if (variant.cowAndPig) {
-    switch (clueType) {
-      case ClueType.Color: {
+    switch (getVisibleClueType(clue)) {
+      case "color": {
         return "Moo";
       }
 
-      case ClueType.Rank: {
+      case "rank": {
         return "Oink";
+      }
+
+      case undefined: {
+        break;
       }
     }
   }
 
-  if (variant.duck || characterName === "Quacker") {
+  if (characterName === "Quacker" || clue.type === undefined || variant.duck) {
     return "Quack";
   }
 
-  if (variant.oddsAndEvens && clueType === ClueType.Rank) {
-    if (clueValue === 1) {
+  if (variant.oddsAndEvens && clue.type === "rank") {
+    if (clue.rank === ODD_RANK_CLUE) {
       return "Odd";
     }
 
-    if (clueValue === 2) {
+    if (clue.rank === EVEN_RANK_CLUE) {
       return "Even";
     }
   }
 
-  switch (clueType) {
-    case ClueType.Color: {
-      const color = variant.clueColors[clueValue];
+  switch (clue.type) {
+    case "color": {
+      const color = variant.clueColors[clue.color];
       return color === undefined ? "Unknown" : color.name;
     }
 
-    case ClueType.Rank: {
-      return clueValue.toString();
+    case "rank": {
+      return clue.rank.toString();
     }
   }
 }
@@ -66,24 +92,22 @@ export function getClueName(
  */
 export function msgClueToClue(msgClue: MsgClue, variant: Variant): Clue {
   switch (msgClue.type) {
-    case ClueType.Color: {
-      const color = variant.clueColors[msgClue.value];
+    case "color": {
+      const color = variant.clueColors[msgClue.color];
       assertDefined(
         color,
-        `Failed to get the variant clue color at index: ${msgClue.value}`,
+        `Failed to get the variant clue color at index: ${msgClue.color}`,
       );
 
       return newColorClue(color);
     }
 
-    case ClueType.Rank: {
-      const clueValue = msgClue.value;
-      return newRankClue(clueValue);
+    case "rank": {
+      return newRankClue(msgClue.rank);
     }
   }
 }
 
-/** This mirrors the function `variantIsCardTouched` in "variants.go". */
 export function isCardTouchedByClue(
   variant: Variant,
   clue: Clue,
@@ -96,11 +120,11 @@ export function isCardTouchedByClue(
   }
 
   switch (clue.type) {
-    case ClueType.Color: {
+    case "color": {
       return isCardTouchedByClueColor(variant, clue.value, suit, cardRank);
     }
 
-    case ClueType.Rank: {
+    case "rank": {
       return isCardTouchedByClueRank(
         variant,
         clue.value,
@@ -122,21 +146,21 @@ export function isCardTouchedByClueColor(
     return false;
   }
 
+  if (variant.synesthesia && !cardSuit.noClueRanks) {
+    // A card matches if it would match a prism card, in addition to normal color matches. This
+    // applies even to suits that color clues do not touch, such as White.
+    const color = getColorForRank(variant, cardRank);
+    if (color !== undefined && clueColor.name === color.name) {
+      return true;
+    }
+  }
+
   if (cardSuit.allClueColors) {
     return true;
   }
 
   if (cardSuit.noClueColors) {
     return false;
-  }
-
-  if (variant.synesthesia && !cardSuit.noClueRanks) {
-    // A card matches if it would match a prism card, in addition to normal color matches.
-    const prismColorIndex = (cardRank - 1) % variant.clueColors.length;
-    const color = variant.clueColors[prismColorIndex];
-    if (color !== undefined && clueColor.name === color.name) {
-      return true;
-    }
   }
 
   if (cardRank === variant.specialRank) {
@@ -160,15 +184,24 @@ export function isCardTouchedByClueColor(
   return suitClueColorNames.includes(clueColor.name);
 }
 
-/** The color that touches a prism card is contingent upon the card's rank. */
-export function getColorForPrismCard(variant: Variant, rank: Rank): Color {
-  // "START" cards count as rank 0, so they are touched by the final color.
-  const prismColorIndex =
-    rank === START_CARD_RANK
-      ? variant.clueColors.length - 1
-      : (rank - 1) % variant.clueColors.length;
+/**
+ * The clue color that a rank contributes in Synesthesia variants and that touches a prism card of
+ * the rank: the ranks cycle through the variant's clue colors in order.
+ */
+export function getColorForRank(
+  variant: Variant,
+  rank: number,
+): Color | undefined {
+  return variant.clueColors[(rank - MIN_RANK) % variant.clueColors.length];
+}
 
-  const prismColor = variant.clueColors[prismColorIndex];
+/** The color that touches a prism card is contingent upon the card's rank. */
+export function getColorForPrismCard(variant: Variant, rank: number): Color {
+  // "START" cards count as rank 0, so they are touched by the final color.
+  const prismColor =
+    rank === START_CARD_RANK
+      ? variant.clueColors.at(-1)
+      : getColorForRank(variant, rank);
   assertDefined(
     prismColor,
     `Failed to get the color corresponding to a prism card of rank ${rank} for variant: ${variant.name}`,
@@ -179,7 +212,7 @@ export function getColorForPrismCard(variant: Variant, rank: Rank): Color {
 
 export function isCardTouchedByClueRank(
   variant: Variant,
-  clueRank: RankClueNumber,
+  clueRank: ClueRank,
   cardSuitIndex: SuitIndex,
   cardSuit: Suit,
   cardRank: Rank,
@@ -206,13 +239,11 @@ export function isCardTouchedByClueRank(
     return cardRank >= clueRank;
   }
 
-  // Clue ranks in Odds And Evens can only be 1 or 2.
+  // Clue ranks in Odds And Evens can only be odd or even.
   if (variant.oddsAndEvens) {
-    if (clueRank === 1) {
-      return [1, 3, 5].includes(cardRank);
-    }
-
-    return [2, 4].includes(cardRank);
+    const touchedRanks: readonly number[] =
+      clueRank === ODD_RANK_CLUE ? ODD_CARD_RANKS : EVEN_CARD_RANKS;
+    return touchedRanks.includes(cardRank);
   }
 
   if (cardRank === variant.specialRank) {

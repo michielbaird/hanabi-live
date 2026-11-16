@@ -1,7 +1,7 @@
 import { assertDefined, eRange } from "complete-common";
 import Konva from "konva";
-import { globals } from "./UIGlobals";
-import { FitText } from "./controls/FitText";
+import { globals } from "./UiGlobals.ts";
+import { FitText } from "./controls/FitText.ts";
 
 export class MultiFitText extends Konva.Group {
   maxLines: number;
@@ -18,12 +18,14 @@ export class MultiFitText extends Konva.Group {
     this.maxLines = maxLines;
 
     for (const i of eRange(this.maxLines)) {
-      const newConfig = $.extend({}, config);
-
-      newConfig.listening = false;
-      newConfig.height = config.height / this.maxLines;
-      newConfig.x = 0;
-      newConfig.y = i * newConfig.height;
+      const height = config.height / this.maxLines;
+      const newConfig = {
+        ...config,
+        listening: false,
+        height,
+        x: 0,
+        y: i * height,
+      };
 
       const childText = new FitText(newConfig);
       this.add(childText);
@@ -31,15 +33,12 @@ export class MultiFitText extends Konva.Group {
   }
 
   setMultiText(text: string): void {
-    if (this.smallHistory.length >= this.maxLines) {
-      this.smallHistory.shift();
-    }
-    this.smallHistory.push(text);
+    this.smallHistory = [...this.smallHistory, text].slice(-this.maxLines);
 
     // Performance optimization: setText on the children is slow, so do not actually do it until its
     // time to display things. We also have to call refreshText after any time we manipulate replay
     // position.
-    if (!globals.state.replay.active || !globals.animateFast) {
+    if (globals.state.replay.segment === undefined || !globals.animateFast) {
       this.refreshText();
     }
   }

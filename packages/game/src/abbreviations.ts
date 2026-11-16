@@ -1,16 +1,16 @@
 import { ReadonlySet, trimPrefix } from "complete-common";
-import type { Suit } from "./interfaces/Suit";
-import type { Variant } from "./interfaces/Variant";
+import type { Suit } from "./interfaces/Suit.ts";
+import type { Variant } from "./interfaces/Variant.ts";
 
 export const KNOWN_TRASH_NOTES = ["kt", "trash", "stale", "bad"] as const;
 export const QUESTION_MARK_NOTES = ["?"] as const;
 export const EXCLAMATION_MARK_NOTES = ["!"] as const;
+export const SPOOK_NOTES = ["spook"] as const;
 
 export const CHOP_MOVED_NOTES = [
   "cm",
   "chop move",
   "chop moved",
-  // cspell:disable
   "5cm", // 5's Chop Move
   "e5cm", // Early 5's Chop Move
   "tcm", // Trash Chop Move
@@ -27,7 +27,6 @@ export const CHOP_MOVED_NOTES = [
   "atcm", // Assisted Trash Chop Move
   "ttcm", // Time Travel Chop Move
   "bd", // Baton Discard
-  // cspell:enable
 ] as const;
 
 export const FINESSED_NOTES = [
@@ -55,6 +54,7 @@ export const ALL_RESERVED_NOTES = new ReadonlySet<string>([
   ...KNOWN_TRASH_NOTES,
   ...QUESTION_MARK_NOTES,
   ...EXCLAMATION_MARK_NOTES,
+  ...SPOOK_NOTES,
   ...CHOP_MOVED_NOTES,
   ...FINESSED_NOTES,
   ...DISCARD_PERMISSION_NOTES,

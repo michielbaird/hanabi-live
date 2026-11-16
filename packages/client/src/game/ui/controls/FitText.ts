@@ -1,5 +1,6 @@
 import Konva from "konva";
-import type * as KonvaContext from "konva/types/Context";
+import type * as KonvaContext from "konva/lib/Context";
+import { MIN_FONT_SIZE } from "../constants.ts";
 
 export class FitText extends Konva.Text {
   origFontSize: number;
@@ -22,19 +23,21 @@ export class FitText extends Konva.Text {
       if (this.needsResize) {
         this.resize();
       }
-      Konva.Text.prototype._sceneFunc.call(this, context);
+      // Konva only calls scene functions with a scene context.
+      Konva.Text.prototype._sceneFunc.call(
+        this,
+        context as KonvaContext.SceneContext,
+      );
     });
   }
 
   resize(): void {
-    const minimumFontSize = 5;
-
     if (
       !this.textFits(this.origFontSize)
-      && this.origFontSize > minimumFontSize
+      && this.origFontSize > MIN_FONT_SIZE
     ) {
       // Binary search the maximum font size that fits within a tolerance.
-      let low = minimumFontSize;
+      let low = MIN_FONT_SIZE;
       let high = this.origFontSize;
       const tolerance = 0.5;
       while (high - low > tolerance) {

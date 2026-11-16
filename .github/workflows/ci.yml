@@ -1,141 +1,328 @@
 name: CI
 
-on: [push, pull_request]
+# The expanded syntax limits push runs to main; `on: [push, pull_request]`
+# would run CI twice for commits on branches with open pull requests.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  client_build:
+  client-build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: ./.github/workflows/setup
-      - run: bash ./packages/client/build_client.sh
-
-  server_build:
-    runs-on: ubuntu-latest
-    env:
-      working-directory: ./server
-    steps:
-      - name: Checkout the repository
-        uses: actions/checkout@v5
-
-      - name: Install Golang
-        uses: actions/setup-go@v6
-
-      - name: Check Go formatting
-        run: bash check_gofmt.sh
-
-      - name: Compile the Golang code
-        run: bash build_server.sh
-        working-directory: ${{ env.working-directory }}
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/workflows/setup-bun
+      - run: bash ./scripts/dev/build-client.sh
 
   lint:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        packageName: [client, data, game, scripts, server]
+        checks: [javascript, rust]
     steps:
-      - uses: actions/checkout@v5
-      - uses: ./.github/workflows/setup
-
-      - name: Create the "version.js" file
-        run: bash ./packages/client/set_version.sh
-
-      - name: Lint the TypeScript code
-        run: bash ./packages/${{ matrix.packageName }}/lint.sh
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/workflows/setup-bun
+      - uses: ./.github/workflows/setup-rust
+        id: setup-rust
+        if: matrix.checks == 'rust'
+      - name: Install the Rust dependency checkers
+        if: matrix.checks == 'rust'
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: cargo-deny@0.20.2,cargo-machete@0.9.2
+      - name: Restore spelling file cache
+        if: matrix.checks == 'javascript'
+        id: cspell-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/cspell
+          key: cspell-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock', 'package.json', 'bunfig.toml', 'cspell.config.jsonc', '.gitignore', 'scripts/lint/check-spelling.sh', '.github/workflows/cspell-unused-words.yml') }}-${{ github.sha }}
+          restore-keys: |
+            cspell-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock', 'package.json', 'bunfig.toml', 'cspell.config.jsonc', '.gitignore', 'scripts/lint/check-spelling.sh', '.github/workflows/cspell-unused-words.yml') }}-
+      - name: Restore successful package lint results
+        id: lint-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo/cache
+          key: lint-turbo-v1-${{ runner.os }}-${{ runner.arch }}-${{ matrix.checks }}-${{ hashFiles('bun.lock', 'turbo.json') }}-${{ github.sha }}
+          restore-keys: |
+            lint-turbo-v1-${{ runner.os }}-${{ runner.arch }}-${{ matrix.checks }}-${{ hashFiles('bun.lock', 'turbo.json') }}-
+            lint-turbo-v1-${{ runner.os }}-${{ runner.arch }}-${{ matrix.checks }}-
+      - name: Restore formatting file cache
+        if: matrix.checks == 'javascript'
+        id: prettier-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/prettier
+          key: prettier-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock', 'package.json', 'bunfig.toml', 'prettier.config.mjs', '.prettierignore', '.editorconfig', 'tsconfig*.json', 'packages/*/tsconfig*.json', 'scripts/lint/check-prettier.sh') }}-${{ github.sha }}
+          restore-keys: |
+            prettier-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock', 'package.json', 'bunfig.toml', 'prettier.config.mjs', '.prettierignore', '.editorconfig', 'tsconfig*.json', 'packages/*/tsconfig*.json', 'scripts/lint/check-prettier.sh') }}-
+      # The Cargo cache saves only when its key did not match. Build what the Rust checks compile
+      # first, so that cached lint results cannot leave it empty.
+      - name: Build the Rust checks for the Cargo cache
+        if: matrix.checks == 'rust' && steps.setup-rust.outputs.cache-hit != 'true'
+        run: bash scripts/lint/check-rust.sh
+      - name: Run the ${{ matrix.checks }} checks
+        run: bash lint.sh --only=${{ matrix.checks }}
+      - name: Cache successful formatting results
+        if: matrix.checks == 'javascript' && steps.prettier-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/prettier
+          key: ${{ steps.prettier-cache.outputs.cache-primary-key }}
+      - name: Cache successful package lint results
+        if: steps.lint-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo/cache
+          key: ${{ steps.lint-cache.outputs.cache-primary-key }}
+      - name: Cache successful spelling results
+        if: matrix.checks == 'javascript' && steps.cspell-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/cspell
+          key: ${{ steps.cspell-cache.outputs.cache-primary-key }}
 
   test:
+    name: test (${{ matrix.suite }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      # Each suite runs on its own runner. In one job, they run one after another because they share
+      # the Cargo target directory.
+      matrix:
+        include:
+          - suite: client
+            tasks: test-client
+          - suite: rust
+            tasks: test-rust
+          - suite: bun
+            tasks: test-bun test-critical-css
+    # The test runner starts its own PostgreSQL server from the runner image's binaries.
     steps:
-      - uses: actions/checkout@v5
-      - uses: ./.github/workflows/setup
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/workflows/setup-bun
 
       - name: Create the "version.js" file
-        run: bash ./packages/client/set_version.sh
+        run: bash ./scripts/dev/set-version.sh
 
-      - name: Test the TypeScript code
-        run: npm run test
+      - uses: ./.github/workflows/setup-rust
+        if: matrix.suite != 'client'
+        with:
+          cache-key: test-${{ matrix.suite }}
 
-  format:
+      - name: Restore successful test results
+        id: test-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo/cache
+          key: test-turbo-v1-${{ runner.os }}-${{ runner.arch }}-${{ matrix.suite }}-${{ hashFiles('bun.lock', 'turbo.json') }}-${{ github.sha }}
+          restore-keys: |
+            test-turbo-v1-${{ runner.os }}-${{ runner.arch }}-${{ matrix.suite }}-${{ hashFiles('bun.lock', 'turbo.json') }}-
+            test-turbo-v1-${{ runner.os }}-${{ runner.arch }}-${{ matrix.suite }}-
+
+      - name: Run the ${{ matrix.suite }} tests
+        run: bunx --bun --no-install turbo run ${{ matrix.tasks }} --cache=local:rw --output-logs=new-only --concurrency=1
+
+      - name: Cache successful test results
+        if: steps.test-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo/cache
+          key: ${{ steps.test-cache.outputs.cache-primary-key }}
+
+  server-build:
+    runs-on: ubuntu-latest
+    env:
+      HANABI_TEST_DATABASE_URL: postgres://postgres@127.0.0.1:5432/postgres?sslmode=disable
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/workflows/setup-rust
+      - name: Identify the SQLx cache platform
+        id: platform
+        run: |
+          echo "image=$ImageOS" >> "$GITHUB_OUTPUT"
+          echo "bin=${CARGO_HOME:-$HOME/.cargo}/bin" >> "$GITHUB_OUTPUT"
+      - name: Restore pinned SQLx tooling
+        id: sqlx
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.platform.outputs.bin }}/sqlx
+            ${{ steps.platform.outputs.bin }}/cargo-sqlx
+          key: sqlx-cli-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.platform.outputs.image }}-${{ hashFiles('rust-toolchain.toml', 'server/sqlx_schema.py') }}
+      - name: Install pinned SQLx metadata tooling
+        if: steps.sqlx.outputs.cache-hit != 'true'
+        run: cargo install sqlx-cli --version 0.9.0 --locked --no-default-features --features rustls,postgres
+      - name: Cache pinned SQLx tooling
+        if: steps.sqlx.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.platform.outputs.bin }}/sqlx
+            ${{ steps.platform.outputs.bin }}/cargo-sqlx
+          key: ${{ steps.sqlx.outputs.cache-primary-key }}
+      - name: Start a disposable PostgreSQL server
+        run: |
+          # The runner image includes PostgreSQL but does not start it.
+          bin=/usr/lib/postgresql/18/bin
+          "$bin/initdb" -D "$RUNNER_TEMP/postgres" --username postgres --auth trust --no-sync
+          "$bin/pg_ctl" -D "$RUNNER_TEMP/postgres" --wait start \
+            -o "-c listen_addresses=127.0.0.1 -c unix_socket_directories= -c fsync=off"
+      - name: Check SQLx metadata against a disposable schema
+        run: python3 sqlx_schema.py
+
+  native-release:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: ./.github/workflows/setup
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/workflows/setup-bun
+      - uses: ./.github/workflows/setup-rust
+        id: setup-rust
+      - name: Add the static Rust target
+        working-directory: server
+        run: rustup target add x86_64-unknown-linux-musl
+      # Only "ring" compiles C, and the cache already holds it on an exact match.
+      - name: Install the musl C compiler
+        if: steps.setup-rust.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+      - name: Build and verify immutable native release
+        run: bash install/build-release.sh dist/native
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: candidate-hanabi-live-${{ github.sha }}-linux-amd64
+          path: |
+            dist/native/*.tar.gz
+            dist/native/*.sha256
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
 
-      - name: Check that the entire repository is formatted with Prettier
-        run: npx prettier --log-level=warn --check .
-
-  shellcheck:
+  publish-native-release:
+    # Installed deployment tooling identifies this job by its API-visible name.
+    name: publish_native_release
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+    concurrency:
+      group: native-release-publication
+      cancel-in-progress: false
+    timeout-minutes: 5
+    needs: [client-build, server-build, lint, test, native-release]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: ./.github/workflows/setup
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: candidate-hanabi-live-${{ github.sha }}-linux-amd64
+          path: dist/native
+      - name: Verify candidate checksums before publication
+        working-directory: dist/native
+        run: sha256sum --check ./*.sha256
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: hanabi-live-${{ github.sha }}-linux-amd64
+          path: |
+            dist/native/*.tar.gz
+            dist/native/*.sha256
+          if-no-files-found: error
+          overwrite: true
+      - name: Publish anonymous release downloads
+        run: python3 install/publish_release.py dist/native
+        env:
+          GH_TOKEN: ${{ github.token }}
 
-      - name: Lint Bash files
-        run: bash check_shellcheck.sh
-
-  spell_check:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: ./.github/workflows/setup
-
-      - name: Spell check the entire repository
-        run: bash check_spelling.sh
-
-  lint_monorepo:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: ./.github/workflows/setup
-
-      - name: Check templates
-        run: bash check_templates.sh
-
-      - name: Check "variants.json" and "variants.txt"
-        run: npm run check-variant-files
-
-      - name: Check "package.json" files
-        run: npm run lint-package-json
-
-  deploy_docs_website:
+  deploy-docs-website:
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     needs: [lint]
     runs-on: ubuntu-latest
+    concurrency:
+      group: github-pages
+      cancel-in-progress: false
     permissions:
+      contents: read
+      deployments: write
       pages: write
       id-token: write
     steps:
-      - uses: actions/checkout@v5
-      - uses: ./.github/workflows/setup
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check documentation inputs against the last deployment
+        id: docs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci/typedoc_deployment.py prepare
+      - uses: ./.github/workflows/setup-bun
+        if: steps.docs.outputs.changed == 'true'
 
       - name: Use TypeDoc to automatically generate documentation
-        run: npm run docs
+        if: steps.docs.outputs.changed == 'true'
+        run: bun run docs
         working-directory: ./packages/game
 
-      - uses: actions/upload-pages-artifact@v4
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        if: steps.docs.outputs.changed == 'true'
         with:
+          name: github-pages-${{ github.run_attempt }}
           path: ./packages/game/docs
 
-      - uses: actions/deploy-pages@v4
+      - uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+        id: pages
+        if: steps.docs.outputs.changed == 'true'
+        with:
+          artifact_name: github-pages-${{ github.run_attempt }}
+      - name: Record documentation publication outcome
+        if: always() && steps.docs.outputs.deployment_id != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEPLOYMENT_ID: ${{ steps.docs.outputs.deployment_id }}
+          DEPLOYMENT_STATE: ${{ steps.pages.outcome == 'success' && 'success' || 'failure' }}
+        run: python3 scripts/ci/typedoc_deployment.py record "$DEPLOYMENT_ID" "$DEPLOYMENT_STATE"
 
   discord:
     name: Discord Failure Notification
     needs:
       [
-        client_build,
-        server_build,
+        client-build,
+        server-build,
         lint,
         test,
-        format,
-        shellcheck,
-        spell_check,
-        lint_monorepo,
-        deploy_docs_website,
+        native-release,
+        publish-native-release,
+        deploy-docs-website,
       ]
     if: failure() && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
-      - uses: sarisia/actions-status-discord@v1
+      - uses: sarisia/actions-status-discord@eb045afee445dc055c18d3d90bd0f244fd062708 # v1
         with:
           webhook: ${{ secrets.DISCORD_WEBHOOK }}
           status: failure

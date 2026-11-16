@@ -1,12 +1,12 @@
 import type { Tuple } from "complete-common";
 import { assertDefined, eRange, iRange, newArray } from "complete-common";
-import type { CardState } from "../../interfaces/CardState";
-import type { GameState } from "../../interfaces/GameState";
-import type { Variant } from "../../interfaces/Variant";
-import type { NumSuits } from "../../types/NumSuits";
-import type { Rank } from "../../types/Rank";
-import type { SuitIndex } from "../../types/SuitIndex";
-import { getAllDiscardedSetForSuit } from "../deck";
+import type { CardState } from "../../interfaces/CardState.ts";
+import type { GameState } from "../../interfaces/GameState.ts";
+import type { Variant } from "../../interfaces/Variant.ts";
+import type { NumSuits } from "../../types/NumSuits.ts";
+import type { Rank } from "../../types/Rank.ts";
+import type { SuitIndex } from "../../types/SuitIndex.ts";
+import { getAllDiscardedSetForSuit } from "../deck.ts";
 
 /** Check if the card can still be played in a Sudoku variant. */
 export function sudokuIsCardNeededForMaxScore(
@@ -22,14 +22,10 @@ export function sudokuIsCardNeededForMaxScore(
     variant,
   );
 
+  // Undefined until the suit's first card decides where the stack starts.
   const playStackStart = playStackStarts[suitIndex];
-  assertDefined(
-    playStackStart,
-    `Failed to find the play stack start for suit index: ${suitIndex}`,
-  );
-
   const possibleStackStartRanks =
-    playStackStart === null
+    playStackStart === undefined
       ? sudokuGetUnusedStackStartRanks(playStackStarts, variant)
       : [playStackStart];
 
@@ -53,8 +49,7 @@ export function sudokuIsCardNeededForMaxScore(
  * For Sudoku variants, given a boolean map for which ranks [1, 2, 3, 4, 5] are all discarded,
  * returns an array for these ranks of the longest play sequences starting at these maps (indexed 0
  * through 4), and a boolean stating whether all ranks are still available, i.e. whether the
- * returned array is [5, 5, 5, 5, 5]. This functions mimics the method `sudokuWalkUpAll` from the
- * server file "variants_sudoku.go".
+ * returned array is [5, 5, 5, 5, 5].
  */
 export function sudokuWalkUpAll(
   allDiscardedSet: ReadonlySet<Rank>,
@@ -70,16 +65,18 @@ export function sudokuWalkUpAll(
   let lastDead = 0;
 
   for (const currentRank of variant.ranks) {
-    if (allDiscardedSet.has(currentRank)) {
-      // We hit a new dead rank.
-      for (const writeRank of eRange(lastDead + 1, currentRank)) {
-        const maxScore = currentRank - writeRank;
-        maxScoresForEachStartingValueOfSuit[writeRank - 1] = maxScore;
-      }
-
-      maxScoresForEachStartingValueOfSuit[currentRank - 1] = 0;
-      lastDead = currentRank;
+    if (!allDiscardedSet.has(currentRank)) {
+      continue;
     }
+
+    // We hit a new dead rank.
+    for (const writeRank of eRange(lastDead + 1, currentRank)) {
+      const maxScore = currentRank - writeRank;
+      maxScoresForEachStartingValueOfSuit[writeRank - 1] = maxScore;
+    }
+
+    maxScoresForEachStartingValueOfSuit[currentRank - 1] = 0;
+    lastDead = currentRank;
   }
 
   // If no value was dead, we did not write anything so far, so we can just return.
@@ -109,9 +106,6 @@ export function sudokuWalkUpAll(
   };
 }
 
-/**
- * This functions mimics `variantSudokuGetFreeStackStarts` from "variants_sudoku.go" in the server.
- */
 function sudokuGetUnusedStackStartRanks(
   playStackStarts: GameState["playStackStarts"],
   variant: Variant,
@@ -204,13 +198,16 @@ function evaluateAssignment(
     const value = maxPartialScoresForThisSuit[assignedStackStart - 1];
     assertDefined(
       value,
-      `Failed to retrieve the max score for starting suit ${assignedSuit} at rank ${assignedStackStart}.`,
+      `Failed to retrieve the max score for starting suit ${assignedSuit} at rank: ${assignedStackStart}`,
     );
     assignmentValue += value;
     assignment[assignedLocalSuitIndex] = value;
   }
 
-  return { assignmentValue, assignment };
+  return {
+    assignmentValue,
+    assignment,
+  };
 }
 
 /**
@@ -278,13 +275,11 @@ function findNextAssignment(
 }
 
 /**
- * This function mimics `variantSudokuGetMaxScore` from the "variants_sudoku.go" file on the server.
- * See there for corresponding documentation on how the score is calculated. Additionally, since
- * here, we want to return the maximum score per stack (this is needed for endgame calculations,
- * since the distribution of playable cards to the stacks matters for how many clues we can get back
- * before the extra round starts), we will find an optimum solution (in terms of score) such that
- * the distribution of the played cards to the stacks is lexicographically minimal (after sorting
- * the values) as well, since this allows for the most amount of clues to be gotten back before the
+ * Returns the maximum score per stack (this is needed for endgame calculations, since the
+ * distribution of playable cards to the stacks matters for how many clues we can get back before
+ * the extra round starts). We find an optimum solution (in terms of score) such that the
+ * distribution of the played cards to the stacks is lexicographically minimal (after sorting the
+ * values) as well, since this allows for the most amount of clues to be gotten back before the
  * extra-round.
  */
 export function sudokuGetMaxScorePerStack(
@@ -311,7 +306,7 @@ export function sudokuGetMaxScorePerStack(
       continue;
     }
 
-    if (stackStart !== null) {
+    if (stackStart !== undefined) {
       const score = maxScoresForEachStartingValueOfSuit[stackStart - 1];
       assertDefined(
         score,

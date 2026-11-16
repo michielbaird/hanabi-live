@@ -1,10 +1,12 @@
 import { assertDefined } from "complete-common";
 import Konva from "konva";
-import { Screen } from "../../lobby/types/Screen";
-import * as tooltips from "../../tooltips";
-import { globals } from "./UIGlobals";
-import type { NodeWithTooltip } from "./controls/NodeWithTooltip";
-import type { TextWithTooltip } from "./controls/TextWithTooltip";
+import { Screen } from "../../lobby/types/Screen.ts";
+import { store } from "../../store.ts";
+import { TOOLTIP_DELAY_IN_MILLISECONDS } from "../../Tooltip.ts";
+import * as tooltips from "../../tooltips.ts";
+import type { NodeWithTooltip } from "./controls/NodeWithTooltip.ts";
+import type { TextWithTooltip } from "./controls/TextWithTooltip.ts";
+import { globals } from "./UiGlobals.ts";
 
 export function initKonvaTooltips(
   element: NodeWithTooltip,
@@ -25,7 +27,7 @@ export function initKonvaTooltips(
     if (delayed) {
       setTimeout(() => {
         show(this);
-      }, tooltips.TOOLTIP_DELAY_IN_MILLISECONDS);
+      }, TOOLTIP_DELAY_IN_MILLISECONDS);
     } else {
       show(this);
     }
@@ -37,26 +39,42 @@ export function initKonvaTooltips(
       'An element that is supposed to have a tooltip does not have a "tooltipName" property.',
     );
     resetActiveHover(this);
-    tooltips.close(`#tooltip-${element.tooltipName}`);
+    tooltips.close(element.tooltipName);
   });
 
-  let content = element.tooltipContent;
-  if (!customContent) {
-    content = '<span style="font-size: 0.75em;">';
-    content += '<i class="fas fa-info-circle fa-sm"></i>';
-    content += ` &nbsp;${element.tooltipContent}</span>`;
-  }
-  tooltips.setInstanceContent(`#tooltip-${element.tooltipName}`, content);
+  setKonvaTooltipContent(element, element.tooltipContent, customContent);
+}
+
+/**
+ * Changes the content of an element's tooltip. Unless the content is custom, it shows beside an
+ * info icon, in the smaller text.
+ */
+export function setKonvaTooltipContent(
+  element: NodeWithTooltip,
+  content: string,
+  customContent: boolean,
+): void {
+  assertDefined(
+    element.tooltipName,
+    'An element that is supposed to have a tooltip does not have a "tooltipName" property.',
+  );
+
+  element.tooltipContent = content;
+  tooltips.setContent(
+    element.tooltipName,
+    customContent || content === ""
+      ? content
+      : `<div class="info-tooltip small-tooltip-text"><i class="fas fa-info-circle fa-sm"></i><div>${content}</div></div>`,
+  );
 }
 
 export function show(element: NodeWithTooltip): void {
-  // Do not do anything if we are no longer in the game.
-  if (globals.lobby.currentScreen !== Screen.Game) {
-    return;
-  }
-
-  // Do not do anything if the user has moved the mouse away in the meantime.
-  if (globals.activeHover !== element) {
+  // Do not do anything if we are no longer in the game or if the user has moved the mouse away in
+  // the meantime.
+  if (
+    store.getState().session.screen !== Screen.Game
+    || globals.activeHover !== element
+  ) {
     return;
   }
 
@@ -77,18 +95,22 @@ export function show(element: NodeWithTooltip): void {
       width = element.width();
     }
   }
-  const tooltip = `#tooltip-${element.tooltipName}`;
-  const tooltipX = pos.x + width / 2;
-  tooltips.setPosition(tooltip, tooltipX, pos.y);
-  tooltips.open(tooltip);
+  const { y, height } = element.getClientRect();
+  tooltips.setPosition(element.tooltipName, {
+    x: pos.x,
+    y,
+    width,
+    height,
+  });
+  tooltips.open(element.tooltipName);
 }
 
 export function setActiveHover(element: NodeWithTooltip): void {
   // Most elements use "mouseout", but cards use "mouseleave" instead, so send both events.
-  if (globals.activeHover !== null) {
+  if (globals.activeHover !== undefined) {
     globals.activeHover.dispatchEvent(new MouseEvent("mouseout"));
   }
-  if (globals.activeHover !== null) {
+  if (globals.activeHover !== undefined) {
     globals.activeHover.dispatchEvent(new MouseEvent("mouseleave"));
   }
 
@@ -97,6 +119,6 @@ export function setActiveHover(element: NodeWithTooltip): void {
 
 export function resetActiveHover(element: NodeWithTooltip): void {
   if (globals.activeHover === element) {
-    globals.activeHover = null;
+    globals.activeHover = undefined;
   }
 }

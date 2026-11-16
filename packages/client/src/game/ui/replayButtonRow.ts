@@ -25,5 +25,9 @@ export function getReplayButtonRow(
 
   // Six buttons take the width of the replay area (0.4, or 0.5 in Keldon mode, which also starts
   // 0.1 in).
-  return { x: keldonMode ? 0.1 : 0, buttonWidth, spacing: 0.008 };
+  return {
+    x: keldonMode ? 0.1 : 0,
+    buttonWidth,
+    spacing: 0.008,
+  };
 }

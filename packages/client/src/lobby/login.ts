@@ -1,143 +1,157 @@
 // The initial login page.
 
-import type { HTTPLoginData } from "@hanabi-live/data";
-import { VERSION } from "@hanabi-live/data";
-import { assertDefined } from "complete-common";
-import * as KeyCode from "keycode-js";
-import { globals } from "../Globals";
-import { FADE_TIME_MS } from "../constants";
-import { getHTMLElement, getHTMLInputElement, getURLFromPath } from "../utils";
-import { websocketInit } from "../websocketInit";
-import * as nav from "./nav";
-import { tablesDraw } from "./tablesDraw";
-import { Screen } from "./types/Screen";
-import * as usersDraw from "./usersDraw";
+import {
+  VERSION,
+  errorDetails,
+  httpError,
+  loginRequestSchema,
+  noticeSchema,
+  setTabAccountFromLogin,
+} from "@hanabi-live/data";
+import { flushSync } from "react-dom";
+import type { z } from "zod";
+import { HTTP_STATUS } from "../constants.ts";
+import { reloadOutdatedClient } from "../outdatedClient.ts";
+import { screenChanged } from "../sessionSlice.ts";
+import { store } from "../store.ts";
+import { getUrlFromPath } from "../utils.ts";
+import { websocketInit } from "../websocketInit.ts";
+import { TEST_COOKIE_PATH, checkCookieWithRetry } from "./cookieProbe.ts";
+import {
+  loginAlertCleared,
+  loginFailed,
+  loginPageChanged,
+  loginStageChanged,
+  loginStarted,
+  noAccountFound,
+} from "./login/loginSlice.ts";
+import { loginRequestBody } from "./loginRequestBody.ts";
+import { Screen } from "./types/Screen.ts";
 
 const FIREFOX_WARNING_COOKIE_NAME = "acceptedFirefoxWarning";
 
-const changePassword = getHTMLInputElement("#change-password");
-const changePasswordContainer = getHTMLElement("#change-password-container");
-const loginUsername = getHTMLInputElement("#login-username");
-const loginPassword = getHTMLInputElement("#login-password");
-
-export function init(): void {
-  $("#login-button").on("click", () => {
-    $("#login-form").trigger("submit");
-  });
-
-  $("#login-form").on("keypress", (event) => {
-    if (event.which === KeyCode.KEY_RETURN) {
-      event.preventDefault();
-      $("#login-form").trigger("submit");
-    }
-  });
-
-  $("#login-form").on("submit", submit);
-
-  $("#firefox-warning-button").on("click", () => {
-    localStorage.setItem(FIREFOX_WARNING_COOKIE_NAME, "true");
-    show();
-  });
-
-  $("#change-password-link").on("click", (event) => {
-    event.preventDefault();
-    const div = $("#change-password-container");
-    if (div.hasClass("hidden")) {
-      $("#login-password").attr("placeholder", "Old Password");
-      $("#change-password-container")
-        .slideDown()
-        .delay(500)
-        .removeClass("hidden");
-      $("#login-button").html("Sign In & Change Password");
-    } else {
-      $("#login-password").attr("placeholder", "Password");
-      $("#change-password-container").slideUp().delay(500).addClass("hidden");
-      $("#login-button").html("Sign In");
-    }
-    $("#login-username").trigger("focus");
-  });
+export function acceptFirefoxWarning(): void {
+  localStorage.setItem(FIREFOX_WARNING_COOKIE_NAME, "true");
+  store.dispatch(loginStageChanged("loading"));
+  automaticLogin();
 }
 
-function submit(event: JQuery.Event) {
-  // By default, the form will reload the page, so stop this from happening.
-  event.preventDefault();
-
-  const username = loginUsername.value;
-  if (username === "") {
-    formError("You must provide a username.");
-    return;
-  }
-
-  const password = loginPassword.value;
-  if (password === "") {
-    formError("You must provide a password.");
-    return;
-  }
-
-  const changePasswordInputIsShowing =
-    !changePasswordContainer.classList.contains("hidden");
-
-  let newPassword: string | undefined;
-  if (changePasswordInputIsShowing) {
-    if (changePassword.value === "") {
-      formError("You must provide a new password.");
-      return;
-    }
-
-    newPassword = changePassword.value;
-  }
-
-  send(username, password, newPassword);
+/** Checks our saved session again, after the check failed. */
+export function retryAutomaticLogin(): void {
+  store.dispatch(loginAlertCleared());
+  store.dispatch(loginStageChanged("loading"));
+  automaticLogin();
 }
 
-function send(
+/** Sends a login request. `isNewAccount` confirms the creation of an account that has none. */
+export function signIn(
   username: string,
   password: string,
   newPassword: string | undefined,
-) {
-  $("#login-button").addClass("disabled");
-  $("#login-explanation").hide();
-  $("#login-ajax").show();
+  isNewAccount: boolean,
+): void {
+  store.dispatch(loginStarted());
 
   // Send a login request to the server; if successful, we will get a cookie back.
-  const url = getURLFromPath("/login");
-  const data = {
+  const url = getUrlFromPath("/login");
+  const data = loginRequestSchema.parse({
     username,
     password,
     newPassword,
     version: VERSION,
-  } satisfies HTTPLoginData;
-
-  // eslint-disable-next-line complete/no-object-any
-  const request = $.ajax({
-    url,
-    type: "POST",
-    data,
+    createAccount: isNewAccount,
   });
-  console.log(`Sent a login request to: ${url}`);
 
-  request
-    .done(() => {
+  console.log(`Sending a login request to: ${url}`);
+  requestLogin(url, data)
+    .then((login) => {
+      if (login === undefined) {
+        return;
+      }
+      if (login === "noAccount") {
+        if (newPassword === undefined) {
+          store.dispatch(noAccountFound(username));
+        } else {
+          formError("There is no account with that username.");
+        }
+        return;
+      }
+      if ("outdated" in login) {
+        store.dispatch(
+          loginFailed({
+            message: "",
+            latestVersion: login.outdated,
+          }),
+        );
+        return;
+      }
+      if ("passwordReset" in login) {
+        store.dispatch(
+          loginFailed({
+            message: login.passwordReset,
+            passwordReset: true,
+          }),
+        );
+        return;
+      }
       // We successfully got a cookie; attempt to establish a WebSocket connection.
+      setTabAccountFromLogin(login.body);
       websocketInit();
     })
-    .fail((jqXHR) => {
-      formError(`Login failed: ${getAjaxError(jqXHR)}`);
-    })
-    // eslint-disable-next-line @typescript-eslint/use-unknown-in-catch-callback-variable
-    .catch((error) => {
-      formError(`Login failed: ${getAjaxError(error)}`);
+    .catch((error: unknown) => {
+      formError(errorDetails(error, "Logging in"));
     });
 }
 
-function getAjaxError(jqXHR: JQuery.jqXHR) {
-  if (jqXHR.readyState === 0) {
-    return "A network error occurred. The server might be down!";
+/**
+ * Resolves to undefined when the page is reloading to update an outdated client, to "noAccount"
+ * when the username has no account and we did not ask to create one, to the server's message when
+ * the account needs a password reset, and to the server's release when a reload did not update an
+ * outdated client.
+ */
+async function requestLogin(
+  url: string,
+  data: z.output<typeof loginRequestSchema>,
+): Promise<
+  | "noAccount"
+  | { body: unknown }
+  | { passwordReset: string }
+  | { outdated: string }
+  | undefined
+> {
+  const response = await fetch(url, {
+    method: "POST",
+    body: loginRequestBody(data),
+  });
+  if (!response.ok) {
+    const notice = await errorNotice(response);
+    const code = notice?.code;
+    if (code === "outdatedClient") {
+      return reloadOutdatedClient()
+        ? undefined
+        : { outdated: notice!.latestVersion ?? "" };
+    }
+    if (code === "noAccount") {
+      return code;
+    }
+    if (code === "passwordResetRequired") {
+      return { passwordReset: notice!.message };
+    }
+    throw await httpError(response, "Logging in");
   }
-  if (jqXHR.responseText === "") {
-    return "An unknown error occurred.";
+  return { body: await response.json() };
+}
+
+/** The notice of an HTTP error response, if it has one. */
+async function errorNotice(
+  response: Response,
+): Promise<z.output<typeof noticeSchema> | undefined> {
+  try {
+    const parsed = noticeSchema.safeParse(await response.clone().json());
+    return parsed.success ? parsed.data : undefined;
+  } catch {
+    return undefined;
   }
-  return jqXHR.responseText;
 }
 
 export function automaticLogin(): void {
@@ -147,26 +161,35 @@ export function automaticLogin(): void {
   const username = urlParams.get("login");
   if (username !== null && username !== "") {
     console.log(`Automatically logging in as "${username}".`);
-    send(username, username, ""); // For test accounts, we use the username as the password.
+    // For test accounts, we use the username as the password, and create the account if needed.
+    signIn(username, username, "", true);
     return;
   }
 
   // If we have logged in previously and our cookie is still good, automatically login.
   console.log("Testing to see if we have a cached WebSocket cookie.");
-  const testCookiePath = "/test-cookie";
-  fetch(testCookiePath)
+  checkCookieWithRetry()
+    .catch((error: unknown) => {
+      // Handle only failures of the cookie check; a later WebSocket error is separate.
+      console.error(`Failed to fetch "${TEST_COOKIE_PATH}":`, error);
+      store.dispatch(
+        loginFailed({
+          message: errorDetails(error, "Checking your saved session"),
+          retry: true,
+        }),
+      );
+
+      if (!showFirefoxWarningIfNeeded()) {
+        show();
+      }
+      return undefined;
+    })
     .then((response) => {
-      // Check to see if we have accepted the Firefox warning.
-      if (
-        isBrowserFirefox()
-        && localStorage.getItem(FIREFOX_WARNING_COOKIE_NAME) !== "true" // Cookies are strings.
-      ) {
-        $("#loading").hide();
-        $("#firefox-warning").show();
+      if (response === undefined || showFirefoxWarningIfNeeded()) {
         return;
       }
 
-      if (response.status === 200) {
+      if (response.status === HTTP_STATUS.OK) {
         console.log(
           "WebSocket cookie confirmed to be good. Automatically logging in to the WebSocket server.",
         );
@@ -174,7 +197,7 @@ export function automaticLogin(): void {
         return;
       }
 
-      if (response.status === 204) {
+      if (response.status === HTTP_STATUS.NO_CONTENT) {
         console.log(
           "Either we have not previously logged in or the existing cookie is expired.",
         );
@@ -187,7 +210,11 @@ export function automaticLogin(): void {
       show();
     })
     .catch((error: unknown) => {
-      console.error(`Failed to fetch "${testCookiePath}":`, error);
+      // Do not report errors from websocketInit() as cookie-check failures.
+      console.error("Automatic login initialization failed:", error);
+      if (!showFirefoxWarningIfNeeded()) {
+        show();
+      }
     });
 }
 
@@ -195,77 +222,39 @@ function isBrowserFirefox() {
   return navigator.userAgent.toLowerCase().includes("firefox");
 }
 
+function showFirefoxWarningIfNeeded(): boolean {
+  if (
+    isBrowserFirefox()
+    && localStorage.getItem(FIREFOX_WARNING_COOKIE_NAME) !== "true"
+  ) {
+    store.dispatch(loginStageChanged("firefoxWarning"));
+    return true;
+  }
+  return false;
+}
+
 // -------------------------
 // Miscellaneous subroutines
 // -------------------------
 
 function show() {
-  $("#loading").hide();
-  $("#firefox-warning").hide();
-  $("#sign-in").show();
-  $("#login-username").trigger("focus");
+  store.dispatch(loginStageChanged("signIn"));
 }
 
+/** Leaves the login screen for the tutorial or, for a user who has seen it, for the lobby. */
 export function hide(firstTimeUser: boolean): void {
-  // Hide the login screen
-  $("#login").hide();
-
-  if (firstTimeUser) {
-    $("#tutorial").fadeIn(FADE_TIME_MS);
-    return;
+  if (!firstTimeUser && store.getState().session.screen === Screen.Login) {
+    // During the tutorial, the server can already have sent us to a pre-game screen, so only leave
+    // the login screen.
+    store.dispatch(screenChanged(Screen.Lobby));
   }
-  $("#tutorial").hide();
 
-  // Disable scroll bars. Even with height and width 100%, the scroll bar can pop up when going back
-  // from a game to the lobby. It also can show up in-game if a tooltip animates off of the edge of
-  // the screen. So we can set "overflow" to explicitly prevent this from occurring. We do not want
-  // to set this in "hanabi.css" because there should be scrolling enabled on the login screen. We
-  // need to scroll to the top of the screen before disabling the scroll bars or else the lobby can
-  // become misaligned when logging in from a scroll-down state.
-  window.scrollTo(0, 0);
-  $("body").css("overflow", "hidden");
-
-  // Show the lobby
-  globals.currentScreen = Screen.Lobby;
-  tablesDraw();
-  usersDraw.draw(); // If we were in the tutorial, we have to re-draw all of the user rows
-  $("#lobby").show();
-  $("#lobby-history").hide();
-  // We can't hide this element by default in "index.html" or else the "No game history" text will
-  // not be centered.
-  nav.show("lobby");
-  $("#lobby-chat-input").trigger("focus");
-
-  // Scroll to the bottom of the chat. (This is necessary if we are going to the lobby after the
-  // tutorial.)
-  const chat = $("#lobby-chat-text");
-  chat.animate(
-    {
-      scrollTop: chat[0]!.scrollHeight,
-    },
-    0,
-  );
+  // "App.tsx" shows the page at once, so that the code that runs next finds the lobby.
+  flushSync(() => {
+    store.dispatch(loginPageChanged(firstTimeUser ? "tutorial" : "lobby"));
+  });
 }
 
-function formError(msg: string) {
-  // For some reason this has to be invoked asynchronously in order to work properly.
-  setTimeout(() => {
-    $("#login-ajax").hide();
-    $("#login-button").removeClass("disabled");
-    $("#login-alert").html(msg);
-    $("#login-alert").fadeIn(FADE_TIME_MS);
-
-    const offset = $("#login-alert").offset();
-    assertDefined(
-      offset,
-      'Failed to get the coordinates for the "#login-alert" element.',
-    );
-
-    $("html, body").animate(
-      {
-        scrollTop: offset.top,
-      },
-      500,
-    );
-  }, 0);
+function formError(message: string) {
+  store.dispatch(loginFailed({ message }));
 }

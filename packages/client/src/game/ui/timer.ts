@@ -1,245 +1,156 @@
-// Functions for timed games (and the timer that ticks up in untimed games).
+// The classic screen's timers (and the timer that ticks up in untimed games), and the tooltips that
+// show the players' clocks. "../clock.ts" keeps the clocks.
 
 import type { PlayerIndex } from "@hanabi-live/game";
 import { millisecondsToClockString } from "@hanabi-live/game";
-import * as tooltips from "../../tooltips";
-import { SoundType } from "../types/SoundType";
-import { globals } from "./UIGlobals";
-import type { TimerDisplay } from "./controls/TimerDisplay";
-import { drawLayer } from "./konvaHelpers";
+import { assertDefined } from "complete-common";
+import { store } from "../../store.ts";
+import * as tooltips from "../../tooltips.ts";
+import type { ClockChange } from "../clock.ts";
+import * as clock from "../clock.ts";
+import { isOurSeat } from "../ourSeat.ts";
+import { globals } from "./UiGlobals.ts";
+import type { TimerDisplay } from "./controls/TimerDisplay.ts";
+import { drawLayer } from "./konvaHelpers.ts";
 
-export interface ClockData {
-  times: number[];
-
-  /** -1 if the game just ended. */
-  activePlayerIndex: PlayerIndex | -1;
-
-  timeTaken: number;
+/** Draws the clocks as they change. Returns the function that stops drawing them. */
+export function init(): () => void {
+  return clock.subscribe(onClockChanged);
 }
 
-/**
- * This function handles the "clock" WebSocket command. It is sent at the beginning of every turn to
- * update the client about how much time each player has left. It has the following data:
- *
- * ```ts
- * {
- *   times: [100, 200], // A list of the times for each player.
- *   activePlayerIndex: 0,
- *   timeTaken: 500, // The amount of time that has elapsed since the turn began.
- * }
- * ```
- */
-export function update(data: ClockData): void {
-  stop();
-
-  // We do not need to update the timers if they are not showing.
-  if (globals.elements.timer1 === null || globals.elements.timer2 === null) {
-    return;
+function onClockChanged(change: ClockChange) {
+  if (change.type === "tick") {
+    drawTick(change.warning);
+  } else {
+    draw();
   }
+}
 
-  // We do not need to update the timers if the game is paused. (The server will send another
-  // "clock" message when the game becomes unpaused.)
-  if (globals.state.pause.active) {
+/** Draws every clock, such as after the server sends them, or after the screen is drawn again. */
+export function draw(): void {
+  const { timer1, timer2 } = globals.elements;
+  const activePlayerIndex = clock.getActivePlayerIndex();
+
+  // The server sends no active player when the game is over.
+  if (activePlayerIndex === undefined && globals.state.finished) {
+    timer1?.hide();
+    timer2?.hide();
+    globals.layers.timer.batchDraw();
     return;
-  }
-
-  // Record the data
-  globals.playerTimes = data.times;
-  globals.activePlayerIndex = data.activePlayerIndex;
-  globals.timeTaken = data.timeTaken;
-
-  // Keep track of what the active player's time was when they started their turn.
-  globals.startingTurnTime = globals.playerTimes[data.activePlayerIndex]!;
-
-  // Mark the time that we updated the local player times.
-  globals.lastTimerUpdateTimeMS = Date.now();
-
-  // Update onscreen time displays.
-  if (globals.state.playing) {
-    // The visibility of the first timer does not change during a game.
-    let time = globals.playerTimes[globals.metadata.ourPlayerIndex]!;
-    if (!globals.options.timed) {
-      // Invert it to show how much time each player is taking.
-      time *= -1;
-    }
-
-    const text = millisecondsToClockString(time);
-    globals.elements.timer1.setTimerText(text);
   }
 
   const ourTurn =
-    globals.state.playing
-    && data.activePlayerIndex === globals.metadata.ourPlayerIndex;
-  if (!ourTurn) {
-    // Update the UI with the value of the timer for the active player.
-    let time = globals.playerTimes[data.activePlayerIndex]!;
-    if (!globals.options.timed) {
-      // Invert it to show how much time each player is taking.
-      time *= -1;
-    }
-
-    const text = millisecondsToClockString(time);
-    globals.elements.timer2.setTimerText(text);
-
-    if (data.activePlayerIndex !== -1) {
-      const activePlayerName =
-        globals.metadata.playerNames[data.activePlayerIndex];
-      if (activePlayerName !== undefined) {
-        globals.elements.timer2.setLabelText(activePlayerName);
-      }
-    }
+    globals.state.playing && isOurSeat(activePlayerIndex, globals.metadata);
+  if (timer1 !== undefined && timer2 !== undefined) {
+    updateTimerDisplays(timer1, timer2, activePlayerIndex, ourTurn);
   }
-
-  globals.elements.timer2.visible(!ourTurn && data.activePlayerIndex !== -1);
-  globals.layers.timer.batchDraw();
 
   // Update the timer tooltips for each player.
-  for (const i of globals.playerTimes.keys()) {
-    const playerIndex = i as PlayerIndex;
-    setTickingDownTimePlayerNameTooltip(playerIndex);
+  for (const i of clock.getPlayerTimes().keys()) {
+    setPlayerNameTooltip(i as PlayerIndex);
   }
-  setTickingDownTimeCurrentPlayerTooltip();
+  setCurrentPlayerTooltip();
+}
 
-  // The server will send an active player index of -1 when the game is over.
-  if (data.activePlayerIndex === -1) {
+/** Draws the active player's clock after it counted. */
+function drawTick(warning: boolean) {
+  const activePlayerIndex = clock.getActivePlayerIndex();
+  if (activePlayerIndex === undefined) {
     return;
   }
 
-  // Reset both timers to black background, if player was running out of time.
-  globals.elements.timer1.oval.fill("black").opacity(0.2);
-  globals.elements.timer2.oval.fill("black").opacity(0.2);
+  // The timers are not drawn in untimed games unless the player enabled them.
+  const ourTurn =
+    globals.state.playing && isOurSeat(activePlayerIndex, globals.metadata);
+  const timer = ourTurn ? globals.elements.timer1 : globals.elements.timer2;
+  if (timer !== undefined) {
+    timer.setTimerText(
+      millisecondsToClockString(clock.getPlayerTime(activePlayerIndex)!),
+    );
+    drawLayer(timer);
+    if (warning) {
+      timer.toggleWarningFlash();
+    }
+  }
 
-  // Start the local timer for the active player.
-  const activeTimer = ourTurn
-    ? globals.elements.timer1
-    : globals.elements.timer2;
-  // eslint-disable-next-line unicorn/prefer-global-this
-  globals.timerID = window.setInterval(() => {
-    setTickingDownTime(activeTimer);
-    setTickingDownTimePlayerNameTooltip(data.activePlayerIndex);
-    setTickingDownTimeCurrentPlayerTooltip();
-    globals.elements.deck?.updateDeckTooltip();
-  }, 1000);
+  setPlayerNameTooltip(activePlayerIndex);
+  setCurrentPlayerTooltip();
+  globals.elements.deck?.updateDeckTooltip();
 }
 
-export function stop(): void {
-  if (globals.timerID !== null) {
-    globalThis.clearInterval(globals.timerID);
-    globals.timerID = null;
-  }
-}
-
-/**
- * Resize rebuilds recreate timer UI elements and clear the local ticking interval. Rebind the
- * current local clock state to the new timer elements without waiting for the next server "clock"
- * message.
- */
-export function resumeAfterResize(): void {
-  if (globals.playerTimes.length === 0 || globals.activePlayerIndex === -1) {
-    return;
-  }
-
-  update({
-    times: globals.playerTimes,
-    activePlayerIndex: globals.activePlayerIndex,
-    timeTaken: globals.timeTaken,
-  });
-}
-
-function setTickingDownTime(timer: TimerDisplay) {
-  // Calculate the elapsed time since the last timer update.
-  const now = Date.now();
-  const elapsedTime = now - globals.lastTimerUpdateTimeMS;
-  globals.lastTimerUpdateTimeMS = now;
-  if (elapsedTime < 0) {
-    return;
+function updateTimerDisplays(
+  timer1: TimerDisplay,
+  timer2: TimerDisplay,
+  activePlayerIndex: PlayerIndex | undefined,
+  ourTurn: boolean,
+) {
+  if (globals.state.playing) {
+    // The visibility of the first timer does not change during a game.
+    const { ourPlayerIndex } = globals.metadata;
+    assertDefined(ourPlayerIndex, "A player has no seat.");
+    const time = clock.getPlayerTime(ourPlayerIndex);
+    if (time !== undefined) {
+      timer1.setTimerText(millisecondsToClockString(time));
+    }
   }
 
-  // Update the time in local array to approximate server times.
-  globals.playerTimes[globals.activePlayerIndex]! -= elapsedTime;
-  if (
-    globals.options.timed
-    && globals.playerTimes[globals.activePlayerIndex]! < 0
-  ) {
-    // Do not let the timer go into negative values, or else it will mess up the display. (But in
-    // non-timed games, we want this to happen.)
-    globals.playerTimes[globals.activePlayerIndex] = 0;
+  if (!ourTurn && activePlayerIndex !== undefined) {
+    // Update the UI with the value of the timer for the active player.
+    timer2.setTimerText(
+      millisecondsToClockString(clock.getPlayerTime(activePlayerIndex)!),
+    );
+
+    const activePlayerName = globals.metadata.playerNames[activePlayerIndex];
+    if (activePlayerName !== undefined) {
+      timer2.setLabelText(activePlayerName);
+    }
   }
 
-  let millisecondsLeft = globals.playerTimes[globals.activePlayerIndex]!;
-  if (!globals.options.timed) {
-    // Invert it to show how much time each player is taking.
-    millisecondsLeft *= -1;
-  }
-  const text = millisecondsToClockString(millisecondsLeft);
-  timer.setTimerText(text);
-  drawLayer(timer);
+  timer2.visible(!ourTurn && activePlayerIndex !== undefined);
+  globals.layers.timer.batchDraw();
 
-  // Play a sound to indicate that the current player is almost out of time. Do not play it more
-  // frequently than about once per second.
-  if (
-    globals.options.timed
-    && globals.lobby.settings.soundTimer
-    && millisecondsLeft > 0 // Between 0 and 10 seconds
-    && millisecondsLeft <= 10_000
-    && elapsedTime > 900
-    && elapsedTime < 1100
-    && !globals.state.pause.active
-    && !globals.lobby.errorOccurred
-  ) {
-    timer.oval.opacity(timer.oval.fill() === "black" ? 0.7 : 0.2);
-    timer.oval.fill(timer.oval.fill() === "black" ? "red" : "black");
-    globals.game!.sounds.play(SoundType.Tone);
-  }
+  // Clear the low-time warning from both timers.
+  timer1.clearWarningFlash();
+  timer2.clearWarningFlash();
 }
 
 /** Update the tooltip that appears when you hover over a player's name. */
-function setTickingDownTimePlayerNameTooltip(playerIndex: PlayerIndex | -1) {
-  if (playerIndex === -1) {
-    return;
-  }
-
+function setPlayerNameTooltip(playerIndex: PlayerIndex) {
   // This tooltip is disabled in speedrun mode.
-  if (globals.lobby.settings.speedrunMode || globals.options.speedrun) {
+  if (
+    store.getState().session.settings.speedrunFeatures
+    || globals.options.speedrun
+  ) {
     return;
   }
 
-  const playerTime = globals.playerTimes[playerIndex];
+  const playerTime = clock.getPlayerTime(playerIndex);
   if (playerTime === undefined) {
     return;
   }
 
-  // Invert it to show how much time each player is taking.
-  const milliseconds = globals.options.timed ? playerTime : -playerTime;
-
   let content = "Time ";
-  content += globals.options.timed ? "remaining" : "taken";
+  content += globals.options.timeControl === undefined ? "taken" : "remaining";
   content += ":<br /><strong>";
-  content += millisecondsToClockString(milliseconds);
+  content += millisecondsToClockString(playerTime);
   content += "</strong>";
-  tooltips.setInstanceContent(`#tooltip-player-${playerIndex}`, content);
+  tooltips.setContent(`player-${playerIndex}`, content);
 }
 
-function setTickingDownTimeCurrentPlayerTooltip() {
+/** Update the tooltip that appears when you hover over the current player's timer. */
+function setCurrentPlayerTooltip() {
   // This tooltip is disabled in non-timed games.
-  if (!globals.options.timed && !globals.lobby.settings.showTimerInUntimed) {
+  const turnTime = clock.getTurnTime();
+  if (
+    turnTime === undefined
+    || (globals.options.timeControl === undefined
+      && !store.getState().session.settings.showTimerInUntimed)
+  ) {
     return;
   }
 
-  // Update the tooltip that appears when you hover over the current player's timer. Use absolute
-  // values because time is measured in negative values in non-timed games.
-  let time =
-    Math.abs(globals.startingTurnTime)
-    - Math.abs(globals.playerTimes[globals.activePlayerIndex]!);
-
-  // We subtract the amount of time that passed since the beginning of the turn (as reported by the
-  // server in the "clock" message). This is necessary since the client will not know how much time
-  // has elapsed in the situation where they refresh the page in the middle of an ongoing turn.
-  // "globals.timeTaken" will be 0 if the client was connected when the turn began.
-  time -= Math.abs(globals.timeTaken);
-
   let content = "Time taken on this turn:<br /><strong>";
-  content += millisecondsToClockString(time);
+  content += millisecondsToClockString(turnTime);
   content += "</strong>";
-  tooltips.setInstanceContent("#tooltip-time-taken", content);
+  tooltips.setContent("time-taken", content);
 }

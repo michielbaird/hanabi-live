@@ -1,20 +1,19 @@
 // These represent actions that can modify the state store. (They cause a state duplication to occur
-// and the state reducers to fire.) All of the sub-actions from the "gameAction" command are listed
+// and the state reducers to fire.) All of the sub-actions from the "gameEvent" command are listed
 // here.
 
-import type { Spectator } from "@hanabi-live/data";
+import type { ReplyData, ServerEventData, Spectator } from "@hanabi-live/data";
 import type {
   ActionIncludingHypothetical,
+  AuthorNotes,
   CardIdentity,
   GameAction,
-  PlayerIndex,
 } from "@hanabi-live/game";
-import type { ClientAction } from "./ClientAction";
-import type { UIAction } from "./UIAction";
+import type { ClientAction } from "./ClientAction.ts";
 
 export type Action =
   | ActionInit
-  | ActionListReceived
+  | ActionGameStateLoaded
   | GameAction
   | ReplayAction
   | ActionCardIdentities
@@ -22,8 +21,8 @@ export type Action =
   | ActionPause
   | ActionPauseQueue
   | ActionSpectators
-  | ActionFinishOngoingGame
-  | UIAction;
+  | ActionGameFinished
+  | ActionSharedReplayState;
 
 export type { ActionIncludingHypothetical } from "@hanabi-live/game";
 
@@ -34,12 +33,13 @@ export type ReplayAction =
   | ActionReplaySharedSegment
   | ActionReplayUseSharedSegments
   | ActionReplayLeader
+  | ActionRestartDeclined
   | HypotheticalAction;
 
 type HypotheticalAction =
   | ActionHypotheticalStart
   | ActionHypotheticalEnd
-  | ActionHypotheticalAction
+  | ActionHypotheticalActions
   | ActionHypotheticalBack
   | ActionHypotheticalShowDrawnCards;
 
@@ -47,27 +47,32 @@ type HypotheticalAction =
 // Initialization actions
 // ----------------------
 
-export interface ActionInit {
+/** The parts of the reply to "gameInitLoad" that the state uses. */
+export interface ActionInit extends Readonly<
+  Pick<ReplyData["gameInitLoad"], "startedAt" | "finishedAt" | "mode">
+> {
   readonly type: "init";
-  readonly datetimeStarted: string;
-  readonly datetimeFinished: string;
-  readonly spectating: boolean;
-  readonly shadowing: boolean;
-
-  /** True if either a dedicated solo replay or a shared replay. */
-  readonly replay: boolean;
-
-  readonly sharedReplay: boolean;
-  readonly databaseID: number;
-  readonly sharedReplaySegment: number;
-  readonly sharedReplayLeader: string;
-  readonly paused: boolean;
-  readonly pausePlayerIndex: PlayerIndex;
 }
 
-interface ActionListReceived {
-  readonly type: "gameActionList";
+/**
+ * Everything about the game that we may see, which the server sends when we load the game or
+ * reconnect ("gameState"). The state applies it as one update, in the order of these fields.
+ */
+interface ActionGameStateLoaded {
+  readonly type: "gameStateLoaded";
+  /** Where the shared replay is, in a shared replay. */
+  readonly sharedReplay: Omit<ActionSharedReplayState, "type"> | undefined;
+  /** The game's events so far, as the game state applies them. */
   readonly actions: readonly GameAction[];
+  /** The identity of every card, in a replay. */
+  readonly cardIdentities: readonly CardIdentity[] | undefined;
+  /** The notes that we may see. */
+  readonly notes: readonly AuthorNotes[];
+  /** Whether the game is paused, in a game in progress. */
+  readonly pause: Omit<ActionPause, "type"> | undefined;
+  readonly spectators: readonly Spectator[];
+  /** The shared replay's hypothetical, if it has one, which we join. */
+  readonly hypothetical: Omit<ActionHypotheticalStart, "type"> | undefined;
 }
 
 // ---------------------
@@ -81,13 +86,13 @@ interface ActionCardIdentities {
 
 interface ActionPremove {
   readonly type: "premove";
-  readonly premove: ClientAction | null;
+  readonly premove: ClientAction | undefined;
 }
 
-interface ActionPause {
+interface ActionPause extends Readonly<
+  Pick<ServerEventData["pause"], "pausingPlayerIndex" | "queued">
+> {
   readonly type: "pause";
-  readonly active: boolean;
-  readonly playerIndex: PlayerIndex;
 }
 
 interface ActionPauseQueue {
@@ -100,12 +105,38 @@ interface ActionSpectators {
   readonly spectators: readonly Spectator[];
 }
 
-interface ActionFinishOngoingGame {
-  readonly type: "finishOngoingGame";
-  readonly databaseID: number;
-  readonly sharedReplayLeader: string;
-  readonly datetimeFinished: string;
+interface ActionGameFinished extends Readonly<
+  Pick<ServerEventData["gameFinished"], "view" | "sharedReplay">
+> {
+  readonly type: "gameFinished";
+
+  /** Every action of the game, with the clues that a player saw only in part. */
+  readonly actions: readonly GameAction[];
+
+  /** The server does not send this; the client records when it received the message. */
+  readonly finishedAt: string;
+
+  /** The name of the shared replay's leader, which the server sends as a user ID. */
+  readonly leader: string;
 }
+
+/** Where a shared replay is now, which the server sends in the game's state. */
+interface ActionSharedReplayState extends Readonly<
+  Pick<
+    NonNullable<SharedReplayPhase["sharedReplay"]>,
+    "turn" | "efficiencyModifier" | "restartDecliners"
+  >
+> {
+  readonly type: "sharedReplayState";
+
+  /** The name of the shared replay's leader, which the server sends as a user ID. */
+  readonly leader: string;
+}
+
+type SharedReplayPhase = Extract<
+  ServerEventData["gameState"]["phase"],
+  { type: "replay" }
+>;
 
 // --------------
 // Replay actions
@@ -137,7 +168,13 @@ interface ActionReplayUseSharedSegments {
 
 interface ActionReplayLeader {
   readonly type: "replayLeader";
-  readonly name: string;
+  readonly username: string;
+}
+
+interface ActionRestartDeclined {
+  readonly type: "restartDeclined";
+  /** The names of the players who will not play again if the leader restarts. */
+  readonly restartDeclined: readonly string[];
 }
 
 // --------------------
@@ -145,25 +182,36 @@ interface ActionReplayLeader {
 // --------------------
 
 export interface ActionHypotheticalStart {
-  readonly type: "hypoStart";
+  readonly type: "hypotheticalStart";
+  /** Whether this is for the shared replay's hypothetical, rather than our own. */
+  readonly shared: boolean;
   readonly showDrawnCards: boolean;
   readonly actions: readonly ActionIncludingHypothetical[];
 }
 
 export interface ActionHypotheticalEnd {
-  readonly type: "hypoEnd";
+  readonly type: "hypotheticalEnd";
+  /** Whether this is for the shared replay's hypothetical, rather than our own. */
+  readonly shared: boolean;
 }
 
-export interface ActionHypotheticalAction {
-  readonly type: "hypoAction";
-  readonly action: ActionIncludingHypothetical;
+/** The actions of one move in a hypothetical, or one changed card. */
+export interface ActionHypotheticalActions {
+  readonly type: "hypotheticalActions";
+  /** Whether this is for the shared replay's hypothetical, rather than our own. */
+  readonly shared: boolean;
+  readonly actions: readonly ActionIncludingHypothetical[];
 }
 
 export interface ActionHypotheticalBack {
-  readonly type: "hypoBack";
+  readonly type: "hypotheticalBack";
+  /** Whether this is for the shared replay's hypothetical, rather than our own. */
+  readonly shared: boolean;
 }
 
 interface ActionHypotheticalShowDrawnCards {
-  readonly type: "hypoShowDrawnCards";
+  readonly type: "hypotheticalShowDrawnCards";
+  /** Whether this is for the shared replay's hypothetical, rather than our own. */
+  readonly shared: boolean;
   readonly showDrawnCards: boolean;
 }

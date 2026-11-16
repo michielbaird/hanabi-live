@@ -1,22 +1,32 @@
 import { PROJECT_NAME } from "@hanabi-live/data";
-import { showError } from "./modals";
-import { escapeHtml } from "./utils";
+import { showError } from "./modals.ts";
+import { escapeHtml } from "./utils.ts";
+
+/**
+ * Where the Brave browser on iOS reports errors from code it injects: the character directly after
+ * the opening `<!doctype HTML>` of each page.
+ */
+const INJECTED_ERROR_LOCATION = {
+  lineno: 1,
+  colno: 16,
+} as const;
 
 /** Initialize a global error handler that will show errors to the end-user. */
 export function initErrorListener(): void {
   globalThis.addEventListener("error", (errorEvent) => {
+    if (!(errorEvent instanceof ErrorEvent)) {
+      return;
+    }
     if (
       (errorEvent.lineno === 0
         && errorEvent.colno === 0
         && errorEvent.filename === ""
         && errorEvent.error === null)
-      || (errorEvent.lineno === 1
-        && errorEvent.colno === 16
+      || (errorEvent.lineno === INJECTED_ERROR_LOCATION.lineno
+        && errorEvent.colno === INJECTED_ERROR_LOCATION.colno
         && !errorEvent.filename.endsWith("/main.min.js"))
     ) {
-      // Some buggy code that the browser injected is causing an error. Safe to ignore. This occurs
-      // on the Brave browser on iOS. Line 1:16 corresponds to the character directly after the
-      // opening <!doctype HTML> of each page.
+      // Some buggy code that the browser injected is causing an error. Safe to ignore.
       return;
     }
 
@@ -29,7 +39,7 @@ export function initErrorListener(): void {
       <ul>
         <li>in the lobby chat (worst option)</li>
         <li>or in <a href="https://discord.gg/FADvkJp" target="_blank" rel="noopener noreferrer">the Hanab Discord server</a> (better option)</li>
-        <li>or <a href="https://github.com/Hanabi-Live/hanabi-live" target="_blank" rel="noopener noreferrer">on the GitHub repository</a> (best option)</li>
+        <li>or on <a href="https://github.com/Hanabi-Live/hanabi-live" target="_blank" rel="noopener noreferrer">the GitHub repository</a> (best option)</li>
       </ul>
       When reporting, please copy/paste the stack-trace above as text, rather than showing a screenshot.
     `;
@@ -49,14 +59,11 @@ function getErrorStackTrace(errorEvent: ErrorEvent): string | undefined {
     && "stack" in error
     && typeof error.stack === "string"
   ) {
-    if (
-      "message" in error
+    return "message" in error
       && typeof error.message === "string"
       && !error.stack.includes(error.message)
-    ) {
-      return `${errorEvent.message}\n${error.stack}`;
-    }
-    return error.stack;
+      ? `${errorEvent.message}\n${error.stack}`
+      : error.stack;
   }
   return undefined;
 }

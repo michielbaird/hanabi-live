@@ -1,17 +1,17 @@
 import type { Tuple } from "complete-common";
-import type { CardStatus } from "../enums/CardStatus";
-import type { StackDirection } from "../enums/StackDirection";
-import type { CardOrder } from "../types/CardOrder";
-import type { NumPlayers } from "../types/NumPlayers";
-import type { NumSuits } from "../types/NumSuits";
-import type { Rank } from "../types/Rank";
-import type { StateClue } from "../types/StateClue";
-import type { SuitRankMap } from "../types/SuitRankMap";
-import type { CardState } from "./CardState";
-import type { LogEntry } from "./LogEntry";
-import type { StateStrike } from "./StateStrike";
-import type { StatsState } from "./StatsState";
-import type { TurnState } from "./TurnState";
+import type { CardStatus } from "../enums/CardStatus.ts";
+import type { StackDirection } from "../enums/StackDirection.ts";
+import type { CardOrder } from "../types/CardOrder.ts";
+import type { NumPlayers } from "../types/NumPlayers.ts";
+import type { NumSuits } from "../types/NumSuits.ts";
+import type { Rank } from "../types/Rank.ts";
+import type { StateClue } from "../types/StateClue.ts";
+import type { SuitRankMap } from "../types/SuitRankMap.ts";
+import type { CardState } from "./CardState.ts";
+import type { LogEntry } from "./LogEntry.ts";
+import type { StateStrike } from "./StateStrike.ts";
+import type { StatsState } from "./StatsState.ts";
+import type { TurnState } from "./TurnState.ts";
 
 export interface GameState {
   readonly turn: TurnState;
@@ -42,9 +42,9 @@ export interface GameState {
 
   /**
    * For Sudoku variants, this denotes the first rank played of this stack. If the stack is not
-   * started yet, then the value stored is null.
+   * started yet, then the value stored is undefined.
    */
-  readonly playStackStarts: Readonly<Tuple<Rank | null, NumSuits>>;
+  readonly playStackStarts: Readonly<Tuple<Rank | undefined, NumSuits>>;
 
   /** For "Throw It in a Hole" variants. All played cards go into the hole. */
   readonly hole: readonly CardOrder[];

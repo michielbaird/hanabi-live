@@ -1,16 +1,16 @@
 // Functions related to deck information: total cards, drawing cards
 
 import { sumArray } from "complete-common";
-import { START_CARD_RANK } from "../constants";
-import { getVariant } from "../gameData";
-import type { CardState } from "../interfaces/CardState";
-import type { GameMetadata } from "../interfaces/GameMetadata";
-import type { Suit } from "../interfaces/Suit";
-import type { Variant } from "../interfaces/Variant";
-import type { Rank } from "../types/Rank";
-import type { SuitIndex } from "../types/SuitIndex";
-import { isCardDiscarded } from "./cardState";
-import { getCardsPerHand } from "./hand";
+import { getVariantById } from "../gameData.ts";
+import { START_CARD_RANK } from "../generated/protocol.ts";
+import type { CardState } from "../interfaces/CardState.ts";
+import type { GameMetadata } from "../interfaces/GameMetadata.ts";
+import type { Suit } from "../interfaces/Suit.ts";
+import type { Variant } from "../interfaces/Variant.ts";
+import type { Rank } from "../types/Rank.ts";
+import type { SuitIndex } from "../types/SuitIndex.ts";
+import { isCardDiscarded } from "./cardState.ts";
+import { getCardsPerHand } from "./hand.ts";
 
 export function getTotalCardsInDeck(variant: Variant): number {
   const suitCounts = variant.suits.map((suit) =>
@@ -29,7 +29,7 @@ function getTotalCardsInSuit(variant: Variant, suit: Suit): number {
 /**
  * Returns how many copies of this card should exist in the deck.
  *
- * This implementation mirrors `numCopiesOfCard` in "server/src/game_deck.go".
+ * This implementation mirrors the native deck rules in "server/engine/src/catalog.rs".
  */
 export function getNumCopiesOfCard(
   suit: Suit,
@@ -71,11 +71,7 @@ export function getNumCopiesOfCard(
     }
 
     case 5: {
-      if (suit.reversed) {
-        return 3;
-      }
-
-      return 1;
+      return suit.reversed ? 3 : 1;
     }
 
     case START_CARD_RANK: {
@@ -115,7 +111,7 @@ export function isInitialDealFinished(
   currentDeckSize: number,
   metadata: GameMetadata,
 ): boolean {
-  const variant = getVariant(metadata.options.variantName);
+  const variant = getVariantById(metadata.options.variantId);
   const totalCardsInDeck = getTotalCardsInDeck(variant);
   const numCardsPerHand = getCardsPerHand(metadata.options);
   return (
@@ -134,11 +130,7 @@ export function getDiscardHelpers(
   // eslint-disable-next-line func-style
   const total = (suitIndex: SuitIndex, rank: Rank) => {
     const suit = variant.suits[suitIndex];
-    if (suit === undefined) {
-      return 0;
-    }
-
-    return getNumCopiesOfCard(suit, rank, variant);
+    return suit === undefined ? 0 : getNumCopiesOfCard(suit, rank, variant);
   };
 
   // eslint-disable-next-line func-style
@@ -153,7 +145,10 @@ export function getDiscardHelpers(
   const isAllDiscarded = (suitIndex: SuitIndex, rank: Rank) =>
     total(suitIndex, rank) === discarded(suitIndex, rank);
 
-  return { isLastCopy, isAllDiscarded };
+  return {
+    isLastCopy,
+    isAllDiscarded,
+  };
 }
 
 export function getAllDiscardedSetForSuit(

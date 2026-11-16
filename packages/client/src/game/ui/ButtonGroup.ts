@@ -1,19 +1,12 @@
 import Konva from "konva";
-import type { ColorButton } from "./ColorButton";
-import type { RankButton } from "./RankButton";
-import type { PlayerButton } from "./controls/PlayerButton";
+import type { ColorButton } from "./ColorButton.ts";
+import type { RankButton } from "./RankButton.ts";
+import type { PlayerButton } from "./controls/PlayerButton.ts";
 
 type ClueButton = PlayerButton | ColorButton | RankButton;
 
 export class ButtonGroup extends Konva.Group {
   list: ClueButton[] = [];
-
-  constructor(config: Konva.ContainerConfig) {
-    super(config);
-
-    // Class variables
-    this.list = [];
-  }
 
   addList(button: ClueButton): void {
     const that = this; // eslint-disable-line @typescript-eslint/no-this-alias
@@ -23,7 +16,9 @@ export class ButtonGroup extends Konva.Group {
     (button as Konva.Node).on(
       "click tap",
       function buttonClick(this: Konva.Node) {
-        (this as ClueButton).setPressed(true);
+        // Clicking the pressed button releases it, leaving no button pressed.
+        const clickedButton = this as ClueButton;
+        clickedButton.setPressed(!clickedButton.pressed);
 
         for (const clueButton of that.list) {
           if (clueButton !== this && clueButton.pressed) {
@@ -31,29 +26,29 @@ export class ButtonGroup extends Konva.Group {
           }
         }
 
-        that.fire("change", null);
+        that.fire("change", undefined);
       },
     );
   }
 
-  getPressed(): ClueButton | null {
+  getPressed(): ClueButton | undefined {
     for (const button of this.list) {
       if (button.pressed) {
         return button;
       }
     }
 
-    return null;
+    return undefined;
   }
 
-  getPressedIndex(): number | null {
+  getPressedIndex(): number | undefined {
     for (const [i, button] of this.list.entries()) {
       if (button.pressed) {
         return i;
       }
     }
 
-    return null;
+    return undefined;
   }
 
   clearPressed(): void {
@@ -64,14 +59,15 @@ export class ButtonGroup extends Konva.Group {
 
   /** This is only used for groups of "PlayerButton". */
   selectNextTarget(): void {
-    const buttonIndex = this.getPressedIndex() ?? -1;
+    const pressedIndex = this.getPressedIndex();
+    const startIndex = pressedIndex === undefined ? 0 : pressedIndex + 1;
 
     // Find the next enabled button in the group.
     const total = this.list.length;
     let nextButton: ClueButton | undefined;
 
-    for (let i = 1; i <= total; i++) {
-      const candidateIndex = (buttonIndex + i) % total;
+    for (let i = 0; i < total; i++) {
+      const candidateIndex = (startIndex + i) % total;
       const candidateButton = this.list[candidateIndex];
 
       if (
@@ -84,7 +80,8 @@ export class ButtonGroup extends Konva.Group {
       }
     }
 
-    if (nextButton !== undefined) {
+    // Clicking the pressed button would release it.
+    if (nextButton !== undefined && !nextButton.pressed) {
       nextButton.dispatchEvent(new MouseEvent("click"));
     }
   }

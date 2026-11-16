@@ -4,8 +4,18 @@
   "extends": [
     "complete-tsconfig/tsconfig.base.json",
     "../../tsconfig.monorepo.json",
-    "complete-tsconfig/tsconfig.node.json",
   ],
 
-  "include": ["./src/**/*.ts", "./src/**/*.mts"],
+  "include": ["./src/**/*.ts"],
+  "compilerOptions": {
+    "types": ["bun"],
+    // The Node.js libraries.
+    "lib": [
+      "es2024",
+      "ESNext.Array",
+      "ESNext.Collection",
+      "ESNext.Iterator",
+      "ESNext.Promise",
+    ],
+  },
 }

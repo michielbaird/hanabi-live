@@ -1,28 +1,71 @@
 import type { CardOrder } from "@hanabi-live/game";
 import {
+  getDeckPossibilities,
   getTotalCardsInDeck,
-  millisecondsToClockString,
+  PipState,
+  UNKNOWN_SUIT_NAME,
 } from "@hanabi-live/game";
 import Konva from "konva";
-import { OptionIcons } from "../../enums/OptionIcons";
-import { globals as globals2 } from "../../Globals";
-import * as tooltips from "../../tooltips";
-import { dateTimeFormatter, escapeHtml, timerFormatter } from "../../utils";
-import { ActionType } from "../types/ActionType";
-import { ReplayArrowOrder } from "../types/ReplayArrowOrder";
-import * as arrows from "./arrows";
-import { CARD_ANIMATION_LENGTH_SECONDS } from "./constants";
-import * as cursor from "./cursor";
-import { isOurTurn } from "./isOurTurn";
-import * as konvaTooltips from "./konvaTooltips";
-import * as turn from "./turn";
-import { globals } from "./UIGlobals";
+import { TOOLTIP_DELAY_IN_MILLISECONDS } from "../../Tooltip.ts";
+import type { GameTooltipName } from "../../tooltips.ts";
+import * as tooltips from "../../tooltips.ts";
+import type { Pips } from "../types/Pips.ts";
+import * as arrows from "./arrows.ts";
+import {
+  CARD_ANIMATION_LENGTH_SECONDS,
+  CARD_W,
+  EMPTY_DECK_COLOR,
+  FONT_FAMILY,
+  LEFT_MOUSE_BUTTON_HELD,
+  STROKE_WIDTH_UNIT,
+} from "./constants.ts";
+import * as cursor from "./cursor.ts";
+import { CARD_IMAGE_UNKNOWN_CARD_RANK_NAME } from "./drawCards.ts";
+import { getGameInfoTooltip } from "./gameInfoTooltip.ts";
+import { updatePip } from "./HanabiCard.ts";
+import * as HanabiCardInit from "./HanabiCardInit.ts";
+import { isOurTurn } from "./isOurTurn.ts";
+import * as konvaTooltips from "./konvaTooltips.ts";
+import * as turn from "./turn.ts";
+import { globals } from "./UiGlobals.ts";
+
+/** The size of the count of cards left in the deck, as a fraction of the deck's height. */
+const NUM_LEFT_SIZE = 0.4;
+
+/** The color of the number of cards remaining in the deck, while it is not empty. */
+const NUM_LEFT_COLOR = "white";
+
+/** The dark gray outline of the number of cards remaining in the deck. */
+const NUM_LEFT_STROKE_COLOR = "#222222";
+
+/** The width of the outline around the number of cards left, as a fraction of the stage height. */
+const NUM_LEFT_STROKE_WIDTH = 3 * STROKE_WIDTH_UNIT;
+
+/** The top of the count of cards left, as a fraction of the deck's height. */
+const NUM_LEFT_Y = 0.3;
+
+/**
+ * The top of the count of cards left once the deck is empty, as a fraction of the deck's height. It
+ * moves up to make room for the labels that show the turns remaining.
+ */
+const EMPTY_DECK_NUM_LEFT_Y = 0.15;
+
+/**
+ * How far the count of cards left moves down on an empty deck to center it between the game ID and
+ * the labels that show the turns remaining, as a fraction of the deck's height.
+ */
+const GAME_ID_NUM_LEFT_NUDGE = 0.07;
+
+/** The image of a card with no pips, which the deck shows with its own pips during empathy. */
+const UNKNOWN_CARD_IMAGE = `card-${UNKNOWN_SUIT_NAME}-${CARD_IMAGE_UNKNOWN_CARD_RANK_NAME}`;
 
 export class Deck extends Konva.Group {
   cardBack: Konva.Image;
+  empathy = false;
   numLeft: number;
+  pips: Pips;
   numLeftText: Konva.Text;
-  tooltipName = "deck";
+  tooltipName: GameTooltipName = "deck";
   tooltipContent = "";
 
   constructor(config: Konva.ContainerConfig) {
@@ -44,29 +87,44 @@ export class Deck extends Konva.Group {
     // The text that shows the number of cards remaining in the deck.
     this.numLeft = getTotalCardsInDeck(globals.variant);
     this.numLeftText = new Konva.Text({
-      fill: "white",
-      stroke: "#222222",
-      strokeWidth: 0.0168 * this.height(),
+      fill: NUM_LEFT_COLOR,
+      stroke: NUM_LEFT_STROKE_COLOR,
+      strokeWidth: NUM_LEFT_STROKE_WIDTH * globals.stage.height(),
       align: "center",
       x: 0,
-      y: 0.3 * this.height(),
+      y: NUM_LEFT_Y * this.height(),
       width: this.width(),
-      height: 0.4 * this.height(),
-      fontSize: 0.4 * this.height(),
-      fontFamily: "Verdana",
+      height: NUM_LEFT_SIZE * this.height(),
+      fontSize: NUM_LEFT_SIZE * this.height(),
+      fontFamily: FONT_FAMILY,
       fontStyle: "bold",
       text: this.numLeft.toString(),
       listening: false,
     });
     this.add(this.numLeftText);
 
+    // The pips that show which cards can still be in the deck. The pips are drawn at the size of a
+    // card image, so they scale with the deck.
+    this.pips = HanabiCardInit.pips(globals.variant);
+    const pipsScale = this.width() / CARD_W;
+    const pipsGroup = new Konva.Group({
+      scale: {
+        x: pipsScale,
+        y: pipsScale,
+      },
+      listening: false,
+    });
+    pipsGroup.add(this.pips.suitPips, this.pips.rankPips);
+    this.add(pipsGroup);
+
     // Right-click on the deck to highlight it with an arrow.
     this.on("click tap", (event: Konva.KonvaEventObject<MouseEvent>) => {
-      arrows.click(event, ReplayArrowOrder.Deck);
+      arrows.click(event, "deck");
     });
 
     this.initDeckTooltip();
     this.initCursors();
+    this.initEmpathy();
   }
 
   // Most of this function is copy-pasted from "LayoutChild.dragEnd()". It contains a subset of the
@@ -79,16 +137,16 @@ export class Deck extends Konva.Group {
       const totalCardsInDeck = getTotalCardsInDeck(globals.variant);
       const cardOrder = (totalCardsInDeck - 1) as CardOrder;
       turn.end({
-        type: ActionType.Play,
-        target: cardOrder,
+        type: "play",
+        order: cardOrder,
       });
     } else if (draggedTo === "discardArea" && globals.variant.hasInverted) {
       // Inverted suit needs discard whenever play is available.
       const totalCardsInDeck = getTotalCardsInDeck(globals.variant);
       const cardOrder = (totalCardsInDeck - 1) as CardOrder;
       turn.end({
-        type: ActionType.Discard,
-        target: cardOrder,
+        type: "discard",
+        order: cardOrder,
       });
     } else {
       // The card was dragged to an invalid location; tween it back to the hand.
@@ -100,11 +158,7 @@ export class Deck extends Konva.Group {
         // eslint-disable-next-line @typescript-eslint/unbound-method
         easing: Konva.Easings.EaseOut,
         onFinish: () => {
-          const layer = globals.layers.UI;
-          // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-          if (layer !== undefined) {
-            layer.batchDraw();
-          }
+          globals.layers.UI.batchDraw();
         },
       });
     }
@@ -121,14 +175,15 @@ export class Deck extends Konva.Group {
         return;
       }
 
+      this.updateDeckTooltip();
       konvaTooltips.setActiveHover(this);
       setTimeout(() => {
         konvaTooltips.show(this);
-      }, tooltips.TOOLTIP_DELAY_IN_MILLISECONDS);
+      }, TOOLTIP_DELAY_IN_MILLISECONDS);
     });
     this.on("mouseout touchend", () => {
       konvaTooltips.resetActiveHover(this);
-      tooltips.close("#tooltip-deck");
+      tooltips.close("deck");
     });
 
     this.updateDeckTooltip();
@@ -138,8 +193,8 @@ export class Deck extends Konva.Group {
     // We store the content as a class variable so that it can be reused for the faded background
     // rectangle behind the card (so that the tooltip will work when there are 0 cards left in the
     // deck).
-    this.tooltipContent = getTooltipContent();
-    tooltips.setInstanceContent("#tooltip-deck", this.tooltipContent);
+    this.tooltipContent = getGameInfoTooltip();
+    tooltips.setContent("deck", this.tooltipContent);
   }
 
   // When dragging the deck, change the cursor to emulate the behavior when dragging a card. It does
@@ -156,7 +211,7 @@ export class Deck extends Konva.Group {
       }
     });
     this.on("mousedown", (event: Konva.KonvaEventObject<MouseEvent>) => {
-      if (this.canDragDeck() && event.evt.buttons === 1) {
+      if (this.canDragDeck() && event.evt.buttons === LEFT_MOUSE_BUTTON_HELD) {
         // Left-click is being held down.
         cursor.set("dragging");
       }
@@ -168,6 +223,83 @@ export class Deck extends Konva.Group {
     });
   }
 
+  // Click and hold the left mouse button on the deck to show which cards can still be in it.
+  initEmpathy(): void {
+    this.on("mousedown", (event: Konva.KonvaEventObject<MouseEvent>) => {
+      if (
+        event.evt.buttons !== LEFT_MOUSE_BUTTON_HELD
+        || event.evt.shiftKey
+        || event.evt.altKey
+        || event.evt.metaKey
+        || this.canDragDeck()
+      ) {
+        return;
+      }
+
+      // The game info tooltip would cover the pips.
+      konvaTooltips.resetActiveHover(this);
+      tooltips.close("deck");
+      this.setEmpathy(true);
+    });
+    const stopEmpathy = () => {
+      if (!globals.globalEmpathyEnabled) {
+        this.setEmpathy(false);
+      }
+    };
+    this.on("mouseup mouseleave", stopEmpathy);
+  }
+
+  setEmpathy(enabled: boolean): void {
+    if (enabled === this.empathy) {
+      return;
+    }
+
+    this.empathy = enabled;
+    this.updateEmpathy();
+  }
+
+  /** Redraws the deck for the current empathy setting and game state. */
+  updateEmpathy(): void {
+    const showEmpathy = this.empathy && this.numLeft > 0;
+    this.cardBack.image(
+      globals.cardImages.get(showEmpathy ? UNKNOWN_CARD_IMAGE : "deck-back"),
+    );
+    this.numLeftText.visible(!showEmpathy);
+    this.pips.suitPips.visible(showEmpathy);
+    this.pips.rankPips.visible(showEmpathy);
+    // The game info icon would cover the rank pips.
+    globals.elements.gameInfoImage?.visible(!showEmpathy && this.numLeft > 0);
+    globals.layers.arrow.batchDraw();
+
+    if (showEmpathy && globals.state.visibleState !== undefined) {
+      const possibilities = getDeckPossibilities(
+        globals.state.visibleState.deck,
+        globals.metadata,
+      );
+      for (const [suitIndex, pip] of this.pips.suitPipsMap) {
+        const possible = possibilities.some(([s]) => s === suitIndex);
+        updatePip(
+          possible ? PipState.Visible : PipState.Eliminated,
+          false,
+          pip,
+          this.pips.suitPipsXMap.get(suitIndex)!,
+          this.pips.suitPipsPositiveMap.get(suitIndex),
+        );
+      }
+      for (const [rank, pip] of this.pips.rankPipsMap) {
+        const possible = possibilities.some(([, r]) => r === rank);
+        updatePip(
+          possible ? PipState.Visible : PipState.Eliminated,
+          false,
+          pip,
+          this.pips.rankPipsXMap.get(rank)!,
+        );
+      }
+    }
+
+    globals.layers.card.batchDraw();
+  }
+
   canDragDeck(): boolean {
     return globals.options.deckPlays && this.numLeft === 1 && isOurTurn();
   }
@@ -175,15 +307,13 @@ export class Deck extends Konva.Group {
   setCount(count: number): void {
     this.numLeft = count;
     this.numLeftText.text(count.toString());
+    this.numLeftText.fill(count === 0 ? EMPTY_DECK_COLOR : NUM_LEFT_COLOR);
 
     // When there are no cards left in the deck, remove the card-back and show a label that
     // indicates how many turns are left before the game ends.
     this.cardBack.visible(count > 0);
-    let h = 0.3;
-    if (count === 0) {
-      h = 0.15;
-    }
-    this.numLeftText.y(h * this.height());
+    const numLeftY = count === 0 ? EMPTY_DECK_NUM_LEFT_Y : NUM_LEFT_Y;
+    this.numLeftText.y(numLeftY * this.height());
     globals.elements.deckTurnsRemainingLabel1!.visible(
       count === 0 && !globals.options.allOrNothing,
     );
@@ -192,13 +322,15 @@ export class Deck extends Konva.Group {
     );
 
     // If the game ID is showing, we want to center the deck count between it and the other labels.
-    if (count === 0 && globals.elements.gameIDLabel!.isVisible() === true) {
+    if (count === 0 && globals.elements.gameIdLabel!.isVisible() === true) {
       this.nudgeCountDownwards();
     }
+
+    this.updateEmpathy();
   }
 
   nudgeCountDownwards(): void {
-    const nudgeAmount = 0.07 * this.height();
+    const nudgeAmount = GAME_ID_NUM_LEFT_NUDGE * this.height();
     this.numLeftText.y(this.numLeftText.y() + nudgeAmount);
   }
 
@@ -209,131 +341,4 @@ export class Deck extends Konva.Group {
     });
     globals.layers.card.batchDraw();
   }
-}
-
-/** The tooltip will show information about the game and the current options. */
-function getTooltipContent(): string {
-  let content = "<strong>Game Info:</strong>";
-  content += '<ul class="game-tooltips-ul">';
-
-  const currentTable = globals.lobby.tableMap.get(globals.lobby.tableID);
-  if (currentTable !== undefined) {
-    content +=
-      '<li><span class="game-tooltips-icon"><i class="fas fa-signature"></i></span>';
-    content += `&nbsp; Table name: &nbsp;${escapeHtml(currentTable.name)}</li>`;
-
-    const owner = globals2.userMap.get(currentTable.ownerID);
-    const ownerName = owner?.name ?? "Unknown";
-    content +=
-      '<li><span class="game-tooltips-icon"><i class="fas fa-crown"></i></span>';
-    content += `&nbsp; Owner: &nbsp;${escapeHtml(ownerName)}</li>`;
-  }
-
-  if (
-    globals.state.finished
-    && globals.state.replay.databaseID !== null
-    // JSON replays are hard-coded to have a database ID of 0.
-    && globals.state.replay.databaseID !== 0
-  ) {
-    content +=
-      '<li><span class="game-tooltips-icon"><i class="fas fa-fingerprint"></i></span>';
-    content += `&nbsp; Database ID: &nbsp;<strong>${globals.state.replay.databaseID}</strong></li>`;
-  }
-
-  if (globals.state.finished || globals.metadata.hasCustomSeed) {
-    content +=
-      '<li><span class="game-tooltips-icon"><i class="fas fa-seedling"></i></span>';
-    const seed =
-      globals.metadata.seed === "JSON" ? "n/a" : globals.metadata.seed;
-    content += `&nbsp; Seed: &nbsp;<strong>${escapeHtml(seed)}</strong>`;
-    if (globals.metadata.seed === "JSON") {
-      content += " (JSON game)";
-    }
-    content += "</li>";
-  }
-
-  if (globals.state.finished && globals.state.datetimeFinished !== null) {
-    const datetimeFinishedDate = new Date(globals.state.datetimeFinished);
-    const formattedDatetimeFinished =
-      dateTimeFormatter.format(datetimeFinishedDate);
-    content +=
-      '<li><span class="game-tooltips-icon"><i class="fas fa-calendar"></i></span>';
-    content += `&nbsp; Date Played: &nbsp;<strong>${formattedDatetimeFinished}</strong></li>`;
-  }
-
-  // "datetimeStarted" and "datetimeFinished" are initialized to strings during the "init" command,
-  // so they should never be null.
-  if (
-    globals.state.datetimeStarted !== null
-    && globals.state.datetimeFinished !== null
-  ) {
-    const startedDate = new Date(globals.state.datetimeStarted);
-    const finishedDate = globals.state.finished
-      ? new Date(globals.state.datetimeFinished)
-      : new Date();
-    const elapsedMilliseconds = finishedDate.getTime() - startedDate.getTime();
-    const clockString = millisecondsToClockString(elapsedMilliseconds);
-    content +=
-      '<li><span class="game-tooltips-icon"><i class="fas fa-stopwatch"></i></span>';
-    content += `&nbsp; Game Length: &nbsp;<strong>${clockString}</strong></li>`;
-  }
-
-  content +=
-    '<li><span class="game-tooltips-icon"><i class="fas fa-rainbow"></i></span>';
-  content += `&nbsp; Variant: &nbsp;<strong>${globals.variant.name}</strong></li>`;
-
-  if (globals.options.timed) {
-    content += `<li><span class="game-tooltips-icon"><i class="${OptionIcons.Timed}"></i></span>`;
-    content += "&nbsp; Timed: ";
-    content += timerFormatter(globals.options.timeBase);
-    content += " + ";
-    content += timerFormatter(globals.options.timePerTurn);
-    content += "</li>";
-  }
-
-  if (globals.options.speedrun) {
-    content += `<li><span class="game-tooltips-icon"><i class="${OptionIcons.Speedrun}"></i></span>`;
-    content += "&nbsp; Speedrun</li>";
-  }
-
-  if (globals.options.cardCycle) {
-    content += '<li><span class="game-tooltips-icon">';
-    content += `<i class="${OptionIcons.CardCycle}"></i></span>`;
-    content += "&nbsp; Card Cycling</li>";
-  }
-
-  if (globals.options.deckPlays) {
-    content += '<li><span class="game-tooltips-icon">';
-    content += `<i class="${OptionIcons.DeckPlays}" style="position: relative; left: 0.2em;"></i></span>`;
-    content += "&nbsp; Bottom-Deck Blind Plays</li>";
-  }
-
-  if (globals.options.emptyClues) {
-    content += `<li><span class="game-tooltips-icon"><i class="${OptionIcons.EmptyClues}"></i></span>`;
-    content += "&nbsp; Empty Clues</li>";
-  }
-
-  if (globals.options.oneExtraCard) {
-    content += `<li><span class="game-tooltips-icon"><i class="${OptionIcons.OneExtraCard}"></i></span>`;
-    content += "&nbsp; One Extra Card</li>";
-  }
-
-  if (globals.options.oneLessCard) {
-    content += `<li><span class="game-tooltips-icon"><i class="${OptionIcons.OneLessCard}"></i></span>`;
-    content += "&nbsp; One Less Card</li>";
-  }
-
-  if (globals.options.allOrNothing) {
-    content += `<li><span class="game-tooltips-icon"><i class="${OptionIcons.AllOrNothing}"></i></span>`;
-    content += "&nbsp; All or Nothing</li>";
-  }
-
-  if (globals.options.detrimentalCharacters) {
-    content += `<li><span class="game-tooltips-icon"><i class="${OptionIcons.DetrimentalCharacters}"></i></span>`;
-    content += "&nbsp; Detrimental Characters</li>";
-  }
-
-  content += "</ul>";
-
-  return content;
 }
