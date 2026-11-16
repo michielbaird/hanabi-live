@@ -13,6 +13,7 @@
 # Data is kept in the "pgdata" volume; remove it with `docker compose -f docker-compose-analysis.yml down -v`.
 services:
   db:
+    pull_policy: build
     build:
       context: .
       dockerfile: Dockerfile.postgres
@@ -29,6 +30,9 @@ services:
       retries: 30
 
   server:
+    # Build on every `up` (not only when the image is missing), so that the client and the server always come from
+    # this checkout. Unchanged layers come from the cache.
+    pull_policy: build
     build:
       context: .
       dockerfile: Dockerfile
@@ -42,7 +46,7 @@ services:
       # The site only works when you browse to exactly this host name. Set it to the address you use, e.g.
       # `ANALYSIS_DOMAIN=192.168.1.20 docker compose -f docker-compose-analysis.yml up --build`. A private IP
       # (192.168.* or 10.*) or "localhost" turns on the server's development mode (needed for the ?login= shortcut).
-      DOMAIN: ${ANALYSIS_DOMAIN:-localhost}
+      DOMAIN: truenas.local
       SESSION_SECRET: "development only"
     volumes:
       - ./.env.example:/root/hanabi-live/.env:ro
