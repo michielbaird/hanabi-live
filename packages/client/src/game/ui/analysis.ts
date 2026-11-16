@@ -404,9 +404,7 @@ export function updateButton(): void {
   }
 
   const visible =
-    isBotAnalysisEnabled()
-    && getDatabaseID() !== undefined
-    && isSupported();
+    isBotAnalysisEnabled() && getDatabaseID() !== undefined && isSupported();
   if (analysisButton.visible() === visible) {
     return;
   }

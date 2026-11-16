@@ -9,6 +9,8 @@ const DEPENDENCY_SECTIONS = [
 ] as const;
 const EXACT_VERSION =
   /^\d+\.\d+\.\d+(?:-[\d\-.A-Za-z]+)?(?:\+[\d\-.A-Za-z]+)?$/u;
+/** A tarball that is not published to a package registry, such as a GitHub release asset. */
+const URL_DEPENDENCY = /^https?:\/\//u;
 
 export function lintDependencyCatalog(
   root: Manifest,
@@ -59,12 +61,16 @@ export function lintDependencyCatalog(
             throw new Error(`${packageName}: ${name} must use workspace:*.`);
           }
         } else {
-          if (version !== "catalog:" || !Object.hasOwn(catalog, name)) {
-            throw new Error(
-              `${packageName}: ${name} must reference a defined catalog: entry.`,
-            );
+          const isURLDependency =
+            typeof version === "string" && URL_DEPENDENCY.test(version);
+          if (!isURLDependency) {
+            if (version !== "catalog:" || !Object.hasOwn(catalog, name)) {
+              throw new Error(
+                `${packageName}: ${name} must reference a defined catalog: entry.`,
+              );
+            }
+            used.add(name);
           }
-          used.add(name);
         }
       }
     }

@@ -101,13 +101,13 @@ async function handle(request: Request) {
     scope.postMessage(
       request.type === "supports"
         ? {
-          type: "supports",
-          supported: false,
-        }
+            type: "supports",
+            supported: false,
+          }
         : {
-          type: "error",
-          message: String(error),
-        },
+            type: "error",
+            message: String(error),
+          },
     );
   }
 }

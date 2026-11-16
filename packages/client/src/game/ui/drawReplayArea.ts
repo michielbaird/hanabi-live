@@ -314,8 +314,7 @@ export function drawReplayArea(winW: number, winH: number): void {
   const analysisButtonWidth = 0.035;
   const analysisButtonGap = 0.005;
   const bottomRowWidth =
-    2
-      * (replayButtonValues.w * 2 + replayButtonValues.spacing + extra)
+    2 * (replayButtonValues.w * 2 + replayButtonValues.spacing + extra)
     + replayButtonValues.spacing;
   const bottomButtonValues = {
     y: REPLAY_BOTTOM_BUTTON.y,
